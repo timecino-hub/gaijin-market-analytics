@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!apps/api/.env.example
+!apps/web/.env.local.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.uv-cache/
+dist/
+build/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Local installers
+DockerDesktopInstaller.exe
+ubuntu-*-wsl*.tar.gz
+.wsl/
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
