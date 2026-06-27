@@ -66,6 +66,19 @@ The API exposes `GET /health` as a database-independent liveness check and
 `GET /ready` as a PostgreSQL readiness check. FastAPI's OpenAPI schema remains
 available at the default `/openapi.json`.
 
+CSV import endpoints:
+
+- `POST /api/v1/imports/csv`
+- `GET /api/v1/imports/{job_id}`
+
+CSV imports accept only user-uploaded `.csv` files, default to a 10 MB upload
+limit, compute a SHA-256 checksum from the original bytes, and reject duplicate
+files by checksum without inserting duplicate snapshots. The CSV v1 fields are:
+`item_key`, `item_name`, `category`, `observed_at`, `best_ask`, `best_bid`,
+`ask_count`, `bid_count`, and `estimated_volume`. Prices and volume are parsed
+with Python `Decimal`; JSON responses return import metadata and error reports,
+not the uploaded file contents.
+
 Migration helpers:
 
 ```sh
@@ -87,10 +100,10 @@ make compose-config
 
 Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
-SQLAlchemy async database setup, Alembic migration commands, and database
-foundation tables.
+SQLAlchemy async database setup, Alembic migration commands, database foundation
+tables, and compliant CSV market data import.
 
-Not implemented: CSV import, item CRUD APIs, snapshot write APIs, analytics
+Not implemented: item CRUD APIs, standalone snapshot write APIs, analytics
 calculations, 7/30/90/180 day algorithms, machine-learning dependencies, user
 accounts, marketplace scraping, login automation, or automated trading actions.
 
