@@ -35,6 +35,12 @@ Start PostgreSQL:
 make db-up
 ```
 
+Apply database migrations:
+
+```sh
+make db-migrate
+```
+
 Start the API:
 
 ```sh
@@ -51,13 +57,34 @@ Default local URLs:
 
 - Web: http://localhost:3000
 - API health: http://localhost:8000/health
+- API readiness: http://localhost:8000/ready
 - API OpenAPI JSON: http://localhost:8000/openapi.json
 - PostgreSQL: localhost:5432
+
+## Database
+
+Local API runs should use a `DATABASE_URL` with `localhost`, for example:
+
+```sh
+postgresql+psycopg://gaijin_market:gaijin_market_dev@localhost:5432/gaijin_market_analytics
+```
+
+Migration commands:
+
+```sh
+make db-migrate
+make db-current
+make db-downgrade
+```
+
+API tests use `TEST_DATABASE_URL` or derive an isolated database whose name ends
+with `_test`. The test fixture creates and drops only that isolated test
+database; it does not remove the normal development database or Docker volume.
 
 ## Verify
 
 ```sh
-make api-test
+make test-api
 make web-lint
 make web-build
 make compose-config
