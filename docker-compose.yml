@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gaijin-market-analytics-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gaijin_market_analytics}
+      POSTGRES_USER: ${POSTGRES_USER:-gaijin_market}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gaijin_market_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gaijin_market} -d ${POSTGRES_DB:-gaijin_market_analytics}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

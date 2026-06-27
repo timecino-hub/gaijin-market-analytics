@@ -1,0 +1,15 @@
+{
+  "name": "gaijin-market-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "22.x",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "web:dev": "pnpm --filter @gaijin-market-analytics/web dev",
+    "web:lint": "pnpm --filter @gaijin-market-analytics/web lint",
+    "web:build": "pnpm --filter @gaijin-market-analytics/web build"
+  }
+}
