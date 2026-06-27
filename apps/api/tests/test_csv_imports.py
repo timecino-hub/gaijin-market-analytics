@@ -1,11 +1,8 @@
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,24 +16,6 @@ HEADER = (
     "item_key,item_name,category,observed_at,best_ask,best_bid,"
     "ask_count,bid_count,estimated_volume\n"
 )
-
-
-@pytest.fixture()
-def migrated_database(test_database_url: str) -> Iterator[str]:
-    config = Config("alembic.ini")
-    config.set_main_option("sqlalchemy.url", test_database_url)
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    yield test_database_url
-
-
-@pytest.fixture()
-def client(migrated_database: str) -> Iterator[TestClient]:
-    app.dependency_overrides.clear()
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
-
 
 def _post_csv(client: TestClient, content: bytes | str, filename: str = "synthetic.csv"):
     data = content.encode("utf-8") if isinstance(content, str) else content

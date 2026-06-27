@@ -79,6 +79,72 @@ files by checksum without inserting duplicate snapshots. The CSV v1 fields are:
 with Python `Decimal`; JSON responses return import metadata and error reports,
 not the uploaded file contents.
 
+Read-only market query endpoints:
+
+- `GET /api/v1/items`
+- `GET /api/v1/items/{item_id}`
+- `GET /api/v1/items/{item_id}/snapshots`
+
+These endpoints expose only items and snapshots already imported into
+PostgreSQL from allowed sources. They do not create, edit, delete, enrich,
+backfill, interpolate, or calculate returns from market data.
+
+`GET /api/v1/items` lists items with pagination and optional filters:
+
+```sh
+curl "http://localhost:8000/api/v1/items?page=1&page_size=50&search=synthetic&sort=name&order=asc"
+```
+
+Supported query parameters are `page`, `page_size`, `search`, `category`,
+`rarity`, `is_active`, `sort`, and `order`. Sorting allows `name`,
+`created_at`, and `updated_at`; results always add `id asc` as a stable
+secondary sort. Each item includes at most one `latest_snapshot` value.
+
+`GET /api/v1/items/{item_id}` returns item metadata, its latest snapshot, and
+snapshot summary timestamps/counts. It does not return full history.
+
+`GET /api/v1/items/{item_id}/snapshots` returns bounded historical snapshots:
+
+```sh
+curl "http://localhost:8000/api/v1/items/1/snapshots?from=2026-06-27T00:00:00Z&to=2026-06-28T00:00:00Z&limit=500&order=asc"
+```
+
+The `from` and `to` filters must be ISO-8601 datetimes with a timezone and are
+normalized to UTC. Snapshot history is sorted by `observed_at` and `id`.
+Decimal/NUMERIC fields such as `best_ask`, `best_bid`, and
+`estimated_volume` are returned as JSON strings or `null`, never floats.
+
+Example item list response:
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "external_key": "synthetic-item-alpha",
+      "name": "Synthetic Alpha",
+      "category": "vehicle",
+      "rarity": null,
+      "is_active": true,
+      "created_at": "2026-06-27T00:00:00Z",
+      "updated_at": "2026-06-27T00:00:00Z",
+      "latest_snapshot": {
+        "observed_at": "2026-06-27T01:00:00Z",
+        "best_ask": "12.340000",
+        "best_bid": "11.100000",
+        "ask_count": 3,
+        "bid_count": 2,
+        "estimated_volume": "44.500000"
+      }
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 1,
+  "total_pages": 1
+}
+```
+
 Migration helpers:
 
 ```sh
@@ -101,9 +167,10 @@ make compose-config
 Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
-tables, and compliant CSV market data import.
+tables, compliant CSV market data import, and read-only item/snapshot query
+APIs.
 
-Not implemented: item CRUD APIs, standalone snapshot write APIs, analytics
+Not implemented: item write APIs, standalone snapshot write APIs, analytics
 calculations, 7/30/90/180 day algorithms, machine-learning dependencies, user
 accounts, marketplace scraping, login automation, or automated trading actions.
 
