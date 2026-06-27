@@ -1,4 +1,4 @@
-.PHONY: install api-install web-install api-dev web-dev db-up db-down api-test web-lint web-build compose-config test
+.PHONY: install api-install web-install api-dev web-dev db-up db-down db-migrate db-downgrade db-current api-test test-api web-lint web-build compose-config test
 
 UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
@@ -22,8 +22,19 @@ db-up:
 db-down:
 	docker compose down
 
+db-migrate:
+	cd apps/api && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run alembic upgrade head
+
+db-downgrade:
+	cd apps/api && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run alembic downgrade -1
+
+db-current:
+	cd apps/api && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run alembic current
+
 api-test:
 	cd apps/api && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest
+
+test-api: api-test
 
 web-lint:
 	pnpm --filter @gaijin-market-analytics/web lint

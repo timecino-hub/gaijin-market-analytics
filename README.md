@@ -44,6 +44,12 @@ Start PostgreSQL:
 make db-up
 ```
 
+Run database migrations:
+
+```sh
+make db-migrate
+```
+
 Start the API on port 8000:
 
 ```sh
@@ -56,13 +62,22 @@ Start the web app on port 3000:
 make web-dev
 ```
 
-The API exposes `GET /health`. FastAPI's OpenAPI schema remains available at
-the default `/openapi.json`.
+The API exposes `GET /health` as a database-independent liveness check and
+`GET /ready` as a PostgreSQL readiness check. FastAPI's OpenAPI schema remains
+available at the default `/openapi.json`.
+
+Migration helpers:
+
+```sh
+make db-current
+make db-downgrade
+make db-migrate
+```
 
 ## Checks
 
 ```sh
-make api-test
+make test-api
 make web-lint
 make web-build
 make compose-config
@@ -70,11 +85,12 @@ make compose-config
 
 ## Current Scope
 
-Implemented: project skeleton, API health check, API test, Next.js shell, local
-configuration examples, PostgreSQL Docker Compose service, and basic Makefile
-commands.
+Implemented: project skeleton, API health and readiness checks, API tests,
+Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
+SQLAlchemy async database setup, Alembic migration commands, and database
+foundation tables.
 
-Not implemented: CSV import, business database models, item APIs, analytics
+Not implemented: CSV import, item CRUD APIs, snapshot write APIs, analytics
 calculations, 7/30/90/180 day algorithms, machine-learning dependencies, user
 accounts, marketplace scraping, login automation, or automated trading actions.
 
