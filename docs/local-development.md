@@ -129,6 +129,90 @@ detail endpoint. Each row error or warning includes:
 }
 ```
 
+## Read-Only Item Queries
+
+The local API exposes read-only queries for market data already imported into
+PostgreSQL:
+
+- `GET /api/v1/items`
+- `GET /api/v1/items/{item_id}`
+- `GET /api/v1/items/{item_id}/snapshots`
+
+These endpoints do not write, edit, delete, backfill, interpolate, or calculate
+returns. They are intended for browsing imported or explicitly authorized data.
+
+List items:
+
+```sh
+curl "http://localhost:8000/api/v1/items?page=1&page_size=50&search=synthetic&category=vehicle&sort=name&order=asc"
+```
+
+Supported list parameters:
+
+- `page`: default `1`, minimum `1`.
+- `page_size`: default `50`, minimum `1`, maximum `100`.
+- `search`: optional case-insensitive partial match on `name` and
+  `external_key`.
+- `category`, `rarity`, `is_active`: optional exact filters.
+- `sort`: `name`, `created_at`, or `updated_at`.
+- `order`: `asc` or `desc`.
+
+The default list order is `name asc`, with `id asc` added as a stable secondary
+sort. Each item includes at most one `latest_snapshot`; items without snapshots
+return `"latest_snapshot": null`.
+
+Item detail:
+
+```sh
+curl "http://localhost:8000/api/v1/items/1"
+```
+
+The detail response includes item metadata, `latest_snapshot`, `snapshot_count`,
+`first_snapshot_at`, and `last_snapshot_at`. It does not include full snapshot
+history.
+
+Snapshot history:
+
+```sh
+curl "http://localhost:8000/api/v1/items/1/snapshots?from=2026-06-27T00:00:00Z&to=2026-06-28T00:00:00Z&limit=500&order=asc"
+```
+
+Supported history parameters:
+
+- `from`, `to`: optional ISO-8601 datetimes with timezone. Values are converted
+  to UTC before querying, and `from` must not be later than `to`.
+- `limit`: default `500`, minimum `1`, maximum `2000`.
+- `order`: `asc` or `desc`, default `asc`.
+
+History responses are sorted by `observed_at` and `id`. Empty history returns
+`[]`; a missing item returns:
+
+```json
+{
+  "detail": {
+    "code": "item_not_found",
+    "message": "The requested item was not found."
+  }
+}
+```
+
+Decimal/NUMERIC fields are serialized as strings or `null`, never floats:
+
+```json
+{
+  "id": 1,
+  "item_id": 1,
+  "observed_at": "2026-06-27T00:00:00Z",
+  "best_ask": "12.340000",
+  "best_bid": "11.100000",
+  "ask_count": 3,
+  "bid_count": 2,
+  "estimated_volume": "44.500000",
+  "source_import_job_id": 1,
+  "created_at": "2026-06-27T00:00:01Z"
+}
+```
+
 ## Verify
 
 ```sh

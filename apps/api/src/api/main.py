@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.session import get_session
 from api.routers.imports import router as imports_router
+from api.routers.items import router as items_router
 
 app = FastAPI(title="Gaijin Market Analytics API")
 app.include_router(imports_router)
+app.include_router(items_router)
 
 
 @app.get("/health")

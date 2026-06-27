@@ -3,6 +3,9 @@ from collections.abc import Iterator
 
 import psycopg
 import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy.engine import URL, make_url
 
 DEFAULT_DATABASE_URL = (
@@ -46,3 +49,22 @@ def test_database_url() -> Iterator[str]:
 
     with psycopg.connect(_psycopg_conninfo(admin_url), autocommit=True) as conn:
         conn.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+@pytest.fixture()
+def migrated_database(test_database_url: str) -> Iterator[str]:
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", test_database_url)
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    yield test_database_url
+
+
+@pytest.fixture()
+def client(migrated_database: str) -> Iterator[TestClient]:
+    from api.main import app
+
+    app.dependency_overrides.clear()
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
