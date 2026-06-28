@@ -62,9 +62,24 @@ Start the web app on port 3000:
 make web-dev
 ```
 
+The web app reads the API base URL from `NEXT_PUBLIC_API_BASE_URL`. For local
+development, copy `apps/web/.env.local.example` to `apps/web/.env.local` and
+keep the default value:
+
+```sh
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+Only public browser-safe values belong in `NEXT_PUBLIC_*` variables. Do not put
+database URLs, passwords, tokens, cookies, or private datasets in them.
+
 The API exposes `GET /health` as a database-independent liveness check and
 `GET /ready` as a PostgreSQL readiness check. FastAPI's OpenAPI schema remains
 available at the default `/openapi.json`.
+
+The API enables CORS for configured origins only. Local development defaults to
+`CORS_ALLOWED_ORIGINS=http://localhost:3000`; it does not use a wildcard origin
+or browser credentials.
 
 CSV import endpoints:
 
@@ -113,6 +128,18 @@ The `from` and `to` filters must be ISO-8601 datetimes with a timezone and are
 normalized to UTC. Snapshot history is sorted by `observed_at` and `id`.
 Decimal/NUMERIC fields such as `best_ask`, `best_bid`, and
 `estimated_volume` are returned as JSON strings or `null`, never floats.
+The web UI keeps those values as strings and only formats them for display, so
+browser floating-point arithmetic is not used for monetary values.
+
+Web routes:
+
+- `/`: project overview, compliance notice, and entry to the item browser.
+- `/items`: searchable and paginated list of imported items.
+- `/items/{item_id}`: item metadata, latest snapshot, and historical snapshot
+  table with time range filters.
+
+The current web scope does not include CSV upload, profit analysis, predictive
+results, or 7/30/90/180 day analysis buttons.
 
 Example item list response:
 
@@ -152,6 +179,14 @@ make db-current
 make db-downgrade
 make db-migrate
 ```
+
+Import the labeled synthetic fixture from this repository after starting the API:
+
+```sh
+curl -F "file=@tests/fixtures/synthetic/valid_market_data.csv" http://localhost:8000/api/v1/imports/csv
+```
+
+Then open `http://localhost:3000/items` to browse the imported synthetic items.
 
 ## Checks
 
