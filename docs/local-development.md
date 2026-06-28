@@ -19,6 +19,26 @@ cp .env.example .env
 The example values are local-only defaults. Do not commit real credentials,
 cookies, tokens, private datasets, or user secrets.
 
+For the web app, copy the public browser environment example:
+
+```sh
+cp apps/web/.env.local.example apps/web/.env.local
+```
+
+`NEXT_PUBLIC_API_BASE_URL` tells the browser where the FastAPI service runs. The
+local default is:
+
+```sh
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+Never place passwords, database connection strings, cookies, tokens, or private
+dataset paths in `NEXT_PUBLIC_*` variables.
+
+FastAPI CORS is configured with `CORS_ALLOWED_ORIGINS`. Local development
+defaults to `http://localhost:3000`, does not use `*`, and does not enable
+browser credentials.
+
 ## Install Dependencies
 
 ```sh
@@ -59,6 +79,7 @@ Default local URLs:
 - API health: http://localhost:8000/health
 - API readiness: http://localhost:8000/ready
 - API OpenAPI JSON: http://localhost:8000/openapi.json
+- Item browser: http://localhost:3000/items
 - PostgreSQL: localhost:5432
 
 ## Database
@@ -128,6 +149,16 @@ detail endpoint. Each row error or warning includes:
   "message": "best_ask must be greater than 0."
 }
 ```
+
+Import the repository's clearly labeled synthetic fixture:
+
+```sh
+curl -F "file=@tests/fixtures/synthetic/valid_market_data.csv" http://localhost:8000/api/v1/imports/csv
+```
+
+After import, open http://localhost:3000/items. The browser shows only imported
+data; it does not upload CSV files, call Gaijin Market, calculate returns, or
+display prediction results.
 
 ## Read-Only Item Queries
 
@@ -212,6 +243,11 @@ Decimal/NUMERIC fields are serialized as strings or `null`, never floats:
   "created_at": "2026-06-27T00:00:01Z"
 }
 ```
+
+The Next.js frontend mirrors this contract. Price and volume fields are typed as
+`string` or `string | null`; formatting such as `"42.500000"` to `"42.50"` is
+display-only and does not convert monetary values to JavaScript numbers for
+financial calculations.
 
 ## Verify
 

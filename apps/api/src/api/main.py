@@ -1,14 +1,24 @@
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import get_settings, parse_cors_allowed_origins
 from api.db.session import get_session
 from api.routers.imports import router as imports_router
 from api.routers.items import router as items_router
 
 app = FastAPI(title="Gaijin Market Analytics API")
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=parse_cors_allowed_origins(settings.cors_allowed_origins),
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["Accept"],
+)
 app.include_router(imports_router)
 app.include_router(items_router)
 
