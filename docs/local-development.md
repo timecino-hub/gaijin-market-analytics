@@ -40,6 +40,18 @@ defaults to `http://localhost:3000`, does not use `*`, and does not enable
 browser credentials. The local CORS policy allows trusted browser `GET` and
 `POST` requests, including CSV uploads from the configured web origin only.
 
+Analytics API settings:
+
+```sh
+ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS=24
+ANALYTICS_MINIMUM_SNAPSHOT_COUNT=3
+```
+
+Both values are validated at the Settings boundary and must be greater than
+zero. If an invalid runtime override reaches the analysis route, the API returns
+a stable `invalid_analytics_configuration` business error instead of exposing
+internal details.
+
 ## Install Dependencies
 
 ```sh
@@ -206,6 +218,7 @@ PostgreSQL:
 - `GET /api/v1/items`
 - `GET /api/v1/items/{item_id}`
 - `GET /api/v1/items/{item_id}/snapshots`
+- `GET /api/v1/items/{item_id}/analysis`
 
 These endpoints do not write, edit, delete, backfill, interpolate, or calculate
 returns. They are intended for browsing imported or explicitly authorized data.
@@ -286,6 +299,42 @@ The Next.js frontend mirrors this contract. Price and volume fields are typed as
 `string` or `string | null`; formatting such as `"42.500000"` to `"42.50"` is
 display-only and does not convert monetary values to JavaScript numbers for
 financial calculations.
+
+Analysis:
+
+```sh
+curl "http://localhost:8000/api/v1/items/1/analysis?horizon=30&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/api/v1/items/1/analysis?horizon=30&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+```
+
+Supported parameters:
+
+- `horizon`: required, one of `7`, `30`, `90`, or `180`.
+- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`.
+- `as_of`: optional ISO-8601 datetime with timezone. When omitted, the API uses
+  current UTC from a testable clock dependency.
+
+The analysis route uses `packages/analytics` through the API project's local uv
+path dependency. It maps ORM `MarketSnapshot` rows into plain
+`MarketObservation` values, runs the explicit `rule_based` `1.0.0` strategy
+from `StrategyRegistry`, and returns the computed result immediately without
+writing analysis records. The database query is bounded to the inclusive
+window `[as_of - horizon, as_of]` and sorted by `observed_at asc, id asc`.
+
+`reference_sell_price` is a baseline reference sell price, not a guaranteed
+future price. `confidence_score` is not a profit probability. Decimal fields,
+including `fee_rate`, prices, profits, ROI, spreads, medians, volatility, and
+scores, are serialized as strings or `null`, never JSON floats.
+
+Missing items and invalid query parameters return stable HTTP business errors.
+Normal analysis limitations such as empty windows, insufficient snapshot count,
+insufficient time coverage, stale latest snapshots, or no valid bid/ask return
+HTTP 200 with analysis `status` and `reason_codes`.
 
 ## Verify
 

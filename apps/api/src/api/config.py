@@ -14,6 +14,16 @@ class Settings(BaseSettings):
         default="http://localhost:3000",
         alias="CORS_ALLOWED_ORIGINS",
     )
+    analytics_maximum_snapshot_age_hours: int = Field(
+        default=24,
+        gt=0,
+        alias="ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS",
+    )
+    analytics_minimum_snapshot_count: int = Field(
+        default=3,
+        gt=0,
+        alias="ANALYTICS_MINIMUM_SNAPSHOT_COUNT",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
