@@ -6,6 +6,7 @@ import pytest
 
 from gaijin_market_analytics.contracts import AnalysisRequest, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
+from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1, FeePolicy, calculate_sale_proceeds
 from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1, RuleBasedV1Config
 
 
@@ -44,7 +45,7 @@ def request(
         horizon=horizon,
         as_of=AS_OF,
         observations=observations,
-        marketplace_fee_rate=Decimal("0.10"),
+        fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
         maximum_snapshot_age=maximum_snapshot_age,
         minimum_snapshot_count=minimum_snapshot_count,
     )
@@ -134,9 +135,65 @@ def test_normal_rule_based_result_uses_median_bid_reference_price_and_decimal_ou
     assert result.current_ask == Decimal("12")
     assert result.current_bid == Decimal("10")
     assert result.gross_profit == Decimal("-3")
+    assert result.sale_proceeds == Decimal("7.65")
+    assert result.fee_amount == Decimal("1.35")
+    assert result.net_profit == Decimal("-4.35")
+    assert result.break_even_sell_price == Decimal("14.12")
+    assert result.fee_policy_name == "gaijin_market"
+    assert result.fee_policy_version == "1.0.0"
+    assert result.nominal_fee_rate == Decimal("0.15")
+    assert result.currency_quantum == Decimal("0.01")
+    assert result.proceeds_rounding == "seller_proceeds_round_down"
     assert isinstance(result.net_profit, Decimal)
     assert isinstance(result.net_roi, Decimal)
     assert ReasonCode.ANALYSIS_COMPLETED in result.reason_codes
+
+
+def test_reference_sell_price_is_quantized_down_to_currency_quantum() -> None:
+    result = RuleBasedV1().analyze(
+        request(
+            (
+                obs(7, ask="2.00", bid="1.00", key="a"),
+                obs(3, ask="2.00", bid="1.01", key="b"),
+                obs(0, ask="2.00", bid="1.02", key="c"),
+                obs(0, ask="2.00", bid="1.03", key="d"),
+            ),
+            minimum_snapshot_count=4,
+        )
+    )
+
+    assert result.median_bid == Decimal("1.015")
+    assert result.reference_sell_price == Decimal("1.01")
+
+
+def test_rule_based_v1_uses_request_fee_policy_and_not_free_fee_rate() -> None:
+    policy = FeePolicy(
+        name="gaijin_market",
+        version="1.0.0",
+        nominal_rate=Decimal("0.15"),
+        currency_quantum=Decimal("0.01"),
+        proceeds_rounding="seller_proceeds_round_down",
+    )
+    analysis_request = AnalysisRequest(
+        item_id=123,
+        horizon=AnalysisHorizon.DAYS_7,
+        as_of=AS_OF,
+        observations=(obs(7, ask="1.99", bid="1.99"), obs(0, ask="1.99", bid="1.99")),
+        fee_policy=policy,
+        maximum_snapshot_age=timedelta(days=2),
+        minimum_snapshot_count=2,
+    )
+
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        analysis_request
+    )
+
+    assert result.reference_sell_price == Decimal("1.99")
+    assert result.sale_proceeds == Decimal("1.69")
+    assert result.fee_amount == Decimal("0.30")
+    assert result.net_profit == Decimal("-0.30")
+    assert result.net_roi == Decimal("-0.30") / Decimal("1.99")
+    assert calculate_sale_proceeds(result.reference_sell_price) == result.sale_proceeds
 
 
 def test_scores_are_decimal_and_between_zero_and_100() -> None:

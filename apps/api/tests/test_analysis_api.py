@@ -13,7 +13,6 @@ from api.analytics_registry import get_strategy_registry
 from api.clock import get_utc_clock
 from api.config import Settings, get_settings
 from api.db.models import MarketSnapshot
-from api.routers import analysis as analysis_router
 
 
 def _insert_item(
@@ -118,11 +117,11 @@ def _table_names(database_url: str) -> set[str]:
         engine.dispose()
 
 
-def _analysis_url(item_id: int, *, horizon: int = 7, fee_rate: str = "0.10", as_of: str) -> str:
-    return (
-        f"/api/v1/items/{item_id}/analysis"
-        f"?horizon={horizon}&fee_rate={fee_rate}&as_of={as_of}"
-    )
+def _analysis_url(item_id: int, *, horizon: int = 7, as_of: str | None = None) -> str:
+    query = f"horizon={horizon}"
+    if as_of is not None:
+        query = f"{query}&as_of={as_of}"
+    return f"/api/v1/items/{item_id}/analysis?{query}"
 
 
 def _seed_full_window(database_url: str, *, horizon: int, as_of: datetime) -> int:
@@ -209,14 +208,12 @@ def test_as_of_with_timezone_is_converted_to_utc(
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )
 
-    response = client.get(
-        _analysis_url(item_id, as_of="2026-06-29T08:00:00%2B08:00", fee_rate="0.125")
-    )
+    response = client.get(_analysis_url(item_id, as_of="2026-06-29T08:00:00%2B08:00"))
 
     assert response.status_code == 200
     body = response.json()
     assert body["effective_inputs"]["as_of"] == "2026-06-29T00:00:00Z"
-    assert body["effective_inputs"]["fee_rate"] == "0.125"
+    assert body["effective_inputs"]["fee_policy"]["nominal_fee_rate"] == "0.15"
 
 
 def test_missing_as_of_uses_overridable_utc_clock_only_when_needed(
@@ -236,14 +233,14 @@ def test_missing_as_of_uses_overridable_utc_clock_only_when_needed(
 
     app.dependency_overrides[get_utc_clock] = lambda: fixed_clock
     try:
-        response = client.get(f"/api/v1/items/{item_id}/analysis?horizon=7&fee_rate=0")
+        response = client.get(f"/api/v1/items/{item_id}/analysis?horizon=7")
     finally:
         app.dependency_overrides.pop(get_utc_clock, None)
 
     assert response.status_code == 200
     body = response.json()
     assert body["effective_inputs"]["as_of"] == "2026-06-29T00:00:00Z"
-    assert body["effective_inputs"]["fee_rate"] == "0"
+    assert body["effective_inputs"]["fee_policy"]["name"] == "gaijin_market"
 
 
 def test_explicit_as_of_is_not_overwritten_by_clock(
@@ -274,13 +271,9 @@ def test_explicit_as_of_is_not_overwritten_by_clock(
 @pytest.mark.parametrize(
     ("query", "code"),
     [
-        ("fee_rate=0.1&as_of=2026-06-29T00:00:00Z", "invalid_horizon"),
-        ("horizon=8&fee_rate=0.1&as_of=2026-06-29T00:00:00Z", "invalid_horizon"),
-        ("horizon=7&as_of=2026-06-29T00:00:00Z", "invalid_fee_rate"),
-        ("horizon=7&fee_rate=-0.1&as_of=2026-06-29T00:00:00Z", "invalid_fee_rate"),
-        ("horizon=7&fee_rate=1&as_of=2026-06-29T00:00:00Z", "invalid_fee_rate"),
-        ("horizon=7&fee_rate=abc&as_of=2026-06-29T00:00:00Z", "invalid_fee_rate"),
-        ("horizon=7&fee_rate=0.1&as_of=2026-06-29T00:00:00", "invalid_as_of"),
+        ("as_of=2026-06-29T00:00:00Z", "invalid_horizon"),
+        ("horizon=8&as_of=2026-06-29T00:00:00Z", "invalid_horizon"),
+        ("horizon=7&as_of=2026-06-29T00:00:00", "invalid_as_of"),
     ],
 )
 def test_invalid_query_parameters_use_stable_business_errors(
@@ -297,10 +290,32 @@ def test_invalid_query_parameters_use_stable_business_errors(
     assert response.json()["detail"]["code"] == code
 
 
+@pytest.mark.parametrize("fee_rate", ["0.10", "0.15"])
+def test_fee_rate_query_parameter_is_rejected(
+    client: TestClient,
+    migrated_database: str,
+    fee_rate: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key=f"synthetic-fee-rate-{fee_rate}",
+        name=f"fee {fee_rate}",
+    )
+
+    response = client.get(
+        f"/api/v1/items/{item_id}/analysis"
+        f"?horizon=7&fee_rate={fee_rate}&as_of=2026-06-29T00:00:00Z"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "fee_rate_not_configurable"
+    assert "fixed 15% fee" in response.json()["detail"]["message"]
+
+
 def test_missing_item_returns_404(client: TestClient) -> None:
     response = client.get(
         "/api/v1/items/999999/analysis"
-        "?horizon=7&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+        "?horizon=7&as_of=2026-06-29T00:00:00Z"
     )
 
     assert response.status_code == 404
@@ -450,15 +465,23 @@ def test_decimal_fields_serialize_as_strings_or_null(
         as_of=datetime(2026, 6, 29, tzinfo=UTC),
     )
 
-    response = client.get(_analysis_url(item_id, fee_rate="0.075", as_of="2026-06-29T00:00:00Z"))
+    response = client.get(_analysis_url(item_id, as_of="2026-06-29T00:00:00Z"))
 
     assert response.status_code == 200
     body = response.json()
-    assert body["effective_inputs"]["fee_rate"] == "0.075"
+    assert body["effective_inputs"]["fee_policy"] == {
+        "name": "gaijin_market",
+        "version": "1.0.0",
+        "nominal_fee_rate": "0.15",
+        "currency_quantum": "0.01",
+        "proceeds_rounding": "seller_proceeds_round_down",
+    }
     for field in (
         "current_ask",
         "current_bid",
         "reference_sell_price",
+        "sale_proceeds",
+        "fee_amount",
         "gross_profit",
         "net_profit",
         "net_roi",
@@ -474,6 +497,38 @@ def test_decimal_fields_serialize_as_strings_or_null(
     ):
         assert body[field] is None or isinstance(body[field], str)
         assert not isinstance(body[field], float)
+
+
+def test_discrete_fee_policy_fields_for_known_settlement_case(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-settlement-199",
+        name="Settlement 1.99",
+    )
+    for observed_at in (
+        "2026-06-22T00:00:00Z",
+        "2026-06-25T00:00:00Z",
+        "2026-06-29T00:00:00Z",
+    ):
+        _insert_snapshot(
+            migrated_database,
+            item_id=item_id,
+            observed_at=observed_at,
+            best_ask="1.69",
+            best_bid="1.99",
+        )
+
+    response = client.get(_analysis_url(item_id, as_of="2026-06-29T00:00:00Z"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reference_sell_price"] == "1.99"
+    assert body["sale_proceeds"] == "1.69"
+    assert body["fee_amount"] == "0.30"
+    assert body["break_even_sell_price"] == "1.99"
 
 
 def test_none_decimal_fields_remain_null(client: TestClient, migrated_database: str) -> None:
@@ -523,6 +578,8 @@ def test_orm_objects_are_not_passed_to_strategy(
                 current_ask=None,
                 current_bid=None,
                 reference_sell_price=None,
+                sale_proceeds=None,
+                fee_amount=None,
                 gross_profit=None,
                 net_profit=None,
                 net_roi=None,
@@ -535,6 +592,11 @@ def test_orm_objects_are_not_passed_to_strategy(
                 liquidity_score=None,
                 risk_score=None,
                 confidence_score=None,
+                fee_policy_name="gaijin_market",
+                fee_policy_version="1.0.0",
+                nominal_fee_rate=Decimal("0.15"),
+                currency_quantum=Decimal("0.01"),
+                proceeds_rounding="seller_proceeds_round_down",
                 reason_codes=(ReasonCode.INSUFFICIENT_SNAPSHOTS,),
             )
 
@@ -664,10 +726,16 @@ def test_openapi_contains_analysis_route(client: TestClient) -> None:
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    assert "/api/v1/items/{item_id}/analysis" in response.json()["paths"]
+    schema = response.json()
+    assert "/api/v1/items/{item_id}/analysis" in schema["paths"]
+    parameters = schema["paths"]["/api/v1/items/{item_id}/analysis"]["get"]["parameters"]
+    assert {parameter["name"] for parameter in parameters} == {"item_id", "horizon", "as_of"}
 
 
-def test_parse_fee_rate_does_not_accept_float_only_artifacts() -> None:
-    parsed = analysis_router._parse_fee_rate("0.1000000000000000000000000001")
+def test_fee_rate_rejection_helper_does_not_parse_user_value(client: TestClient) -> None:
+    response = client.get(
+        "/api/v1/items/999999/analysis?horizon=7&fee_rate=0.1000000000000000000000000001"
+    )
 
-    assert parsed == Decimal("0.1000000000000000000000000001")
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "fee_rate_not_configurable"

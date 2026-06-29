@@ -2,6 +2,8 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
+import { datetimeLocalToIso } from "../../../lib/analysis-validation";
+import { itemDetailPath, mergeSnapshotQuery, removeSnapshotQuery } from "../../../lib/analysis-url-state";
 
 export function SnapshotFilterForm({ itemId }: { itemId: string }) {
   const router = useRouter();
@@ -10,12 +12,15 @@ export function SnapshotFilterForm({ itemId }: { itemId: string }) {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const next = new URLSearchParams(searchParams);
-    setDateTime(next, "from", String(form.get("from") ?? ""));
-    setDateTime(next, "to", String(form.get("to") ?? ""));
-    setText(next, "limit", String(form.get("limit") ?? ""));
-    setText(next, "order", String(form.get("order") ?? "asc"));
-    router.push(`/items/${itemId}?${next.toString()}`);
+    const from = datetimeLocalToIso(String(form.get("from") ?? ""));
+    const to = datetimeLocalToIso(String(form.get("to") ?? ""));
+    const next = mergeSnapshotQuery(searchParams, {
+      from: from.ok ? from.value : undefined,
+      to: to.ok ? to.value : undefined,
+      limit: String(form.get("limit") ?? ""),
+      order: String(form.get("order") ?? "asc")
+    });
+    router.push(itemDetailPath(itemId, next));
   }
 
   return (
@@ -51,30 +56,15 @@ export function SnapshotFilterForm({ itemId }: { itemId: string }) {
       </label>
       <div className="form-actions">
         <button type="submit">应用</button>
-        <button type="button" onClick={() => router.push(`/items/${itemId}`)}>
+        <button
+          type="button"
+          onClick={() => router.push(itemDetailPath(itemId, removeSnapshotQuery(searchParams)))}
+        >
           清除
         </button>
       </div>
     </form>
   );
-}
-
-function setText(params: URLSearchParams, key: string, value: string) {
-  const trimmed = value.trim();
-  if (trimmed) {
-    params.set(key, trimmed);
-  } else {
-    params.delete(key);
-  }
-}
-
-function setDateTime(params: URLSearchParams, key: string, value: string) {
-  if (!value) {
-    params.delete(key);
-    return;
-  }
-
-  params.set(key, new Date(value).toISOString());
 }
 
 function toDateTimeLocal(value: string | null): string {

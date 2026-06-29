@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
 
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult
 from gaijin_market_analytics.enums import AnalysisHorizon
 from gaijin_market_analytics.exceptions import AnalyticsError, ContractValidationError
+from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1
 from gaijin_market_analytics.horizons import horizon_delta
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy import select
@@ -32,9 +32,12 @@ class StrategyUnavailableError(LookupError):
 class AnalysisServiceResult:
     item: Item
     result: AnalysisResult
-    fee_rate: Decimal
     maximum_snapshot_age_hours: int
     minimum_snapshot_count: int
+
+    @property
+    def maximum_snapshot_age_seconds(self) -> int:
+        return self.maximum_snapshot_age_hours * 3600
 
 
 class ItemAnalysisService:
@@ -53,7 +56,6 @@ class ItemAnalysisService:
         *,
         item_id: int,
         horizon: AnalysisHorizon,
-        fee_rate: Decimal,
         as_of: datetime,
     ) -> AnalysisServiceResult:
         item = await self._get_item(item_id)
@@ -74,7 +76,7 @@ class ItemAnalysisService:
                 horizon=horizon,
                 as_of=as_of,
                 observations=observations,
-                marketplace_fee_rate=fee_rate,
+                fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
                 maximum_snapshot_age=timedelta(hours=maximum_snapshot_age_hours),
                 minimum_snapshot_count=minimum_snapshot_count,
             )
@@ -94,7 +96,6 @@ class ItemAnalysisService:
         return AnalysisServiceResult(
             item=item,
             result=result,
-            fee_rate=fee_rate,
             maximum_snapshot_age_hours=maximum_snapshot_age_hours,
             minimum_snapshot_count=minimum_snapshot_count,
         )

@@ -5,16 +5,24 @@ from typing import Literal
 from pydantic import BaseModel, field_serializer
 
 
+class AnalysisFeePolicy(BaseModel):
+    name: str
+    version: str
+    nominal_fee_rate: Decimal
+    currency_quantum: Decimal
+    proceeds_rounding: str
+
+    @field_serializer("nominal_fee_rate", "currency_quantum")
+    def serialize_decimal(self, value: Decimal) -> str:
+        return str(value)
+
+
 class AnalysisEffectiveInputs(BaseModel):
     horizon: Literal[7, 30, 90, 180]
     as_of: datetime
-    fee_rate: Decimal
-    maximum_snapshot_age_hours: int
+    maximum_snapshot_age_seconds: int
     minimum_snapshot_count: int
-
-    @field_serializer("fee_rate")
-    def serialize_decimal(self, value: Decimal) -> str:
-        return str(value)
+    fee_policy: AnalysisFeePolicy
 
 
 class AnalysisResponse(BaseModel):
@@ -32,6 +40,8 @@ class AnalysisResponse(BaseModel):
     current_ask: Decimal | None
     current_bid: Decimal | None
     reference_sell_price: Decimal | None
+    sale_proceeds: Decimal | None
+    fee_amount: Decimal | None
     gross_profit: Decimal | None
     net_profit: Decimal | None
     net_roi: Decimal | None
@@ -50,6 +60,8 @@ class AnalysisResponse(BaseModel):
         "current_ask",
         "current_bid",
         "reference_sell_price",
+        "sale_proceeds",
+        "fee_amount",
         "gross_profit",
         "net_profit",
         "net_roi",

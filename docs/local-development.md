@@ -208,7 +208,8 @@ Web status meanings:
 
 After a completed or duplicate import, open http://localhost:3000/items to view
 the imported synthetic items. The browser uses only imported data; it does not
-call Gaijin Market, calculate returns, or display prediction results.
+call Gaijin Market, contact marketplace pages, or perform account or trading
+actions.
 
 ## Read-Only Item Queries
 
@@ -303,21 +304,26 @@ financial calculations.
 Analysis:
 
 ```sh
-curl "http://localhost:8000/api/v1/items/1/analysis?horizon=30&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+curl "http://localhost:8000/api/v1/items/1/analysis?horizon=30&as_of=2026-06-29T00:00:00Z"
 ```
 
 PowerShell:
 
 ```powershell
-Invoke-RestMethod "http://localhost:8000/api/v1/items/1/analysis?horizon=30&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+Invoke-RestMethod "http://localhost:8000/api/v1/items/1/analysis?horizon=30&as_of=2026-06-29T00:00:00Z"
 ```
 
 Supported parameters:
 
 - `horizon`: required, one of `7`, `30`, `90`, or `180`.
-- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`.
 - `as_of`: optional ISO-8601 datetime with timezone. When omitted, the API uses
   current UTC from a testable clock dependency.
+
+The route uses the fixed Gaijin Market fee policy from analytics code:
+`gaijin_market` `1.0.0`, nominal fee rate `0.15`, currency quantum `0.01`, and
+seller proceeds rounded down after the nominal fee is applied. The API does not
+accept configurable `fee_rate`; old URLs containing that parameter return
+HTTP 400 with `fee_rate_not_configurable`.
 
 The analysis route uses `packages/analytics` through the API project's local uv
 path dependency. It maps ORM `MarketSnapshot` rows into plain
@@ -326,15 +332,55 @@ from `StrategyRegistry`, and returns the computed result immediately without
 writing analysis records. The database query is bounded to the inclusive
 window `[as_of - horizon, as_of]` and sorted by `observed_at asc, id asc`.
 
-`reference_sell_price` is a baseline reference sell price, not a guaranteed
-future price. `confidence_score` is not a profit probability. Decimal fields,
-including `fee_rate`, prices, profits, ROI, spreads, medians, volatility, and
-scores, are serialized as strings or `null`, never JSON floats.
+`reference_sell_price` is a baseline reference sell price rounded down to the
+0.01 GJN price quantum, not a guaranteed future price. `sale_proceeds` is the
+seller settlement amount after nominal fee and round-down; `fee_amount` is
+`reference_sell_price - sale_proceeds`. `confidence_score` is not a profit
+probability. Decimal fields, including fee policy values, prices, proceeds,
+profits, ROI, spreads, medians, volatility, and scores, are serialized as
+strings or `null`, never JSON floats.
+
+Settlement example:
+
+```text
+listed sell price: 1.99 GJN
+raw seller proceeds: 1.6915 GJN
+settled seller proceeds: 1.69 GJN
+actual fee amount: 0.30 GJN
+```
 
 Missing items and invalid query parameters return stable HTTP business errors.
 Normal analysis limitations such as empty windows, insufficient snapshot count,
 insufficient time coverage, stale latest snapshots, or no valid bid/ask return
 HTTP 200 with analysis `status` and `reason_codes`.
+
+The web item detail route, `http://localhost:3000/items/{item_id}`, includes a
+read-only analysis panel. Use it as follows:
+
+1. Choose 7, 30, 90, or 180 days. Each window is computed independently from
+   the imported snapshots in that exact horizon.
+2. Review the fixed fee policy shown by the panel: 15% nominal fee, 0.01 GJN
+   settlement quantum, and seller proceeds rounded down. There is no fee input.
+3. Optionally choose an `as_of` local date/time for historical reproduction.
+   Empty `as_of` is not sent; non-empty values are converted to timezone-aware
+   ISO-8601 before the request. The field is not a prediction endpoint.
+4. Click "Run analysis". Editing fields alone does not update the URL or call
+   the API.
+
+The submitted analysis state is reflected in the URL as `horizon` and optional
+`as_of`. A refresh with a valid `horizon` restores the form and may run one
+analysis request. Legacy `fee_rate` parameters are ignored and removed on the
+next URL update.
+Snapshot query parameters (`from`, `to`, `limit`, `order`) and unknown query
+parameters are preserved when the analysis panel updates its own parameters.
+
+The panel separates HTTP request failures from successful HTTP 200 analysis
+results. A successful response with `status != "ok"` is shown as data
+insufficiency or market-state limitation, not as a system outage. Missing
+Decimal values are displayed as `—`, never as zero. `reference_sell_price` is a
+baseline reference sell price, `sale_proceeds` is seller settlement, and
+`confidence_score` is a data/rule confidence score; none of these are a profit
+guarantee, profit probability, or trading advice.
 
 ## Verify
 

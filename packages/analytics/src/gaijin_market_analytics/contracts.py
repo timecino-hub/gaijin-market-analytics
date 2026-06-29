@@ -7,6 +7,7 @@ from typing import Any
 
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
 from gaijin_market_analytics.exceptions import ContractValidationError, InvalidDecimalError
+from gaijin_market_analytics.fees import FeePolicy
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ class AnalysisRequest:
     horizon: AnalysisHorizon
     as_of: datetime
     observations: tuple[MarketObservation, ...]
-    marketplace_fee_rate: Decimal
+    fee_policy: FeePolicy
     maximum_snapshot_age: timedelta
     minimum_snapshot_count: int
 
@@ -45,9 +46,7 @@ class AnalysisRequest:
         if not isinstance(self.horizon, AnalysisHorizon):
             raise ContractValidationError("horizon must be an AnalysisHorizon value.")
         as_of = _require_aware_utc(self.as_of, "as_of")
-        _require_decimal(self.marketplace_fee_rate, "marketplace_fee_rate")
-        if self.marketplace_fee_rate < Decimal("0") or self.marketplace_fee_rate >= Decimal("1"):
-            raise ContractValidationError("marketplace_fee_rate must satisfy 0 <= fee < 1.")
+        _require_fee_policy(self.fee_policy)
         if self.maximum_snapshot_age <= timedelta(0):
             raise ContractValidationError("maximum_snapshot_age must be greater than 0.")
         if self.minimum_snapshot_count <= 0:
@@ -83,6 +82,8 @@ class AnalysisResult:
     current_ask: Decimal | None
     current_bid: Decimal | None
     reference_sell_price: Decimal | None
+    sale_proceeds: Decimal | None
+    fee_amount: Decimal | None
     gross_profit: Decimal | None
     net_profit: Decimal | None
     net_roi: Decimal | None
@@ -95,6 +96,11 @@ class AnalysisResult:
     liquidity_score: Decimal | None
     risk_score: Decimal | None
     confidence_score: Decimal | None
+    fee_policy_name: str
+    fee_policy_version: str
+    nominal_fee_rate: Decimal
+    currency_quantum: Decimal
+    proceeds_rounding: str
     reason_codes: tuple[ReasonCode, ...]
 
     def __post_init__(self) -> None:
@@ -130,6 +136,17 @@ def _require_decimal(value: Any, field_name: str) -> None:
         raise InvalidDecimalError(f"{field_name} must be a Decimal or None.")
     if not value.is_finite():
         raise InvalidDecimalError(f"{field_name} must be a finite Decimal.")
+
+
+def _require_fee_policy(value: Any) -> None:
+    if not isinstance(value, FeePolicy):
+        raise ContractValidationError("fee_policy must be a FeePolicy value.")
+    _require_decimal(value.nominal_rate, "fee_policy.nominal_rate")
+    _require_decimal(value.currency_quantum, "fee_policy.currency_quantum")
+    if value.nominal_rate < Decimal("0") or value.nominal_rate >= Decimal("1"):
+        raise ContractValidationError("fee_policy.nominal_rate must satisfy 0 <= fee < 1.")
+    if value.currency_quantum <= Decimal("0"):
+        raise ContractValidationError("fee_policy.currency_quantum must be greater than 0.")
 
 
 def observation_sort_key(observation: MarketObservation) -> tuple[object, ...]:

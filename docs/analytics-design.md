@@ -41,7 +41,7 @@ observations, marketplace fee rate, maximum snapshot age, and minimum snapshot
 count.
 
 Contract validation rejects non-positive item IDs, naive datetimes,
-observations later than `as_of`, fee rates outside `0 <= fee < 1`, non-positive
+observations later than `as_of`, invalid fee policy objects, non-positive
 snapshot age/count settings, and non-Decimal money, ratio, or volume inputs.
 
 All datetimes are normalized to UTC. Observations are copied into a tuple and
@@ -51,11 +51,12 @@ input order or ORM IDs.
 
 ## Output Contract
 
-`AnalysisResult` is frozen and includes strategy metadata, status, reason codes,
-observation timestamps and counts, current ask/bid, reference sell price, profit,
-ROI, break-even price, spread, median prices, robust volatility, and scores.
-Missing values use `None`, not zero. Decimal fields remain `Decimal`; the
-analytics package does not perform JSON float conversion.
+`AnalysisResult` is frozen and includes strategy metadata, fee policy metadata,
+status, reason codes, observation timestamps and counts, current ask/bid,
+reference sell price, sale proceeds, fee amount, profit, ROI, break-even price,
+spread, median prices, robust volatility, and scores. Missing values use
+`None`, not zero. Decimal fields remain `Decimal`; the analytics package does
+not perform JSON float conversion.
 
 `AnalysisStatus.INVALID_INPUT` is reserved for future cases where a strategy can
 recover from invalid non-contract inputs and return a result instead of raising.
@@ -71,15 +72,42 @@ requires it.
 All input datetimes must be timezone-aware. The contract normalizes them to UTC,
 and no calculation reads current system time. The caller must pass `as_of`.
 
-## Fee Math
+## Fee Policy And Math
 
-The fee rate is supplied by the caller and must satisfy `0 <= fee < 1`.
+The current fixed fee policy is `GAIJIN_MARKET_FEE_POLICY_V1`:
 
-- Sale proceeds: `sell_price * (1 - fee_rate)`
-- Gross profit: `sell_price - buy_price`
-- Net profit: `sell_price * (1 - fee_rate) - buy_price`
-- Net ROI: `net_profit / buy_price`
-- Break-even sell price: `buy_price / (1 - fee_rate)`
+- name: `gaijin_market`
+- version: `1.0.0`
+- nominal fee rate: `Decimal("0.15")`
+- currency quantum: `Decimal("0.01")`
+- proceeds rounding: `seller_proceeds_round_down`
+
+The policy is an immutable `FeePolicy` value defined inside
+`packages/analytics`; it is not read from environment variables, HTTP requests,
+headers, cookies, or user input.
+
+Fee math:
+
+- raw sale proceeds: `sell_price * (1 - Decimal("0.15"))`
+- sale proceeds: raw sale proceeds rounded down to `0.01` GJN
+- fee amount: `sell_price - sale_proceeds`
+- gross profit: `sell_price - buy_price`
+- net profit: `sale_proceeds - buy_price`
+- net ROI: `net_profit / buy_price`
+
+Example:
+
+```text
+sell_price = 1.99
+raw_sale_proceeds = 1.6915
+sale_proceeds = 1.69
+fee_amount = 0.30
+```
+
+Break-even sell price is discrete: the smallest valid 0.01 GJN listed price
+whose rounded seller proceeds are greater than or equal to `buy_price`. For
+example, `buy_price = 1.69` breaks even at `1.99`, while `1.98` settles to
+`1.68` and does not cover the buy price.
 
 `buy_price` and `sell_price` must be finite Decimals greater than zero.
 
@@ -128,8 +156,11 @@ Reference sell price:
 median(valid best_bid values inside the selected horizon)
 ```
 
-The current ask is used as the hypothetical buy price for fee math. The current
-ask is not used as the reference sell price.
+The raw statistical reference is the median of valid bid values inside the
+selected horizon. Because listed prices must use the 0.01 GJN market quantum,
+`reference_sell_price` is that median rounded down to `0.01` GJN. The current
+ask is used as the hypothetical buy price for fee math. The current ask is not
+used as the reference sell price.
 
 Default `RuleBasedV1Config` thresholds:
 
@@ -188,9 +219,12 @@ Query parameters:
 
 - `horizon`: required, one of `7`, `30`, `90`, or `180`, mapped to
   `AnalysisHorizon`.
-- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`.
 - `as_of`: optional timezone-aware ISO-8601 datetime. When omitted, the API
   uses current UTC from an injectable clock helper.
+
+The API rejects any `fee_rate` query parameter with
+`fee_rate_not_configurable`. The service layer always constructs
+`AnalysisRequest(fee_policy=GAIJIN_MARKET_FEE_POLICY_V1)`.
 
 The API checks that the item exists, queries only snapshots in the inclusive
 database window `[as_of - horizon, as_of]`, and orders rows by
@@ -203,16 +237,51 @@ The application assembly layer explicitly registers `RuleBasedV1` as
 `rule_based` `1.0.0` in `StrategyRegistry`. Clients cannot request arbitrary
 Python modules or dynamic strategy names.
 
-Analysis responses include item metadata, effective inputs, strategy metadata,
-status, reason codes, and all `AnalysisResult` Decimal fields serialized as
-strings or `null`. `reference_sell_price` must be described as a baseline
-reference sell price, not a guaranteed future price. `confidence_score` must
-not be described as a profit probability.
+Analysis responses include item metadata, effective inputs, fee policy metadata,
+strategy metadata, status, reason codes, and all `AnalysisResult` Decimal
+fields serialized as strings or `null`. `reference_sell_price` must be
+described as a baseline reference sell price, not a guaranteed future price.
+`sale_proceeds` must be described as seller settlement, `fee_amount` as the
+actual fee difference, and `confidence_score` must not be described as a profit
+probability.
 
 Normal data insufficiency returns HTTP 200 with analytics `status` and
 `reason_codes`. HTTP errors are reserved for missing items, invalid query
 parameters, contract-level invalid inputs, unavailable strategies, invalid
 analytics configuration, or unexpected service failures.
+
+## Web Presentation
+
+The item detail page presents the immediate API result without persisting it.
+The browser keeps Decimal response fields as strings or `null`; display helpers
+may trim trailing zeros or move a decimal point for percentages, but they must
+not recompute profit, ROI, break-even price, or scores. API results remain the
+source of truth.
+
+The analysis form accepts only the current horizons and optional `as_of`. It
+displays the fixed Gaijin Market fee policy as read-only information and does
+not provide a fee input. Empty `as_of` is omitted. Non-empty browser
+`datetime-local` values are validated and converted through the user's local
+timezone into timezone-aware ISO-8601.
+
+URL query parameters represent submitted analysis state, not draft form edits.
+`horizon` and optional `as_of` are preserved alongside snapshot filters such as
+`from`, `to`, `limit`, and `order`. A valid URL can restore the form and run
+one analysis request after refresh. Legacy `fee_rate` parameters are ignored by
+the frontend and removed on the next URL update.
+
+Status and reason-code labels are centralized in the web layer and based on the
+serialized analytics values:
+
+- statuses: `ok`, `insufficient_data`, `invalid_input`, `no_recent_market`,
+  `no_valid_price`
+- reason codes: `insufficient_snapshots`, `insufficient_time_coverage`,
+  `no_current_ask`, `no_current_bid`, `invalid_price`, `invalid_fee_rate`,
+  `stale_latest_snapshot`, `low_liquidity`, `large_spread`,
+  `analysis_completed`
+
+Unknown status or reason-code values must fall back to safe plain text and must
+not break rendering.
 
 ## Running Tests
 
