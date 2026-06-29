@@ -382,6 +382,33 @@ baseline reference sell price, `sale_proceeds` is seller settlement, and
 `confidence_score` is a data/rule confidence score; none of these are a profit
 guarantee, profit probability, or trading advice.
 
+## Backtesting CLI
+
+The local backtesting entry point is a developer/admin CLI, not a public API or
+web route:
+
+```sh
+cd apps/api
+uv run python -m api.backtesting_cli \
+  --item-id 123 \
+  --lookback-horizon 30 \
+  --forward-horizon 30 \
+  --start 2026-01-01T00:00:00Z \
+  --end 2026-06-01T00:00:00Z \
+  --cadence-days 7 \
+  --pretty
+```
+
+`--start` and `--end` must include `Z` or an explicit UTC offset. The CLI reads
+only the requested `item_id`, from `start_at - lookback_horizon` through
+`end_at + forward_horizon`, ordered by `observed_at asc, id asc`. Results are
+printed to stdout as JSON and are not written to the database. Decimal values
+are strings or `null`.
+
+Backtest outputs are based on future snapshots, primarily future legal
+`best_bid`, and are not realized trade returns, profit promises, or automated
+trading instructions.
+
 ## Verify
 
 ```sh
