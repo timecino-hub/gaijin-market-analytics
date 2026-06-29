@@ -106,9 +106,14 @@ export default async function ItemsPage({ searchParams }: ItemsPageProps) {
 function Header() {
   return (
     <header className="page-header">
-      <Link href="/" className="back-link">
-        返回首页
-      </Link>
+      <nav className="page-nav" aria-label="页面导航">
+        <Link href="/" className="back-link">
+          返回首页
+        </Link>
+        <Link href="/imports" className="back-link">
+          导入 CSV
+        </Link>
+      </nav>
       <h1>已导入市场数据</h1>
       <p>仅浏览 CSV、JSON、手动或明确授权来源导入的数据，不展示虚假涨跌或收益。</p>
     </header>

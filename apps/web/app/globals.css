@@ -69,6 +69,23 @@ button:hover,
   text-decoration: none;
 }
 
+button:disabled {
+  background: #e8ecf1;
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.plain-button {
+  background: #ffffff;
+  border-color: var(--line);
+  color: var(--accent-strong);
+}
+
+.plain-button:hover {
+  background: #eef5f3;
+}
+
 .button-disabled {
   align-items: center;
   background: #e8ecf1;
@@ -133,6 +150,9 @@ p {
 }
 
 .hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 24px;
 }
 
@@ -181,6 +201,12 @@ p {
 .back-link {
   display: inline-block;
   margin-bottom: 16px;
+}
+
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .toolbar {
@@ -293,7 +319,8 @@ td {
 
 .empty-state p,
 .error-state p,
-.loading-state p {
+.loading-state p,
+.muted-text {
   color: var(--muted);
   margin-bottom: 0;
 }
@@ -305,6 +332,63 @@ td {
 
 .error-state h2 {
   color: var(--danger);
+}
+
+.import-page {
+  max-width: 980px;
+}
+
+.import-upload-panel,
+.result-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.import-form {
+  display: grid;
+  gap: 16px;
+}
+
+.file-picker {
+  color: var(--muted);
+  display: grid;
+  font-size: 0.95rem;
+  gap: 8px;
+}
+
+.file-picker input {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: var(--foreground);
+  min-height: 44px;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.file-info.empty-state {
+  padding: 16px;
+}
+
+.import-summary {
+  margin-top: 4px;
+}
+
+.issue-report,
+.issue-list {
+  display: grid;
+  gap: 16px;
+}
+
+.issue-report {
+  margin-top: 8px;
+}
+
+.compact-heading {
+  margin-bottom: 0;
+}
+
+.issue-table {
+  min-width: 720px;
 }
 
 @media (max-width: 720px) {

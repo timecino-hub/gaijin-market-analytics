@@ -43,6 +43,40 @@ export type PaginatedItemsResponse = {
   total_pages: number;
 };
 
+export type ImportJobStatus = "pending" | "processing" | "completed" | "failed" | "duplicate";
+
+export type ImportErrorEntry = {
+  row_number: number | null;
+  field: string | null;
+  error_code: string;
+  message: string;
+};
+
+export type ImportWarningEntry = ImportErrorEntry;
+
+export type ImportErrorReport = {
+  errors: ImportErrorEntry[];
+  warnings: ImportWarningEntry[];
+  duplicate_of_job_id: number | null;
+};
+
+export type ImportJobResponse = {
+  job_id: number;
+  status: ImportJobStatus;
+  filename: string;
+  checksum: string;
+  row_count: number;
+  valid_row_count: number;
+  invalid_row_count: number;
+  duplicate_of_job_id: number | null;
+  source_type?: string;
+  started_at?: string;
+  finished_at?: string | null;
+  error_report?: ImportErrorReport;
+};
+
+export type CsvUploadResult = ImportJobResponse;
+
 export type ApiError = {
   status: number;
   code: string;

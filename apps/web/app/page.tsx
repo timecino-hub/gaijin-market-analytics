@@ -10,6 +10,9 @@ export default function Home() {
           浏览 CSV、JSON、手动或明确授权来源导入的市场数据，提供描述性统计和后续分析的基础。
         </p>
         <div className="hero-actions">
+          <Link className="primary-link" href="/imports">
+            导入 CSV
+          </Link>
           <Link className="primary-link" href="/items">
             浏览商品数据
           </Link>
