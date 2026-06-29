@@ -1,5 +1,7 @@
 import type {
   ApiError,
+  CsvUploadResult,
+  ImportJobResponse,
   ItemDetail,
   ItemListQuery,
   MarketSnapshot,
@@ -37,6 +39,30 @@ export async function getItemSnapshots(
   );
 }
 
+export async function uploadCsvImport(file: File): Promise<CsvUploadResult> {
+  const formData = new FormData();
+  formData.set("file", file);
+
+  const response = await fetch(buildApiUrl("/api/v1/imports/csv"), {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json"
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    throw new ApiRequestError(await parseApiError(response));
+  }
+
+  return (await response.json()) as CsvUploadResult;
+}
+
+export async function getImportJob(jobId: number): Promise<ImportJobResponse> {
+  return fetchJson<ImportJobResponse>(`/api/v1/imports/${encodeURIComponent(String(jobId))}`);
+}
+
 export function toDisplayError(error: unknown): ApiError {
   if (error instanceof ApiRequestError) {
     return error.error;
@@ -46,7 +72,7 @@ export function toDisplayError(error: unknown): ApiError {
     return {
       status: 0,
       code: "api_unreachable",
-      message: "无法连接 API 服务，请确认后端正在运行并且 API 基础地址配置正确。"
+      message: "API 服务不可用，请确认后端正在运行且 API 基础地址配置正确。"
     };
   }
 
@@ -101,10 +127,14 @@ async function parseApiError(response: Response): Promise<ApiError> {
       detail?: { code?: string; error_code?: string; message?: string } | string;
     };
     if (typeof body.detail === "object" && body.detail !== null) {
+      const code = body.detail.code ?? body.detail.error_code ?? fallback.code;
       return {
         status: response.status,
-        code: body.detail.code ?? body.detail.error_code ?? fallback.code,
-        message: body.detail.message ?? fallback.message
+        code,
+        message:
+          friendlyBusinessMessage(response.status, code) ??
+          safeApiMessage(response.status, body.detail.message) ??
+          fallback.message
       };
     }
   } catch {
@@ -115,19 +145,43 @@ async function parseApiError(response: Response): Promise<ApiError> {
 }
 
 function friendlyError(status: number): ApiError {
+  if (status === 413) {
+    return {
+      status,
+      code: "file_too_large",
+      message: "文件超过大小限制。CSV 文件最大为 10 MB。"
+    };
+  }
+
   if (status === 404) {
     return {
       status,
-      code: "item_not_found",
-      message: "未找到请求的商品。"
+      code: "not_found",
+      message: "未找到请求的资源。"
     };
   }
 
   if (status === 400 || status === 422) {
     return {
       status,
-      code: "invalid_query",
-      message: "查询参数无效，请检查筛选、分页或时间范围。"
+      code: "invalid_request",
+      message: "请求参数无效，请检查后重试。"
+    };
+  }
+
+  if (status === 415) {
+    return {
+      status,
+      code: "invalid_file_type",
+      message: "上传文件必须是 CSV。"
+    };
+  }
+
+  if (status >= 500) {
+    return {
+      status,
+      code: "api_error",
+      message: "API 服务暂时无法完成请求，请稍后重试。"
     };
   }
 
@@ -136,4 +190,30 @@ function friendlyError(status: number): ApiError {
     code: "api_error",
     message: "API 返回错误，请稍后重试。"
   };
+}
+
+function friendlyBusinessMessage(status: number, code: string): string | undefined {
+  if (status === 413 || code === "file_too_large") {
+    return "文件超过大小限制。CSV 文件最大为 10 MB。";
+  }
+
+  if (code === "invalid_extension" || code === "invalid_mime_type") {
+    return "上传文件必须是 CSV。";
+  }
+
+  return undefined;
+}
+
+function safeApiMessage(status: number, message: string | undefined): string | undefined {
+  if (!message || status >= 500 || looksSensitive(message)) {
+    return undefined;
+  }
+
+  return message;
+}
+
+function looksSensitive(message: string): boolean {
+  return /(?:Traceback|File "|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|postgresql:\/\/|postgresql\+psycopg:\/\/|[A-Za-z]:\\|\/app\/|\/home\/)/i.test(
+    message
+  );
 }

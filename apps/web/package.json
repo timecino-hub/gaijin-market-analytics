@@ -10,6 +10,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "lint": "eslint .",
+    "test": "node --test --experimental-strip-types \"lib/**/*.test.ts\" \"app/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -10,6 +10,7 @@
   "scripts": {
     "web:dev": "pnpm --filter @gaijin-market-analytics/web dev",
     "web:lint": "pnpm --filter @gaijin-market-analytics/web lint",
+    "web:test": "pnpm --filter @gaijin-market-analytics/web test",
     "web:build": "pnpm --filter @gaijin-market-analytics/web build"
   }
 }

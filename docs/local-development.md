@@ -37,7 +37,8 @@ dataset paths in `NEXT_PUBLIC_*` variables.
 
 FastAPI CORS is configured with `CORS_ALLOWED_ORIGINS`. Local development
 defaults to `http://localhost:3000`, does not use `*`, and does not enable
-browser credentials.
+browser credentials. The local CORS policy allows trusted browser `GET` and
+`POST` requests, including CSV uploads from the configured web origin only.
 
 ## Install Dependencies
 
@@ -79,6 +80,7 @@ Default local URLs:
 - API health: http://localhost:8000/health
 - API readiness: http://localhost:8000/ready
 - API OpenAPI JSON: http://localhost:8000/openapi.json
+- CSV import page: http://localhost:3000/imports
 - Item browser: http://localhost:3000/items
 - PostgreSQL: localhost:5432
 
@@ -113,6 +115,13 @@ The local API exposes:
 `.csv` filenames are accepted. MIME type is checked as an auxiliary signal, but
 the server still validates the extension, bounded file size, UTF-8 decoding,
 CSV header, and every data row. The default maximum upload size is 10 MB.
+
+The browser upload flow is available at http://localhost:3000/imports. It
+selects a local `.csv` file with a file input, displays only basic file metadata
+such as name, size, browser-provided MIME, and selection status, and then sends
+the file with `FormData`. It does not read the whole CSV into the UI, put file
+contents in URLs, store the file in browser storage, or set the multipart
+boundary manually.
 
 CSV v1 required fields:
 
@@ -156,9 +165,24 @@ Import the repository's clearly labeled synthetic fixture:
 curl -F "file=@tests/fixtures/synthetic/valid_market_data.csv" http://localhost:8000/api/v1/imports/csv
 ```
 
-After import, open http://localhost:3000/items. The browser shows only imported
-data; it does not upload CSV files, call Gaijin Market, calculate returns, or
-display prediction results.
+Or open http://localhost:3000/imports and choose
+`tests/fixtures/synthetic/valid_market_data.csv` in the file picker.
+
+Web status meanings:
+
+- `completed`: the file was accepted and valid rows were imported. The page
+  shows `job_id`, filename, status, row counts, shortened checksum, warning and
+  error counts, and a button to view `/items`.
+- `duplicate`: the checksum matches an earlier successful import. The page
+  shows the current duplicate job and `duplicate_of_job_id`; no additional data
+  write is implied.
+- `failed`: the import job failed and the page shows the structured error
+  report. Errors and warnings are separated and initially capped to keep the
+  page usable.
+
+After a completed or duplicate import, open http://localhost:3000/items to view
+the imported synthetic items. The browser uses only imported data; it does not
+call Gaijin Market, calculate returns, or display prediction results.
 
 ## Read-Only Item Queries
 

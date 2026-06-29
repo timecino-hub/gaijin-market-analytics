@@ -94,6 +94,24 @@ files by checksum without inserting duplicate snapshots. The CSV v1 fields are:
 with Python `Decimal`; JSON responses return import metadata and error reports,
 not the uploaded file contents.
 
+The web app exposes the CSV upload flow at `http://localhost:3000/imports`.
+Choose a local `.csv` file, review the filename, size, browser-provided MIME
+type, and selection state, then upload it with the "上传 CSV" button. The
+browser applies the same default 10 MB size limit as a user-experience
+precheck, but the API remains the trusted validator.
+
+Import statuses shown by the web page:
+
+- `completed`: the CSV was accepted and valid rows were imported into the
+  local database. The result shows row counts, a shortened checksum, warning
+  count, error count, and a link to `/items`.
+- `duplicate`: the checksum matches an earlier successful import. The result
+  shows both the current duplicate `job_id` and `duplicate_of_job_id`; it does
+  not imply that rows were written again.
+- `failed`: the API created a failed job and returned a structured error
+  report. Errors and warnings are displayed separately, with long lists capped
+  on initial render.
+
 Read-only market query endpoints:
 
 - `GET /api/v1/items`
@@ -134,12 +152,13 @@ browser floating-point arithmetic is not used for monetary values.
 Web routes:
 
 - `/`: project overview, compliance notice, and entry to the item browser.
+- `/imports`: browser CSV upload flow for authorized CSV v1 data.
 - `/items`: searchable and paginated list of imported items.
 - `/items/{item_id}`: item metadata, latest snapshot, and historical snapshot
   table with time range filters.
 
-The current web scope does not include CSV upload, profit analysis, predictive
-results, or 7/30/90/180 day analysis buttons.
+The current web scope does not include profit analysis, predictive results, or
+7/30/90/180 day analysis buttons.
 
 Example item list response:
 
@@ -186,12 +205,15 @@ Import the labeled synthetic fixture from this repository after starting the API
 curl -F "file=@tests/fixtures/synthetic/valid_market_data.csv" http://localhost:8000/api/v1/imports/csv
 ```
 
-Then open `http://localhost:3000/items` to browse the imported synthetic items.
+You can also open `http://localhost:3000/imports` and select the same fixture
+from the file picker. Then open `http://localhost:3000/items` to browse the
+imported synthetic items.
 
 ## Checks
 
 ```sh
 make test-api
+pnpm web:test
 make web-lint
 make web-build
 make compose-config
@@ -202,8 +224,8 @@ make compose-config
 Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
-tables, compliant CSV market data import, and read-only item/snapshot query
-APIs.
+tables, compliant CSV market data import, web CSV upload flow, and read-only
+item/snapshot query APIs.
 
 Not implemented: item write APIs, standalone snapshot write APIs, analytics
 calculations, 7/30/90/180 day algorithms, machine-learning dependencies, user
