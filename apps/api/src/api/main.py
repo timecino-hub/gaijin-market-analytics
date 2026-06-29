@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings, parse_cors_allowed_origins
 from api.db.session import get_session
+from api.routers.analysis import router as analysis_router
 from api.routers.imports import router as imports_router
 from api.routers.items import router as items_router
 
@@ -21,6 +22,7 @@ app.add_middleware(
 )
 app.include_router(imports_router)
 app.include_router(items_router)
+app.include_router(analysis_router)
 
 
 @app.get("/health")

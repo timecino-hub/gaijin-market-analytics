@@ -163,6 +163,7 @@ Read-only market query endpoints:
 - `GET /api/v1/items`
 - `GET /api/v1/items/{item_id}`
 - `GET /api/v1/items/{item_id}/snapshots`
+- `GET /api/v1/items/{item_id}/analysis`
 
 These endpoints expose only items and snapshots already imported into
 PostgreSQL from allowed sources. They do not create, edit, delete, enrich,
@@ -195,6 +196,40 @@ Decimal/NUMERIC fields such as `best_ask`, `best_bid`, and
 The web UI keeps those values as strings and only formats them for display, so
 browser floating-point arithmetic is not used for monetary values.
 
+`GET /api/v1/items/{item_id}/analysis` computes a read-only baseline analysis
+from snapshots already stored in PostgreSQL:
+
+```sh
+curl "http://localhost:8000/api/v1/items/1/analysis?horizon=7&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+```
+
+Supported query parameters:
+
+- `horizon`: required, one of `7`, `30`, `90`, or `180`.
+- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`. The API
+  does not assume a real marketplace fee.
+- `as_of`: optional ISO-8601 datetime with timezone. When omitted, the API uses
+  the current UTC time through a testable clock dependency.
+
+The API queries only the inclusive database window `[as_of - horizon, as_of]`
+using `observed_at >= as_of - horizon` and `observed_at <= as_of`, ordered by
+`observed_at asc, id asc`. Results are computed immediately and are not
+persisted; this repository does not create an `analysis_results` table.
+
+The response includes item metadata, effective inputs, strategy metadata, and
+the `RuleBasedV1` output. `reference_sell_price` is a baseline reference sell
+price derived from the median valid bid inside the selected window, not a
+guaranteed future price. `confidence_score` is an explainability score, not a
+profit probability. Decimal values, including `fee_rate`, profit/ROI fields,
+spreads, medians, volatility, and scores, are returned as JSON strings or
+`null`, never JSON floats.
+
+HTTP errors are reserved for missing items, invalid query parameters, invalid
+contract inputs, unavailable strategies, or invalid analytics configuration.
+Normal data limitations such as empty windows, too few snapshots, insufficient
+coverage, stale latest snapshots, or no valid bid/ask return HTTP 200 with
+analysis `status` and stable `reason_codes`.
+
 Web routes:
 
 - `/`: project overview, compliance notice, and entry to the item browser.
@@ -203,8 +238,8 @@ Web routes:
 - `/items/{item_id}`: item metadata, latest snapshot, and historical snapshot
   table with time range filters.
 
-The current web scope does not include profit analysis, predictive results, or
-7/30/90/180 day analysis buttons.
+The current web scope does not include profit analysis UI, predictive results,
+or 7/30/90/180 day analysis buttons.
 
 Example item list response:
 
@@ -273,8 +308,9 @@ Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
 tables, compliant CSV market data import, web CSV upload flow, read-only
-item/snapshot query APIs, and the standalone pure Python analytics foundation.
+item/snapshot query APIs, read-only immediate baseline analysis API, and the
+standalone pure Python analytics foundation.
 
-Not implemented: item write APIs, standalone snapshot write APIs, API analytics
-routes, persisted analysis results, machine-learning dependencies, user
-accounts, marketplace scraping, login automation, or automated trading actions.
+Not implemented: item write APIs, standalone snapshot write APIs, persisted
+analysis results, machine-learning dependencies, user accounts, marketplace
+scraping, login automation, or automated trading actions.

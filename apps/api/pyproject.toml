@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.16.0",
     "fastapi>=0.115.0",
+    "gaijin-market-analytics",
     "psycopg[binary]>=3.2.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
@@ -22,6 +23,9 @@ dev = [
 
 [project.scripts]
 api = "api.main:main"
+
+[tool.uv.sources]
+gaijin-market-analytics = { path = "../../packages/analytics", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.11.21,<0.12.0"]

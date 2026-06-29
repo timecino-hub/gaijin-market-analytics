@@ -172,6 +172,48 @@ effects or dynamic execution of user-provided modules.
 New algorithms should add a new strategy class and register it explicitly. API
 routes should not need to change to swap strategies once an adapter is added.
 
+## API Integration
+
+The FastAPI service depends on `packages/analytics` through a local uv path
+dependency. The API does not copy analytics source files and does not inject
+runtime paths with `sys.path`.
+
+The read-only endpoint is:
+
+```text
+GET /api/v1/items/{item_id}/analysis
+```
+
+Query parameters:
+
+- `horizon`: required, one of `7`, `30`, `90`, or `180`, mapped to
+  `AnalysisHorizon`.
+- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`.
+- `as_of`: optional timezone-aware ISO-8601 datetime. When omitted, the API
+  uses current UTC from an injectable clock helper.
+
+The API checks that the item exists, queries only snapshots in the inclusive
+database window `[as_of - horizon, as_of]`, and orders rows by
+`observed_at asc, id asc`. The API adapter converts each ORM `MarketSnapshot`
+into a plain `MarketObservation` and converts the database snapshot ID into a
+string `observation_key`. Analytics code never receives an ORM object,
+`AsyncSession`, SQLAlchemy state, or database primary-key type.
+
+The application assembly layer explicitly registers `RuleBasedV1` as
+`rule_based` `1.0.0` in `StrategyRegistry`. Clients cannot request arbitrary
+Python modules or dynamic strategy names.
+
+Analysis responses include item metadata, effective inputs, strategy metadata,
+status, reason codes, and all `AnalysisResult` Decimal fields serialized as
+strings or `null`. `reference_sell_price` must be described as a baseline
+reference sell price, not a guaranteed future price. `confidence_score` must
+not be described as a profit probability.
+
+Normal data insufficiency returns HTTP 200 with analytics `status` and
+`reason_codes`. HTTP errors are reserved for missing items, invalid query
+parameters, contract-level invalid inputs, unavailable strategies, invalid
+analytics configuration, or unexpected service failures.
+
 ## Running Tests
 
 ```sh

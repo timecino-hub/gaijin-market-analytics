@@ -54,6 +54,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "gaijin-market-analytics" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -72,6 +73,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.16.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "gaijin-market-analytics", editable = "../../packages/analytics" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
@@ -131,6 +133,16 @@ sdist = { url = "https://files.pythonhosted.org/packages/8a/c9/5e8defe249899c0dc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/a9/69a6924f645eb4dd8cd625bf255b3625990eb3e14e073438a53c405dcd3e/fastapi-0.138.1-py3-none-any.whl", hash = "sha256:b994cae7ba8b82c976a728b544244de31333fa5f7d261f9a1dffe526444cae23", size = 129182, upload-time = "2026-06-25T15:40:40.771Z" },
 ]
+
+[[package]]
+name = "gaijin-market-analytics"
+version = "0.1.0"
+source = { editable = "../../packages/analytics" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.0" }]
 
 [[package]]
 name = "greenlet"
