@@ -17,6 +17,52 @@ sources with explicit written authorization.
 - Next.js and TypeScript
 - PostgreSQL through Docker Compose
 
+## Analytics Package
+
+`packages/analytics` is an independent uv project for pure Python analytics
+contracts, Decimal statistics, fee calculations, horizon selection, strategy
+registration, and the first transparent baseline strategy. It does not import
+FastAPI, SQLAlchemy ORM models, database sessions, HTTP clients, filesystem
+read/write helpers, or environment variables. All inputs are passed explicitly
+through immutable contracts and all outputs are returned as typed values.
+
+Install and test it separately from the API:
+
+```sh
+cd packages/analytics
+uv --cache-dir ../../.uv-cache sync --dev
+uv --cache-dir ../../.uv-cache run pytest
+uv --cache-dir ../../.uv-cache lock --check
+```
+
+Or from the repository root:
+
+```sh
+make analytics-install
+make analytics-test
+make analytics-lock-check
+```
+
+The package uses Python `Decimal` for money, ratios, scores, fees, profit, ROI,
+and break-even calculations. It does not convert analytics values to JSON
+floats. Timestamps must be timezone-aware and are normalized to UTC at the
+contract boundary. Contract errors such as naive datetimes, future observations,
+invalid item IDs, and invalid fee rates raise stable domain exceptions.
+
+The supported analysis horizons are 7, 30, 90, and 180 days. Each window is
+selected independently as `[as_of - horizon, as_of]`; shorter windows are never
+derived from longer-window results.
+
+`RuleBasedV1` is a deterministic baseline used to exercise the analytics
+contract and replacement mechanism. Its `reference_sell_price` is the median
+valid bid inside the selected window. This is an explainable timing reference,
+not a future price prediction, profit guarantee, or trading recommendation.
+The result always includes strategy, strategy version, and feature version so
+future backtests can reproduce which implementation generated an output.
+
+See `docs/analytics-design.md` for the input/output contracts, fee math,
+scoring formulas, data insufficiency behavior, and registry design.
+
 ## Install
 
 ```sh
@@ -212,9 +258,11 @@ imported synthetic items.
 ## Checks
 
 ```sh
+make analytics-test
 make test-api
 pnpm web:test
 make web-lint
+pnpm --filter @gaijin-market-analytics/web typecheck
 make web-build
 make compose-config
 ```
@@ -224,12 +272,9 @@ make compose-config
 Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
-tables, compliant CSV market data import, web CSV upload flow, and read-only
-item/snapshot query APIs.
+tables, compliant CSV market data import, web CSV upload flow, read-only
+item/snapshot query APIs, and the standalone pure Python analytics foundation.
 
-Not implemented: item write APIs, standalone snapshot write APIs, analytics
-calculations, 7/30/90/180 day algorithms, machine-learning dependencies, user
+Not implemented: item write APIs, standalone snapshot write APIs, API analytics
+routes, persisted analysis results, machine-learning dependencies, user
 accounts, marketplace scraping, login automation, or automated trading actions.
-
-Future analysis periods are 7, 30, 90, and 180 days. They are not implemented in
-this scaffold.

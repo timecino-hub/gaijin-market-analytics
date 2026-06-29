@@ -1,0 +1,19 @@
+[project]
+name = "gaijin-market-analytics"
+version = "0.1.0"
+description = "Pure analytics contracts and baseline strategies for Gaijin Market Analytics."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

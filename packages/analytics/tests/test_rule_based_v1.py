@@ -1,0 +1,192 @@
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from gaijin_market_analytics.contracts import AnalysisRequest, MarketObservation
+from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
+from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1, RuleBasedV1Config
+
+
+AS_OF = datetime(2026, 6, 29, tzinfo=UTC)
+
+
+def obs(
+    days_back: int,
+    *,
+    ask: str | None = "10",
+    bid: str | None = "9",
+    ask_count: int | None = 10,
+    bid_count: int | None = 10,
+    key: str | None = None,
+) -> MarketObservation:
+    return MarketObservation(
+        observed_at=AS_OF - timedelta(days=days_back),
+        best_ask=Decimal(ask) if ask is not None else None,
+        best_bid=Decimal(bid) if bid is not None else None,
+        ask_count=ask_count,
+        bid_count=bid_count,
+        estimated_volume=Decimal("100"),
+        observation_key=key,
+    )
+
+
+def request(
+    observations: tuple[MarketObservation, ...],
+    *,
+    horizon: AnalysisHorizon = AnalysisHorizon.DAYS_7,
+    minimum_snapshot_count: int = 2,
+    maximum_snapshot_age: timedelta = timedelta(days=2),
+) -> AnalysisRequest:
+    return AnalysisRequest(
+        item_id=123,
+        horizon=horizon,
+        as_of=AS_OF,
+        observations=observations,
+        marketplace_fee_rate=Decimal("0.10"),
+        maximum_snapshot_age=maximum_snapshot_age,
+        minimum_snapshot_count=minimum_snapshot_count,
+    )
+
+
+def test_empty_observations_return_insufficient_data() -> None:
+    result = RuleBasedV1().analyze(request(()))
+
+    assert result.status == AnalysisStatus.INSUFFICIENT_DATA
+    assert ReasonCode.INSUFFICIENT_SNAPSHOTS in result.reason_codes
+    assert result.observation_count == 0
+
+
+def test_snapshot_count_insufficient_returns_reason() -> None:
+    result = RuleBasedV1().analyze(request((obs(0),), minimum_snapshot_count=3))
+
+    assert result.status == AnalysisStatus.INSUFFICIENT_DATA
+    assert ReasonCode.INSUFFICIENT_SNAPSHOTS in result.reason_codes
+
+
+def test_time_coverage_insufficient_returns_reason() -> None:
+    result = RuleBasedV1().analyze(request((obs(1), obs(0)), minimum_snapshot_count=2))
+
+    assert result.status == AnalysisStatus.INSUFFICIENT_DATA
+    assert ReasonCode.INSUFFICIENT_TIME_COVERAGE in result.reason_codes
+
+
+def test_latest_snapshot_too_old_returns_no_recent_market() -> None:
+    result = RuleBasedV1().analyze(
+        request((obs(7), obs(2)), maximum_snapshot_age=timedelta(days=1))
+    )
+
+    assert result.status == AnalysisStatus.NO_RECENT_MARKET
+    assert ReasonCode.STALE_LATEST_SNAPSHOT in result.reason_codes
+
+
+def test_no_valid_ask_or_bid_returns_no_valid_price() -> None:
+    no_ask = RuleBasedV1().analyze(request((obs(7, ask=None), obs(0, ask=None))))
+    no_bid = RuleBasedV1().analyze(request((obs(7, bid=None), obs(0, bid=None))))
+
+    assert no_ask.status == AnalysisStatus.NO_VALID_PRICE
+    assert ReasonCode.NO_CURRENT_ASK in no_ask.reason_codes
+    assert no_bid.status == AnalysisStatus.NO_VALID_PRICE
+    assert ReasonCode.NO_CURRENT_BID in no_bid.reason_codes
+
+
+def test_zero_or_negative_prices_are_reported_without_unhandled_exception() -> None:
+    result = RuleBasedV1().analyze(
+        request((obs(7, ask="0", bid="-1"), obs(0, ask="10", bid="9")))
+    )
+
+    assert ReasonCode.INVALID_PRICE in result.reason_codes
+
+
+def test_ask_less_than_bid_reports_large_negative_spread_as_invalid_price_context() -> None:
+    result = RuleBasedV1().analyze(request((obs(7), obs(0, ask="8", bid="9"))))
+
+    assert result.spread_absolute == Decimal("-1")
+    assert ReasonCode.INVALID_PRICE in result.reason_codes
+    assert ReasonCode.ANALYSIS_COMPLETED in result.reason_codes
+
+
+def test_horizon_inside_empty_but_full_input_has_data() -> None:
+    result = RuleBasedV1().analyze(request((obs(10), obs(9)), minimum_snapshot_count=1))
+
+    assert result.observation_count == 0
+    assert ReasonCode.INSUFFICIENT_SNAPSHOTS in result.reason_codes
+
+
+def test_normal_rule_based_result_uses_median_bid_reference_price_and_decimal_outputs() -> None:
+    result = RuleBasedV1().analyze(
+        request(
+            (
+                obs(7, ask="11", bid="8", key="a"),
+                obs(3, ask="10", bid="9", key="b"),
+                obs(0, ask="12", bid="10", key="c"),
+            ),
+            minimum_snapshot_count=3,
+        )
+    )
+
+    assert result.status == AnalysisStatus.OK
+    assert result.strategy_name == "rule_based"
+    assert result.strategy_version == "1.0.0"
+    assert result.feature_version == "market_features_v1"
+    assert result.reference_sell_price == Decimal("9")
+    assert result.current_ask == Decimal("12")
+    assert result.current_bid == Decimal("10")
+    assert result.gross_profit == Decimal("-3")
+    assert isinstance(result.net_profit, Decimal)
+    assert isinstance(result.net_roi, Decimal)
+    assert ReasonCode.ANALYSIS_COMPLETED in result.reason_codes
+
+
+def test_scores_are_decimal_and_between_zero_and_100() -> None:
+    result = RuleBasedV1().analyze(
+        request((obs(7), obs(0, ask="10.5", bid="9.5")), minimum_snapshot_count=2)
+    )
+
+    for score in (result.liquidity_score, result.risk_score, result.confidence_score):
+        assert isinstance(score, Decimal)
+        assert Decimal("0") <= score <= Decimal("100")
+
+
+def test_same_input_is_deterministic_and_independent_of_input_order() -> None:
+    observations = (
+        obs(0, ask="12", bid="10", key="b"),
+        obs(7, ask="11", bid="8", key="a"),
+        obs(0, ask="13", bid="10.5", key="a"),
+    )
+    reversed_observations = tuple(reversed(observations))
+
+    first = RuleBasedV1().analyze(request(observations, minimum_snapshot_count=3))
+    second = RuleBasedV1().analyze(request(reversed_observations, minimum_snapshot_count=3))
+
+    assert first == second
+
+
+def test_low_liquidity_and_large_spread_reasons_use_config_thresholds() -> None:
+    config = RuleBasedV1Config(
+        minimum_coverage_ratio=Decimal("0"),
+        low_liquidity_count_threshold=Decimal("10"),
+        large_spread_ratio_threshold=Decimal("0.05"),
+    )
+    result = RuleBasedV1(config).analyze(
+        request(
+            (
+                obs(7, ask="20", bid="10", ask_count=1, bid_count=1),
+                obs(0, ask="20", bid="10", ask_count=1, bid_count=1),
+            ),
+            minimum_snapshot_count=2,
+        )
+    )
+
+    assert ReasonCode.LOW_LIQUIDITY in result.reason_codes
+    assert ReasonCode.LARGE_SPREAD in result.reason_codes
+
+
+def test_analytics_package_does_not_import_fastapi_sqlalchemy_database_or_http_clients() -> None:
+    source_root = Path(__file__).parents[1] / "src" / "gaijin_market_analytics"
+    forbidden = ("fastapi", "sqlalchemy", "psycopg", "requests", "httpx", "urllib")
+
+    for path in source_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert not any(token in text for token in forbidden), path
