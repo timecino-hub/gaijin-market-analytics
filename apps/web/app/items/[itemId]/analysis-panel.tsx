@@ -7,18 +7,23 @@ import {
   analysisReasonLabel,
   analysisStatusDescription,
   analysisStatusLabel,
+  checkAnalysisResponseContract,
+  formatBreakEvenReachableDisplay,
+  formatBreakEvenSellPriceDisplay,
   formatCurrencyDisplay,
   formatDecimalDisplay,
   formatDecimalPercent,
-  formatScore
+  formatScore,
+  marketRulesFor
 } from "../../../lib/analysis-display";
+import type { CurrentItemAnalysisResponse } from "../../../lib/analysis-display";
 import { ANALYSIS_HORIZONS, validateAnalysisForm } from "../../../lib/analysis-validation";
 import type { AnalysisFormValues } from "../../../lib/analysis-validation";
-import { getItemAnalysis, toDisplayError } from "../../../lib/api-client";
-import { formatDateTime } from "../../../lib/formatters";
 import { itemDetailPath, mergeAnalysisQuery } from "../../../lib/analysis-url-state";
 import type { InitialAnalysisState } from "../../../lib/analysis-url-state";
-import type { ApiError, ItemAnalysisQuery, ItemAnalysisResponse } from "../../../lib/types";
+import { getItemAnalysis, toDisplayError } from "../../../lib/api-client";
+import { formatDateTime } from "../../../lib/formatters";
+import type { ApiError, ItemAnalysisQuery } from "../../../lib/types";
 
 type AnalysisPanelProps = {
   itemId: string;
@@ -35,7 +40,7 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
   const [submittedQuery, setSubmittedQuery] = useState<ItemAnalysisQuery | null>(
     initialState.canAutoRun ? initialState.query : null
   );
-  const [result, setResult] = useState<ItemAnalysisResponse | null>(null);
+  const [result, setResult] = useState<CurrentItemAnalysisResponse | null>(null);
   const [displayError, setDisplayError] = useState<string | null>(initialState.error);
   const [apiError, setApiError] = useState<ApiError | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -70,8 +75,16 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
           return;
         }
 
-        setResult(response);
-        setPhase(response.status === "ok" ? "ok" : "analysis_status");
+        const contract = checkAnalysisResponseContract(response);
+        if (!contract.ok) {
+          setResult(null);
+          setDisplayError(contract.message);
+          setPhase("analysis_status");
+          return;
+        }
+
+        setResult(contract.value);
+        setPhase(contract.value.status === "ok" ? "ok" : "analysis_status");
       } catch (error) {
         if (isAbortError(error) || !isMounted.current || requestSequence.current !== sequence) {
           return;
@@ -93,9 +106,12 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
     if (autoRunKey.current === key) {
       return;
     }
-    autoRunKey.current = key;
 
     const timeoutId = window.setTimeout(() => {
+      if (autoRunKey.current === key) {
+        return;
+      }
+      autoRunKey.current = key;
       void runAnalysis(initialState.query);
     }, 0);
 
@@ -113,8 +129,13 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
     }
 
     const nextParams = mergeAnalysisQuery(searchParams, validation.value);
-    router.push(itemDetailPath(itemId, nextParams));
-    void runAnalysis(validation.value);
+    const nextPath = itemDetailPath(itemId, nextParams);
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (nextPath === currentPath) {
+      void runAnalysis(validation.value);
+      return;
+    }
+    router.push(nextPath);
   }
 
   return (
@@ -127,6 +148,7 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
       </div>
 
       <FeePolicySummary result={result} />
+      <MarketRulesSummary result={result} />
 
       <form className="analysis-form" onSubmit={submitAnalysis} aria-label="即时基线分析条件">
         <fieldset className="horizon-options" disabled={phase === "loading"}>
@@ -138,9 +160,10 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
                 name="horizon"
                 value={horizon}
                 checked={formValues.horizon === horizon}
-                onChange={(event) =>
-                  setFormValues((current) => ({ ...current, horizon: event.currentTarget.value }))
-                }
+                onChange={(event) => {
+                  const nextHorizon = event.currentTarget.value;
+                  setFormValues((current) => ({ ...current, horizon: nextHorizon }));
+                }}
               />
               <span>{horizon} 天</span>
             </label>
@@ -154,12 +177,15 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
               name="as_of"
               type="datetime-local"
               value={formValues.asOfLocal}
-              onChange={(event) =>
-                setFormValues((current) => ({ ...current, asOfLocal: event.currentTarget.value }))
-              }
+              onChange={(event) => {
+                const nextAsOfLocal = event.currentTarget.value;
+                setFormValues((current) => ({ ...current, asOfLocal: nextAsOfLocal }));
+              }}
               disabled={phase === "loading"}
             />
-            <span className="field-hint">用于历史复现；留空时由 API 使用当前 UTC，不是预测终点。</span>
+            <span className="field-hint">
+              用于历史复现；留空时由 API 使用当前 UTC，不是预测终点。
+            </span>
           </label>
 
           <div className="form-actions analysis-actions">
@@ -178,9 +204,13 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
             <p>{apiError.message}</p>
           </div>
         ) : null}
-        {phase === "loading" ? <p className="muted-text">正在读取已导入快照并运行 RuleBasedV1...</p> : null}
+        {phase === "loading" ? (
+          <p className="muted-text">正在读取已导入快照并运行 RuleBasedV1...</p>
+        ) : null}
         {phase === "idle" && !displayError ? (
-          <p className="muted-text">选择周期后点击“运行分析”。费用政策固定，页面不会提供手续费输入。</p>
+          <p className="muted-text">
+            选择周期后点击“运行分析”。费用政策和市场规则固定，页面不会提供手续费或价格上限输入。
+          </p>
         ) : null}
       </div>
 
@@ -196,7 +226,7 @@ export function AnalysisPanel({ itemId, itemName, initialState }: AnalysisPanelP
   );
 }
 
-function FeePolicySummary({ result }: { result: ItemAnalysisResponse | null }) {
+function FeePolicySummary({ result }: { result: CurrentItemAnalysisResponse | null }) {
   const policy = result?.effective_inputs.fee_policy;
   return (
     <div className="detail-grid compact" aria-label="固定费用政策">
@@ -211,6 +241,24 @@ function FeePolicySummary({ result }: { result: ItemAnalysisResponse | null }) {
   );
 }
 
+function MarketRulesSummary({ result }: { result: CurrentItemAnalysisResponse | null }) {
+  const rules = marketRulesFor(result);
+  return (
+    <div className="detail-grid compact" aria-label="只读市场规则">
+      <Info
+        label="最高挂牌价"
+        value={`${formatCurrencyDisplay(rules?.maximum_listing_price ?? "2000.00")} GJN`}
+      />
+      <Info
+        label="最高卖家结算所得"
+        value={`${formatCurrencyDisplay(rules?.maximum_sale_proceeds ?? "1700.00")} GJN`}
+      />
+      <Info label="市场价格最小单位" value={`${rules?.currency_quantum ?? "0.01"} GJN`} />
+      <Info label="市场规则版本" value={`${rules.name} ${rules.version}`} />
+    </div>
+  );
+}
+
 function AnalysisResultView({
   itemName,
   result,
@@ -218,10 +266,11 @@ function AnalysisResultView({
   isOk
 }: {
   itemName: string;
-  result: ItemAnalysisResponse;
+  result: CurrentItemAnalysisResponse;
   submittedQuery: ItemAnalysisQuery | null;
   isOk: boolean;
 }) {
+  const rules = marketRulesFor(result);
   return (
     <div className="analysis-result">
       <div className={isOk ? "analysis-status ok" : "analysis-status warning"}>
@@ -232,7 +281,10 @@ function AnalysisResultView({
       <div className="detail-grid compact">
         <Info label="商品名称" value={result.item_name || itemName} />
         <Info label="请求周期" value={submittedQuery ? `${submittedQuery.horizon} 天` : "—"} />
-        <Info label="请求 as_of" value={submittedQuery?.as_of ? formatDateTime(submittedQuery.as_of) : "—"} />
+        <Info
+          label="请求 as_of"
+          value={submittedQuery?.as_of ? formatDateTime(submittedQuery.as_of) : "—"}
+        />
         <Info label="实际周期" value={`${result.effective_inputs.horizon} 天`} />
         <Info label="实际 as_of" value={formatDateTime(result.effective_inputs.as_of)} />
         <Info
@@ -276,7 +328,20 @@ function AnalysisResultView({
             <Metric label="毛利润" value={formatCurrencyDisplay(result.gross_profit)} />
             <Metric label="手续费后净利润" value={formatCurrencyDisplay(result.net_profit)} />
             <Metric label="净 ROI" value={formatDecimalPercent(result.net_roi)} />
-            <Metric label="离散盈亏平衡卖价" value={formatCurrencyDisplay(result.break_even_sell_price)} />
+            <Metric
+              label="市场最高挂牌价"
+              value={`${formatCurrencyDisplay(rules.maximum_listing_price)} GJN`}
+            />
+            <Metric
+              label="最高卖家结算所得"
+              value={`${formatCurrencyDisplay(rules.maximum_sale_proceeds)} GJN`}
+            />
+            <Metric
+              label="当前买入价下的理论最大净利润"
+              value={formatCurrencyDisplay(result.maximum_net_profit ?? null)}
+            />
+            <Metric label="盈亏平衡是否可达" value={formatBreakEvenReachableDisplay(result)} />
+            <Metric label="离散盈亏平衡挂牌价" value={formatBreakEvenSellPriceDisplay(result)} />
             <Metric label="绝对价差" value={formatCurrencyDisplay(result.spread_absolute)} />
             <Metric label="相对价差" value={formatDecimalPercent(result.spread_ratio)} />
             <Metric label="bid 中位数" value={formatDecimalDisplay(result.median_bid)} />
@@ -291,9 +356,9 @@ function AnalysisResultView({
 
       <div className="notice analysis-disclaimer">
         <p>
-          Gaijin Market 按 15% 的名义费率计算，并将卖家结算所得向下取整到 0.01 GJN。由于取整，
-          实际费用差额可能并不精确等于挂牌价的 15%。基线参考卖价不是未来价格保证，数据置信度不是盈利概率，
-          结果不构成交易建议或收益保证。
+          Gaijin Market 按 15% 的名义费率计算，并将卖家结算所得向下取整到 0.01 GJN。
+          由于取整，实际费用差额可能并不精确等于挂牌价的 15%。基线参考卖价不是未来价格保证，
+          最高卖家结算所得不是所有商品的利润上限，数据置信度不是盈利概率，结果不构成交易建议或收益保证。
         </p>
       </div>
     </div>

@@ -98,7 +98,9 @@ export type AnalysisReasonCode =
   | "no_current_ask"
   | "no_current_bid"
   | "invalid_price"
+  | "price_above_market_cap"
   | "invalid_fee_rate"
+  | "break_even_unreachable_under_market_cap"
   | "stale_latest_snapshot"
   | "low_liquidity"
   | "large_spread"
@@ -110,6 +112,7 @@ export type AnalysisEffectiveInputs = {
   maximum_snapshot_age_seconds: number;
   minimum_snapshot_count: number;
   fee_policy: AnalysisFeePolicy;
+  market_rules?: AnalysisMarketRules;
 };
 
 export type AnalysisFeePolicy = {
@@ -118,6 +121,14 @@ export type AnalysisFeePolicy = {
   nominal_fee_rate: string;
   currency_quantum: string;
   proceeds_rounding: string;
+};
+
+export type AnalysisMarketRules = {
+  name: string;
+  version: string;
+  maximum_listing_price: string;
+  maximum_sale_proceeds: string;
+  currency_quantum: string;
 };
 
 export type ItemAnalysisResponse = {
@@ -141,6 +152,8 @@ export type ItemAnalysisResponse = {
   net_profit: string | null;
   net_roi: string | null;
   break_even_sell_price: string | null;
+  break_even_reachable?: boolean | null;
+  maximum_net_profit?: string | null;
   spread_absolute: string | null;
   spread_ratio: string | null;
   median_bid: string | null;

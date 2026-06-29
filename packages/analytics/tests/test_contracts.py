@@ -8,6 +8,7 @@ from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, M
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
 from gaijin_market_analytics.exceptions import ContractValidationError, InvalidDecimalError
 from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1, FeePolicy
+from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 
 
 def aware(hour: int = 0, tz=UTC) -> datetime:
@@ -40,6 +41,7 @@ def test_request_normalizes_timezone_aware_datetimes_to_utc() -> None:
         as_of=aware(8, tz),
         observations=(observation(aware(7, tz)),),
         fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+        market_rules=GAIJIN_MARKET_RULES_V1,
         maximum_snapshot_age=timedelta(days=1),
         minimum_snapshot_count=1,
     )
@@ -61,6 +63,7 @@ def test_future_observation_is_rejected() -> None:
             as_of=aware(0),
             observations=(observation(aware(1)),),
             fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+            market_rules=GAIJIN_MARKET_RULES_V1,
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
@@ -74,6 +77,7 @@ def test_invalid_item_id_and_request_parameters_are_rejected() -> None:
             as_of=aware(0),
             observations=(),
             fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+            market_rules=GAIJIN_MARKET_RULES_V1,
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
@@ -94,6 +98,7 @@ def test_invalid_fee_policy_is_rejected_at_contract_boundary(fee: Decimal) -> No
                 currency_quantum=Decimal("0.01"),
                 proceeds_rounding="seller_proceeds_round_down",
             ),
+            market_rules=GAIJIN_MARKET_RULES_V1,
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
@@ -124,6 +129,7 @@ def test_observations_are_sorted_without_mutating_callers_collection() -> None:
         as_of=aware(0),
         observations=tuple(observations),
         fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+        market_rules=GAIJIN_MARKET_RULES_V1,
         maximum_snapshot_age=timedelta(days=1),
         minimum_snapshot_count=1,
     )
@@ -153,6 +159,10 @@ def test_output_object_is_immutable_and_preserves_decimal_fields() -> None:
         net_profit=Decimal("-1.9"),
         net_roi=Decimal("-0.19"),
         break_even_sell_price=Decimal("11.11111111111111111111111111"),
+        break_even_reachable=True,
+        maximum_listing_price=Decimal("2000.00"),
+        maximum_sale_proceeds=Decimal("1700.00"),
+        maximum_net_profit=Decimal("1690.00"),
         spread_absolute=Decimal("1"),
         spread_ratio=Decimal("0.1111111111111111111111111111"),
         median_bid=Decimal("9"),
@@ -166,6 +176,8 @@ def test_output_object_is_immutable_and_preserves_decimal_fields() -> None:
         nominal_fee_rate=Decimal("0.15"),
         currency_quantum=Decimal("0.01"),
         proceeds_rounding="seller_proceeds_round_down",
+        market_rules_name="gaijin_market",
+        market_rules_version="1.0.0",
         reason_codes=(ReasonCode.ANALYSIS_COMPLETED,),
     )
 

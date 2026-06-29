@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisStatus, ReasonCode
+from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy import create_engine, inspect, text
 
@@ -214,6 +215,8 @@ def test_as_of_with_timezone_is_converted_to_utc(
     body = response.json()
     assert body["effective_inputs"]["as_of"] == "2026-06-29T00:00:00Z"
     assert body["effective_inputs"]["fee_policy"]["nominal_fee_rate"] == "0.15"
+    assert body["effective_inputs"]["market_rules"]["maximum_listing_price"] == "2000.00"
+    assert body["effective_inputs"]["market_rules"]["maximum_sale_proceeds"] == "1700.00"
 
 
 def test_missing_as_of_uses_overridable_utc_clock_only_when_needed(
@@ -476,6 +479,14 @@ def test_decimal_fields_serialize_as_strings_or_null(
         "currency_quantum": "0.01",
         "proceeds_rounding": "seller_proceeds_round_down",
     }
+    assert body["effective_inputs"]["market_rules"] == {
+        "name": "gaijin_market",
+        "version": "1.0.0",
+        "maximum_listing_price": "2000.00",
+        "maximum_sale_proceeds": "1700.00",
+        "currency_quantum": "0.01",
+    }
+    assert isinstance(body["break_even_reachable"], bool)
     for field in (
         "current_ask",
         "current_bid",
@@ -486,6 +497,7 @@ def test_decimal_fields_serialize_as_strings_or_null(
         "net_profit",
         "net_roi",
         "break_even_sell_price",
+        "maximum_net_profit",
         "spread_absolute",
         "spread_ratio",
         "median_bid",
@@ -529,6 +541,71 @@ def test_discrete_fee_policy_fields_for_known_settlement_case(
     assert body["sale_proceeds"] == "1.69"
     assert body["fee_amount"] == "0.30"
     assert body["break_even_sell_price"] == "1.99"
+    assert body["break_even_reachable"] is True
+
+
+def test_market_cap_break_even_unreachable_returns_http_200(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-unreachable-170001",
+        name="Unreachable 1700.01",
+    )
+    for observed_at in (
+        "2026-06-22T00:00:00Z",
+        "2026-06-25T00:00:00Z",
+        "2026-06-29T00:00:00Z",
+    ):
+        _insert_snapshot(
+            migrated_database,
+            item_id=item_id,
+            observed_at=observed_at,
+            best_ask="1700.01",
+            best_bid="2000.00",
+        )
+
+    response = client.get(_analysis_url(item_id, as_of="2026-06-29T00:00:00Z"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["maximum_net_profit"] == "-0.01"
+    assert body["break_even_sell_price"] is None
+    assert body["break_even_reachable"] is False
+    assert "break_even_unreachable_under_market_cap" in body["reason_codes"]
+
+
+def test_price_above_market_cap_snapshot_is_not_valid_market_price(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-cap-filter",
+        name="Cap Filter",
+    )
+    for observed_at, ask, bid in (
+        ("2026-06-22T00:00:00Z", "2000.01", "2000.01"),
+        ("2026-06-25T00:00:00Z", "1700.00", "1999.99"),
+        ("2026-06-29T00:00:00Z", "1700.00", "1999.99"),
+    ):
+        _insert_snapshot(
+            migrated_database,
+            item_id=item_id,
+            observed_at=observed_at,
+            best_ask=ask,
+            best_bid=bid,
+        )
+
+    response = client.get(_analysis_url(item_id, as_of="2026-06-29T00:00:00Z"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_ask"] == "1700.000000"
+    assert body["current_bid"] == "1999.990000"
+    assert body["reference_sell_price"] == "1999.99"
+    assert "price_above_market_cap" in body["reason_codes"]
 
 
 def test_none_decimal_fields_remain_null(client: TestClient, migrated_database: str) -> None:
@@ -584,6 +661,10 @@ def test_orm_objects_are_not_passed_to_strategy(
                 net_profit=None,
                 net_roi=None,
                 break_even_sell_price=None,
+                break_even_reachable=None,
+                maximum_listing_price=GAIJIN_MARKET_RULES_V1.maximum_listing_price,
+                maximum_sale_proceeds=GAIJIN_MARKET_RULES_V1.maximum_sale_proceeds,
+                maximum_net_profit=None,
                 spread_absolute=None,
                 spread_ratio=None,
                 median_bid=None,
@@ -597,6 +678,8 @@ def test_orm_objects_are_not_passed_to_strategy(
                 nominal_fee_rate=Decimal("0.15"),
                 currency_quantum=Decimal("0.01"),
                 proceeds_rounding="seller_proceeds_round_down",
+                market_rules_name="gaijin_market",
+                market_rules_version="1.0.0",
                 reason_codes=(ReasonCode.INSUFFICIENT_SNAPSHOTS,),
             )
 

@@ -23,6 +23,7 @@ packages/analytics/
 |   +-- enums.py
 |   +-- exceptions.py
 |   +-- fees.py
+|   +-- market_rules.py
 |   +-- horizons.py
 |   +-- statistics.py
 |   +-- registry.py
@@ -37,8 +38,8 @@ packages/analytics/
 `MarketObservation` contains `observed_at`, `best_ask`, `best_bid`,
 `ask_count`, `bid_count`, `estimated_volume`, and optional `observation_key`.
 `AnalysisRequest` contains item ID, horizon, explicit `as_of`, immutable
-observations, marketplace fee rate, maximum snapshot age, and minimum snapshot
-count.
+observations, marketplace fee policy, fixed market rules, maximum snapshot age,
+and minimum snapshot count.
 
 Contract validation rejects non-positive item IDs, naive datetimes,
 observations later than `as_of`, invalid fee policy objects, non-positive
@@ -52,11 +53,13 @@ input order or ORM IDs.
 ## Output Contract
 
 `AnalysisResult` is frozen and includes strategy metadata, fee policy metadata,
-status, reason codes, observation timestamps and counts, current ask/bid,
-reference sell price, sale proceeds, fee amount, profit, ROI, break-even price,
-spread, median prices, robust volatility, and scores. Missing values use
-`None`, not zero. Decimal fields remain `Decimal`; the analytics package does
-not perform JSON float conversion.
+market rules metadata, status, reason codes, observation timestamps and counts,
+current ask/bid, reference sell price, sale proceeds, fee amount, profit, ROI,
+break-even price, break-even reachability, maximum listing price, maximum seller
+settlement proceeds, maximum net profit under the current ask, spread, median
+prices, robust volatility, and scores. Missing values use `None`, not zero.
+Decimal fields remain `Decimal`; the analytics package does not perform JSON
+float conversion.
 
 `AnalysisStatus.INVALID_INPUT` is reserved for future cases where a strategy can
 recover from invalid non-contract inputs and return a result instead of raising.
@@ -107,9 +110,28 @@ fee_amount = 0.30
 Break-even sell price is discrete: the smallest valid 0.01 GJN listed price
 whose rounded seller proceeds are greater than or equal to `buy_price`. For
 example, `buy_price = 1.69` breaks even at `1.99`, while `1.98` settles to
-`1.68` and does not cover the buy price.
+`1.68` and does not cover the buy price. The fixed market rules now bound this
+calculation by the `2000.00` GJN maximum listing price: `buy_price = 1700.00`
+breaks even at `2000.00`, while `buy_price = 1700.01` has no reachable
+break-even price under the cap.
 
 `buy_price` and `sell_price` must be finite Decimals greater than zero.
+
+## Market Rules
+
+The fixed market rules are `GAIJIN_MARKET_RULES_V1`:
+
+- name: `gaijin_market`
+- version: `1.0.0`
+- maximum listing price: `Decimal("2000.00")`
+- currency quantum: derived from `fee_policy.currency_quantum`
+- maximum seller settlement proceeds: derived by applying the fee policy to
+  `Decimal("2000.00")`, currently `Decimal("1700.00")`
+
+`MarketRules` is immutable. It validates that `maximum_listing_price` is a
+finite `Decimal`, greater than zero, and aligned to the fee policy currency
+quantum. The API and frontend cannot choose a different market cap or market
+rules version.
 
 ## Horizon Windows
 
@@ -157,10 +179,13 @@ median(valid best_bid values inside the selected horizon)
 ```
 
 The raw statistical reference is the median of valid bid values inside the
-selected horizon. Because listed prices must use the 0.01 GJN market quantum,
-`reference_sell_price` is that median rounded down to `0.01` GJN. The current
-ask is used as the hypothetical buy price for fee math. The current ask is not
-used as the reference sell price.
+selected horizon. RuleBasedV1 first filters `None`, non-positive prices, and
+bids above the `2000.00` GJN market cap. It then calculates the valid bid
+median, rounds the result down to the `0.01` GJN market quantum, and validates
+the final `reference_sell_price` as a legal market price. It does not calculate
+the median with capped-out bids and then clamp the result to `2000.00`. The
+current ask is used as the hypothetical buy price for fee math. The current ask
+is not used as the reference sell price.
 
 Default `RuleBasedV1Config` thresholds:
 

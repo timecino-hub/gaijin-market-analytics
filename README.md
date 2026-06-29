@@ -77,6 +77,14 @@ actual fee amount: 0.30 GJN
 The actual fee amount is `sell_price - sale_proceeds`, so it can be slightly
 higher than exactly 15% because of settlement rounding.
 
+The current Gaijin Market rules are also fixed in analytics code as
+`gaijin_market` version `1.0.0`: maximum listing price `2000.00` GJN and
+currency quantum derived from the fee policy. The maximum seller settlement
+proceeds are derived by applying the fixed fee policy to the maximum listing
+price, producing `1700.00` GJN. This is not a fixed profit cap for every item;
+the theoretical maximum net profit under the current buy price is
+`maximum_sale_proceeds - current_ask`.
+
 See `docs/analytics-design.md` for the input/output contracts, fee math,
 scoring formulas, data insufficiency behavior, and registry design.
 
@@ -235,14 +243,16 @@ using `observed_at >= as_of - horizon` and `observed_at <= as_of`, ordered by
 persisted; this repository does not create an `analysis_results` table.
 
 The response includes item metadata, effective inputs, fixed fee policy
-metadata, strategy metadata, and the `RuleBasedV1` output. `reference_sell_price`
-is a baseline reference sell price derived from the valid bid median and
-rounded down to the 0.01 GJN price quantum, not a guaranteed future price.
+metadata, fixed market rules metadata, strategy metadata, and the `RuleBasedV1`
+output. `reference_sell_price` is a baseline reference sell price derived from
+the valid bid median after excluding bids above the `2000.00` GJN market cap
+and rounded down to the 0.01 GJN price quantum, not a guaranteed future price.
 `sale_proceeds` is the rounded seller settlement amount, `fee_amount` is
 `reference_sell_price - sale_proceeds`, and `confidence_score` is an
 explainability score, not a profit probability. Decimal values, including fee
-policy values, proceeds, profit/ROI fields, spreads, medians, volatility, and
-scores, are returned as JSON strings or `null`, never JSON floats.
+policy values, market rules values, proceeds, profit/ROI fields, spreads,
+medians, volatility, and scores, are returned as JSON strings or `null`, never
+JSON floats.
 
 HTTP errors are reserved for missing items, invalid query parameters, invalid
 contract inputs, unavailable strategies, or invalid analytics configuration.

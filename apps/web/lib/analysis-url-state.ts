@@ -97,8 +97,12 @@ export function itemDetailPath(itemId: string, params: URLSearchParams): string 
 }
 
 export function toURLSearchParams(input: QueryInput): URLSearchParams {
-  if (input instanceof URLSearchParams) {
-    return new URLSearchParams(input);
+  if (isURLSearchParamsLike(input)) {
+    const params = new URLSearchParams();
+    input.forEach((value, key) => {
+      params.append(key, value);
+    });
+    return params;
   }
 
   const params = new URLSearchParams();
@@ -109,6 +113,10 @@ export function toURLSearchParams(input: QueryInput): URLSearchParams {
     }
   }
   return params;
+}
+
+function isURLSearchParamsLike(input: QueryInput): input is URLSearchParams {
+  return typeof (input as URLSearchParams).forEach === "function";
 }
 
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined): void {
