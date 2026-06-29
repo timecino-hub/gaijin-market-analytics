@@ -1,8 +1,17 @@
-.PHONY: install api-install web-install api-dev web-dev db-up db-down db-migrate db-downgrade db-current api-test test-api web-lint web-build compose-config test
+.PHONY: install analytics-install analytics-test analytics-lock-check api-install web-install api-dev web-dev db-up db-down db-migrate db-downgrade db-current api-test test-api web-test web-lint web-typecheck web-build compose-config test
 
 UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 
 install: api-install web-install
+
+analytics-install:
+	cd packages/analytics && uv --cache-dir $(UV_CACHE_DIR) sync --dev
+
+analytics-test:
+	cd packages/analytics && uv --cache-dir $(UV_CACHE_DIR) run pytest
+
+analytics-lock-check:
+	cd packages/analytics && uv --cache-dir $(UV_CACHE_DIR) lock --check
 
 api-install:
 	cd apps/api && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --dev
@@ -36,8 +45,14 @@ api-test:
 
 test-api: api-test
 
+web-test:
+	pnpm --filter @gaijin-market-analytics/web test
+
 web-lint:
 	pnpm --filter @gaijin-market-analytics/web lint
+
+web-typecheck:
+	pnpm --filter @gaijin-market-analytics/web typecheck
 
 web-build:
 	pnpm --filter @gaijin-market-analytics/web build
@@ -45,4 +60,4 @@ web-build:
 compose-config:
 	docker compose config
 
-test: api-test web-lint web-build compose-config
+test: analytics-test api-test web-test web-lint web-typecheck web-build compose-config

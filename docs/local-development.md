@@ -48,6 +48,20 @@ make install
 
 This installs the API dependencies with uv and the web dependencies with pnpm.
 
+The analytics package is an independent uv project and can be installed without
+starting the API, web app, PostgreSQL, or Docker:
+
+```sh
+make analytics-install
+```
+
+Equivalent direct command:
+
+```sh
+cd packages/analytics
+uv --cache-dir ../../.uv-cache sync --dev
+```
+
 ## Run Services
 
 Start PostgreSQL:
@@ -276,11 +290,33 @@ financial calculations.
 ## Verify
 
 ```sh
+make analytics-test
+make analytics-lock-check
 make test-api
+pnpm web:test
 make web-lint
+pnpm --filter @gaijin-market-analytics/web typecheck
 make web-build
 make compose-config
 ```
+
+Analytics checks can also be run directly:
+
+```sh
+cd packages/analytics
+python -m compileall src
+uv --cache-dir ../../.uv-cache run pytest
+uv --cache-dir ../../.uv-cache lock --check
+```
+
+API and analytics have separate uv projects and separate lock files:
+
+- `packages/analytics/uv.lock`
+- `apps/api/uv.lock`
+
+Use `uv lock --check` in each project directory when validating lock-file
+consistency. The current repository intentionally does not have a root Python uv
+workspace.
 
 ## Compliance Boundary
 
