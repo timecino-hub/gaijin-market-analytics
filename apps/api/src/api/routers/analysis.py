@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from gaijin_market_analytics.enums import AnalysisHorizon
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +10,7 @@ from api.analytics_registry import get_strategy_registry
 from api.clock import UtcClock, get_utc_clock
 from api.config import Settings, get_settings
 from api.db.session import get_session
-from api.schemas.analysis import AnalysisEffectiveInputs, AnalysisResponse
+from api.schemas.analysis import AnalysisEffectiveInputs, AnalysisFeePolicy, AnalysisResponse
 from api.services.analysis import (
     AnalysisInputError,
     AnalysisServiceResult,
@@ -34,16 +33,16 @@ ALLOWED_HORIZONS = {
 @router.get("/{item_id}/analysis", response_model=AnalysisResponse)
 async def get_item_analysis(
     item_id: int,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
     registry: Annotated[StrategyRegistry, Depends(get_strategy_registry)],
     clock: Annotated[UtcClock, Depends(get_utc_clock)],
     horizon: str | None = None,
-    fee_rate: str | None = None,
     as_of: str | None = None,
 ) -> AnalysisResponse:
+    _reject_fee_rate_query(request)
     parsed_horizon = _parse_horizon(horizon)
-    parsed_fee_rate = _parse_fee_rate(fee_rate)
     parsed_as_of = _parse_as_of(as_of, clock)
 
     service = ItemAnalysisService(session, settings, registry)
@@ -51,7 +50,6 @@ async def get_item_analysis(
         result = await service.analyze_item(
             item_id=item_id,
             horizon=parsed_horizon,
-            fee_rate=parsed_fee_rate,
             as_of=parsed_as_of,
         )
     except ItemNotFoundError as exc:
@@ -113,28 +111,13 @@ def _parse_horizon(value: str | None) -> AnalysisHorizon:
         ) from exc
 
 
-def _parse_fee_rate(value: str | None) -> Decimal:
-    if value is None or value == "":
+def _reject_fee_rate_query(request: Request) -> None:
+    if "fee_rate" in request.query_params:
         raise _business_error(
             status.HTTP_400_BAD_REQUEST,
-            "invalid_fee_rate",
-            "fee_rate must satisfy 0 <= fee_rate < 1.",
+            "fee_rate_not_configurable",
+            "Gaijin Market uses a fixed 15% fee with seller proceeds rounded down to 0.01 GJN.",
         )
-    try:
-        parsed = Decimal(value)
-    except InvalidOperation as exc:
-        raise _business_error(
-            status.HTTP_400_BAD_REQUEST,
-            "invalid_fee_rate",
-            "fee_rate must satisfy 0 <= fee_rate < 1.",
-        ) from exc
-    if not parsed.is_finite() or parsed < Decimal("0") or parsed >= Decimal("1"):
-        raise _business_error(
-            status.HTTP_400_BAD_REQUEST,
-            "invalid_fee_rate",
-            "fee_rate must satisfy 0 <= fee_rate < 1.",
-        )
-    return parsed
 
 
 def _parse_as_of(value: str | None, clock: UtcClock) -> datetime:
@@ -173,9 +156,15 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
         effective_inputs=AnalysisEffectiveInputs(
             horizon=result.horizon.value,
             as_of=result.as_of,
-            fee_rate=data.fee_rate,
-            maximum_snapshot_age_hours=data.maximum_snapshot_age_hours,
+            maximum_snapshot_age_seconds=data.maximum_snapshot_age_seconds,
             minimum_snapshot_count=data.minimum_snapshot_count,
+            fee_policy=AnalysisFeePolicy(
+                name=result.fee_policy_name,
+                version=result.fee_policy_version,
+                nominal_fee_rate=result.nominal_fee_rate,
+                currency_quantum=result.currency_quantum,
+                proceeds_rounding=result.proceeds_rounding,
+            ),
         ),
         status=result.status.value,
         strategy_name=result.strategy_name,
@@ -187,6 +176,8 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
         current_ask=result.current_ask,
         current_bid=result.current_bid,
         reference_sell_price=result.reference_sell_price,
+        sale_proceeds=result.sale_proceeds,
+        fee_amount=result.fee_amount,
         gross_profit=result.gross_profit,
         net_profit=result.net_profit,
         net_roi=result.net_roi,

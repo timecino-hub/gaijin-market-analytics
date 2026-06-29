@@ -2,6 +2,8 @@ import type {
   ApiError,
   CsvUploadResult,
   ImportJobResponse,
+  ItemAnalysisQuery,
+  ItemAnalysisResponse,
   ItemDetail,
   ItemListQuery,
   MarketSnapshot,
@@ -36,6 +38,18 @@ export async function getItemSnapshots(
   return fetchJson<MarketSnapshot[]>(
     `/api/v1/items/${encodeURIComponent(itemId)}/snapshots`,
     query
+  );
+}
+
+export async function getItemAnalysis(
+  itemId: string,
+  query: ItemAnalysisQuery,
+  signal?: AbortSignal
+): Promise<ItemAnalysisResponse> {
+  return fetchJson<ItemAnalysisResponse>(
+    `/api/v1/items/${encodeURIComponent(itemId)}/analysis`,
+    query,
+    signal
   );
 }
 
@@ -85,10 +99,12 @@ export function toDisplayError(error: unknown): ApiError {
 
 async function fetchJson<T>(
   path: string,
-  query?: Record<string, string | undefined>
+  query?: Record<string, string | undefined>,
+  signal?: AbortSignal
 ): Promise<T> {
   const response = await fetch(buildApiUrl(path, query), {
     cache: "no-store",
+    signal,
     headers: {
       Accept: "application/json"
     }
@@ -193,6 +209,34 @@ function friendlyError(status: number): ApiError {
 }
 
 function friendlyBusinessMessage(status: number, code: string): string | undefined {
+  if (code === "item_not_found") {
+    return "请求的商品不存在。";
+  }
+
+  if (code === "invalid_horizon") {
+    return "分析周期必须是 7、30、90 或 180 天。";
+  }
+
+  if (code === "fee_rate_not_configurable") {
+    return "Gaijin Market 使用固定 15% 名义费率，并将卖家结算所得向下取整到 0.01 GJN。";
+  }
+
+  if (code === "invalid_as_of") {
+    return "分析基准时间必须是带时区的 ISO-8601 时间。";
+  }
+
+  if (code === "analysis_input_error") {
+    return "分析输入未通过后端合同校验，请检查商品数据、手续费率和基准时间。";
+  }
+
+  if (code === "strategy_not_available") {
+    return "当前分析策略不可用，请稍后重试或检查后端配置。";
+  }
+
+  if (code === "invalid_analytics_configuration") {
+    return "分析配置无效，请检查后端运行配置。";
+  }
+
   if (status === 413 || code === "file_too_large") {
     return "文件超过大小限制。CSV 文件最大为 10 MB。";
   }

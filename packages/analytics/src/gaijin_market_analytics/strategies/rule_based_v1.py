@@ -5,9 +5,12 @@ from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, M
 from gaijin_market_analytics.enums import AnalysisStatus, ReasonCode
 from gaijin_market_analytics.fees import (
     calculate_break_even_sell_price,
+    calculate_fee_amount,
     calculate_gross_profit,
     calculate_net_profit,
     calculate_net_roi,
+    calculate_sale_proceeds,
+    floor_to_quantum,
 )
 from gaijin_market_analytics.horizons import coverage_ratio, select_horizon_observations
 from gaijin_market_analytics.statistics import (
@@ -94,7 +97,13 @@ class RuleBasedV1:
         risk_score = self._risk_score(ratio_spread, price_volatility, median_bid)
         confidence_score = self._confidence_score(coverage, liquidity_score, risk_score)
 
-        reference_sell_price = median_bid
+        reference_sell_price = (
+            floor_to_quantum(median_bid, request.fee_policy.currency_quantum)
+            if median_bid is not None
+            else None
+        )
+        sale_proceeds = None
+        fee_amount = None
         gross_profit = None
         net_profit = None
         net_roi = None
@@ -102,19 +111,21 @@ class RuleBasedV1:
         if current_ask is not None:
             break_even_sell_price = calculate_break_even_sell_price(
                 current_ask,
-                request.marketplace_fee_rate,
+                request.fee_policy,
             )
         if current_ask is not None and reference_sell_price is not None:
+            sale_proceeds = calculate_sale_proceeds(reference_sell_price, request.fee_policy)
+            fee_amount = calculate_fee_amount(reference_sell_price, request.fee_policy)
             gross_profit = calculate_gross_profit(current_ask, reference_sell_price)
             net_profit = calculate_net_profit(
                 current_ask,
                 reference_sell_price,
-                request.marketplace_fee_rate,
+                request.fee_policy,
             )
             net_roi = calculate_net_roi(
                 current_ask,
                 reference_sell_price,
-                request.marketplace_fee_rate,
+                request.fee_policy,
             )
 
         status = self._status(reason_codes, window)
@@ -135,6 +146,8 @@ class RuleBasedV1:
             current_ask=current_ask,
             current_bid=current_bid,
             reference_sell_price=reference_sell_price,
+            sale_proceeds=sale_proceeds,
+            fee_amount=fee_amount,
             gross_profit=gross_profit,
             net_profit=net_profit,
             net_roi=net_roi,
@@ -147,6 +160,11 @@ class RuleBasedV1:
             liquidity_score=liquidity_score,
             risk_score=risk_score,
             confidence_score=confidence_score,
+            fee_policy_name=request.fee_policy.name,
+            fee_policy_version=request.fee_policy.version,
+            nominal_fee_rate=request.fee_policy.nominal_rate,
+            currency_quantum=request.fee_policy.currency_quantum,
+            proceeds_rounding=request.fee_policy.proceeds_rounding,
             reason_codes=tuple(dict.fromkeys(reason_codes)),
         )
 

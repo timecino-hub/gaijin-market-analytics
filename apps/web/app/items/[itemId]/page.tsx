@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getItem, getItemSnapshots, toDisplayError } from "../../../lib/api-client";
+import { initialAnalysisStateFromQuery } from "../../../lib/analysis-url-state";
 import { formatBoolean, formatDateTime, formatDecimal, formatOptionalText } from "../../../lib/formatters";
 import type { ApiError, ItemDetail, MarketSnapshot, SnapshotQuery, SortOrder } from "../../../lib/types";
+import { AnalysisPanel } from "./analysis-panel";
 import { SnapshotFilterForm } from "./snapshot-filter-form";
 
 type ItemDetailPageProps = {
@@ -11,7 +13,9 @@ type ItemDetailPageProps = {
 
 export default async function ItemDetailPage({ params, searchParams }: ItemDetailPageProps) {
   const { itemId } = await params;
-  const query = toSnapshotQuery(await searchParams);
+  const rawSearchParams = await searchParams;
+  const query = toSnapshotQuery(rawSearchParams);
+  const initialAnalysisState = initialAnalysisStateFromQuery(rawSearchParams);
   const result = await loadItemDetail(itemId, query);
 
   if ("error" in result) {
@@ -75,6 +79,8 @@ export default async function ItemDetailPage({ params, searchParams }: ItemDetai
           </div>
         )}
       </section>
+
+      <AnalysisPanel itemId={itemId} itemName={item.name} initialState={initialAnalysisState} />
 
       <section className="panel" aria-labelledby="history-heading">
         <div className="section-heading">

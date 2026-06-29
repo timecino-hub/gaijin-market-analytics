@@ -1,5 +1,7 @@
 export type SortField = "name" | "created_at" | "updated_at";
 export type SortOrder = "asc" | "desc";
+export type AnalysisHorizon = 7 | 30 | 90 | 180;
+export type AnalysisHorizonParam = "7" | "30" | "90" | "180";
 
 export type SnapshotSummary = {
   observed_at: string;
@@ -81,6 +83,78 @@ export type ApiError = {
   status: number;
   code: string;
   message: string;
+};
+
+export type AnalysisStatus =
+  | "ok"
+  | "insufficient_data"
+  | "invalid_input"
+  | "no_recent_market"
+  | "no_valid_price";
+
+export type AnalysisReasonCode =
+  | "insufficient_snapshots"
+  | "insufficient_time_coverage"
+  | "no_current_ask"
+  | "no_current_bid"
+  | "invalid_price"
+  | "invalid_fee_rate"
+  | "stale_latest_snapshot"
+  | "low_liquidity"
+  | "large_spread"
+  | "analysis_completed";
+
+export type AnalysisEffectiveInputs = {
+  horizon: AnalysisHorizon;
+  as_of: string;
+  maximum_snapshot_age_seconds: number;
+  minimum_snapshot_count: number;
+  fee_policy: AnalysisFeePolicy;
+};
+
+export type AnalysisFeePolicy = {
+  name: string;
+  version: string;
+  nominal_fee_rate: string;
+  currency_quantum: string;
+  proceeds_rounding: string;
+};
+
+export type ItemAnalysisResponse = {
+  item_id: number;
+  external_key: string;
+  item_name: string;
+  effective_inputs: AnalysisEffectiveInputs;
+  status: AnalysisStatus | string;
+  strategy_name: string;
+  strategy_version: string;
+  feature_version: string;
+  observation_count: number;
+  first_observation_at: string | null;
+  last_observation_at: string | null;
+  current_ask: string | null;
+  current_bid: string | null;
+  reference_sell_price: string | null;
+  sale_proceeds: string | null;
+  fee_amount: string | null;
+  gross_profit: string | null;
+  net_profit: string | null;
+  net_roi: string | null;
+  break_even_sell_price: string | null;
+  spread_absolute: string | null;
+  spread_ratio: string | null;
+  median_bid: string | null;
+  median_ask: string | null;
+  price_volatility: string | null;
+  liquidity_score: string | null;
+  risk_score: string | null;
+  confidence_score: string | null;
+  reason_codes: string[];
+};
+
+export type ItemAnalysisQuery = {
+  horizon: AnalysisHorizonParam;
+  as_of?: string;
 };
 
 export type ItemListQuery = {

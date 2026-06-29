@@ -47,18 +47,35 @@ The package uses Python `Decimal` for money, ratios, scores, fees, profit, ROI,
 and break-even calculations. It does not convert analytics values to JSON
 floats. Timestamps must be timezone-aware and are normalized to UTC at the
 contract boundary. Contract errors such as naive datetimes, future observations,
-invalid item IDs, and invalid fee rates raise stable domain exceptions.
+and invalid item IDs raise stable domain exceptions.
 
 The supported analysis horizons are 7, 30, 90, and 180 days. Each window is
 selected independently as `[as_of - horizon, as_of]`; shorter windows are never
 derived from longer-window results.
 
 `RuleBasedV1` is a deterministic baseline used to exercise the analytics
-contract and replacement mechanism. Its `reference_sell_price` is the median
-valid bid inside the selected window. This is an explainable timing reference,
-not a future price prediction, profit guarantee, or trading recommendation.
-The result always includes strategy, strategy version, and feature version so
-future backtests can reproduce which implementation generated an output.
+contract and replacement mechanism. Its statistical reference starts from the
+median valid bid inside the selected window, then the displayable
+`reference_sell_price` is rounded down to the 0.01 GJN market price quantum.
+This is an explainable timing reference, not a future price prediction, profit
+guarantee, or trading recommendation. The result always includes strategy,
+strategy version, feature version, and fee policy version so future backtests
+can reproduce which implementation generated an output.
+
+The current Gaijin Market fee policy is fixed in analytics code as
+`gaijin_market` version `1.0.0`: nominal fee rate `0.15`, currency quantum
+`0.01`, and proceeds rounding `seller_proceeds_round_down`. Seller proceeds are
+computed as `sell_price * 0.85` and then rounded down to 0.01 GJN. For example:
+
+```text
+listed sell price: 1.99 GJN
+raw seller proceeds: 1.6915 GJN
+settled seller proceeds: 1.69 GJN
+actual fee amount: 0.30 GJN
+```
+
+The actual fee amount is `sell_price - sale_proceeds`, so it can be slightly
+higher than exactly 15% because of settlement rounding.
 
 See `docs/analytics-design.md` for the input/output contracts, fee math,
 scoring formulas, data insufficiency behavior, and registry design.
@@ -200,29 +217,32 @@ browser floating-point arithmetic is not used for monetary values.
 from snapshots already stored in PostgreSQL:
 
 ```sh
-curl "http://localhost:8000/api/v1/items/1/analysis?horizon=7&fee_rate=0.10&as_of=2026-06-29T00:00:00Z"
+curl "http://localhost:8000/api/v1/items/1/analysis?horizon=7&as_of=2026-06-29T00:00:00Z"
 ```
 
 Supported query parameters:
 
 - `horizon`: required, one of `7`, `30`, `90`, or `180`.
-- `fee_rate`: required Decimal string satisfying `0 <= fee_rate < 1`. The API
-  does not assume a real marketplace fee.
 - `as_of`: optional ISO-8601 datetime with timezone. When omitted, the API uses
   the current UTC time through a testable clock dependency.
+
+The API does not accept a configurable `fee_rate`. If an old client sends that
+query parameter, the route returns HTTP 400 with `fee_rate_not_configurable`.
 
 The API queries only the inclusive database window `[as_of - horizon, as_of]`
 using `observed_at >= as_of - horizon` and `observed_at <= as_of`, ordered by
 `observed_at asc, id asc`. Results are computed immediately and are not
 persisted; this repository does not create an `analysis_results` table.
 
-The response includes item metadata, effective inputs, strategy metadata, and
-the `RuleBasedV1` output. `reference_sell_price` is a baseline reference sell
-price derived from the median valid bid inside the selected window, not a
-guaranteed future price. `confidence_score` is an explainability score, not a
-profit probability. Decimal values, including `fee_rate`, profit/ROI fields,
-spreads, medians, volatility, and scores, are returned as JSON strings or
-`null`, never JSON floats.
+The response includes item metadata, effective inputs, fixed fee policy
+metadata, strategy metadata, and the `RuleBasedV1` output. `reference_sell_price`
+is a baseline reference sell price derived from the valid bid median and
+rounded down to the 0.01 GJN price quantum, not a guaranteed future price.
+`sale_proceeds` is the rounded seller settlement amount, `fee_amount` is
+`reference_sell_price - sale_proceeds`, and `confidence_score` is an
+explainability score, not a profit probability. Decimal values, including fee
+policy values, proceeds, profit/ROI fields, spreads, medians, volatility, and
+scores, are returned as JSON strings or `null`, never JSON floats.
 
 HTTP errors are reserved for missing items, invalid query parameters, invalid
 contract inputs, unavailable strategies, or invalid analytics configuration.
@@ -230,16 +250,32 @@ Normal data limitations such as empty windows, too few snapshots, insufficient
 coverage, stale latest snapshots, or no valid bid/ask return HTTP 200 with
 analysis `status` and stable `reason_codes`.
 
+The item detail web page exposes the same read-only analysis at
+`/items/{item_id}`. Choose one of the 7, 30, 90, or 180 day windows and click
+"Run analysis". The browser displays the fixed 15% nominal fee policy, 0.01 GJN
+settlement quantum, and seller-proceeds round-down rule; it does not provide a
+fee input and never sends `fee_rate`. The optional `as_of` control is for
+historical reproduction; when provided, the local `datetime-local` value is
+converted to an ISO-8601 timestamp with timezone before submission. When
+omitted, the API uses current UTC.
+
+Submitted analysis parameters are kept in the item detail URL, for example
+`/items/1?horizon=30`. A valid `horizon` in the URL restores the form after
+refresh and may run one analysis request. Invalid URL parameters show a
+client-readable error and do not trigger an automatic analysis request.
+Snapshot filters such as `from`, `to`, `limit`, and `order` are preserved when
+analysis parameters change, and analysis parameters are preserved when snapshot
+filters change. Legacy `fee_rate` query parameters are ignored by the frontend
+and removed on the next URL update.
+
 Web routes:
 
 - `/`: project overview, compliance notice, and entry to the item browser.
 - `/imports`: browser CSV upload flow for authorized CSV v1 data.
 - `/items`: searchable and paginated list of imported items.
 - `/items/{item_id}`: item metadata, latest snapshot, and historical snapshot
-  table with time range filters.
-
-The current web scope does not include profit analysis UI, predictive results,
-or 7/30/90/180 day analysis buttons.
+  table with time range filters, plus the read-only RuleBasedV1 analysis panel
+  for 7, 30, 90, and 180 day windows.
 
 Example item list response:
 
@@ -308,8 +344,8 @@ Implemented: project skeleton, API health and readiness checks, API tests,
 Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
 tables, compliant CSV market data import, web CSV upload flow, read-only
-item/snapshot query APIs, read-only immediate baseline analysis API, and the
-standalone pure Python analytics foundation.
+item/snapshot query APIs, read-only immediate baseline analysis API, item detail
+analysis UI, and the standalone pure Python analytics foundation.
 
 Not implemented: item write APIs, standalone snapshot write APIs, persisted
 analysis results, machine-learning dependencies, user accounts, marketplace

@@ -7,6 +7,7 @@ import pytest
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
 from gaijin_market_analytics.exceptions import ContractValidationError, InvalidDecimalError
+from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1, FeePolicy
 
 
 def aware(hour: int = 0, tz=UTC) -> datetime:
@@ -38,7 +39,7 @@ def test_request_normalizes_timezone_aware_datetimes_to_utc() -> None:
         horizon=AnalysisHorizon.DAYS_7,
         as_of=aware(8, tz),
         observations=(observation(aware(7, tz)),),
-        marketplace_fee_rate=Decimal("0.10"),
+        fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
         maximum_snapshot_age=timedelta(days=1),
         minimum_snapshot_count=1,
     )
@@ -59,7 +60,7 @@ def test_future_observation_is_rejected() -> None:
             horizon=AnalysisHorizon.DAYS_7,
             as_of=aware(0),
             observations=(observation(aware(1)),),
-            marketplace_fee_rate=Decimal("0.10"),
+            fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
@@ -72,21 +73,27 @@ def test_invalid_item_id_and_request_parameters_are_rejected() -> None:
             horizon=AnalysisHorizon.DAYS_7,
             as_of=aware(0),
             observations=(),
-            marketplace_fee_rate=Decimal("0.10"),
+            fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
 
 
 @pytest.mark.parametrize("fee", [Decimal("-0.01"), Decimal("1")])
-def test_invalid_fee_rate_is_rejected_at_contract_boundary(fee: Decimal) -> None:
+def test_invalid_fee_policy_is_rejected_at_contract_boundary(fee: Decimal) -> None:
     with pytest.raises(ContractValidationError):
         AnalysisRequest(
             item_id=1,
             horizon=AnalysisHorizon.DAYS_7,
             as_of=aware(0),
             observations=(),
-            marketplace_fee_rate=fee,
+            fee_policy=FeePolicy(
+                name="bad",
+                version="1",
+                nominal_rate=fee,
+                currency_quantum=Decimal("0.01"),
+                proceeds_rounding="seller_proceeds_round_down",
+            ),
             maximum_snapshot_age=timedelta(days=1),
             minimum_snapshot_count=1,
         )
@@ -116,7 +123,7 @@ def test_observations_are_sorted_without_mutating_callers_collection() -> None:
         horizon=AnalysisHorizon.DAYS_7,
         as_of=aware(0),
         observations=tuple(observations),
-        marketplace_fee_rate=Decimal("0.10"),
+        fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
         maximum_snapshot_age=timedelta(days=1),
         minimum_snapshot_count=1,
     )
@@ -140,6 +147,8 @@ def test_output_object_is_immutable_and_preserves_decimal_fields() -> None:
         current_ask=Decimal("10"),
         current_bid=Decimal("9"),
         reference_sell_price=Decimal("9"),
+        sale_proceeds=Decimal("7.65"),
+        fee_amount=Decimal("1.35"),
         gross_profit=Decimal("-1"),
         net_profit=Decimal("-1.9"),
         net_roi=Decimal("-0.19"),
@@ -152,6 +161,11 @@ def test_output_object_is_immutable_and_preserves_decimal_fields() -> None:
         liquidity_score=Decimal("25"),
         risk_score=Decimal("10"),
         confidence_score=Decimal("70"),
+        fee_policy_name="gaijin_market",
+        fee_policy_version="1.0.0",
+        nominal_fee_rate=Decimal("0.15"),
+        currency_quantum=Decimal("0.01"),
+        proceeds_rounding="seller_proceeds_round_down",
         reason_codes=(ReasonCode.ANALYSIS_COMPLETED,),
     )
 
