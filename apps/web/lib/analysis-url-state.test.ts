@@ -50,6 +50,23 @@ test("mergeAnalysisQuery preserves snapshot filters and unknown parameters", () 
   assert.match(params.toString(), /custom=x\+y/);
 });
 
+test("mergeAnalysisQuery accepts URLSearchParams-like inputs and deletes empty as_of", () => {
+  const readonlyLike = {
+    forEach(callback: (value: string, key: string) => void) {
+      callback("2026-06-01T00:00:00Z", "from");
+      callback("", "as_of");
+      callback("0.15", "fee_rate");
+    }
+  } as unknown as URLSearchParams;
+
+  const params = mergeAnalysisQuery(readonlyLike, { horizon: "7" });
+
+  assert.equal(params.get("from"), "2026-06-01T00:00:00Z");
+  assert.equal(params.get("horizon"), "7");
+  assert.equal(params.has("as_of"), false);
+  assert.equal(params.has("fee_rate"), false);
+});
+
 test("mergeSnapshotQuery preserves analysis parameters", () => {
   const params = mergeSnapshotQuery(
     {

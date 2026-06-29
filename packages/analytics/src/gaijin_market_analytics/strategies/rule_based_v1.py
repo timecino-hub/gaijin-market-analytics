@@ -13,14 +13,12 @@ from gaijin_market_analytics.fees import (
     floor_to_quantum,
 )
 from gaijin_market_analytics.horizons import coverage_ratio, select_horizon_observations
+from gaijin_market_analytics.market_rules import MarketRules, is_valid_market_price
 from gaijin_market_analytics.statistics import (
     decimal_median,
     decimal_median_absolute_deviation,
-    latest_valid_ask,
-    latest_valid_bid,
     spread_absolute,
     spread_ratio,
-    valid_price,
 )
 
 
@@ -56,8 +54,8 @@ class RuleBasedV1:
         first_at = window[0].observed_at if window else None
         last_at = window[-1].observed_at if window else None
 
-        current_ask = latest_valid_ask(window)
-        current_bid = latest_valid_bid(window)
+        current_ask = _latest_valid_market_ask(window, request.market_rules)
+        current_bid = _latest_valid_market_bid(window, request.market_rules)
         latest_snapshot = window[-1] if window else None
 
         if not window:
@@ -68,8 +66,10 @@ class RuleBasedV1:
             reason_codes.append(ReasonCode.NO_CURRENT_ASK)
         if current_bid is None:
             reason_codes.append(ReasonCode.NO_CURRENT_BID)
-        if _has_invalid_price(window):
+        if _has_invalid_non_cap_price(window):
             reason_codes.append(ReasonCode.INVALID_PRICE)
+        if _has_price_above_market_cap(window, request.market_rules):
+            reason_codes.append(ReasonCode.PRICE_ABOVE_MARKET_CAP)
         if latest_snapshot is not None and request.as_of - latest_snapshot.observed_at > request.maximum_snapshot_age:
             reason_codes.append(ReasonCode.STALE_LATEST_SNAPSHOT)
 
@@ -77,10 +77,18 @@ class RuleBasedV1:
         if coverage < self.config.minimum_coverage_ratio:
             reason_codes.append(ReasonCode.INSUFFICIENT_TIME_COVERAGE)
 
-        median_bid = decimal_median(tuple(observation.best_bid for observation in window))
-        median_ask = decimal_median(tuple(observation.best_ask for observation in window))
+        valid_bids = _valid_market_prices(
+            tuple(observation.best_bid for observation in window),
+            request.market_rules,
+        )
+        valid_asks = _valid_market_prices(
+            tuple(observation.best_ask for observation in window),
+            request.market_rules,
+        )
+        median_bid = decimal_median(valid_bids)
+        median_ask = decimal_median(valid_asks)
         price_volatility = decimal_median_absolute_deviation(
-            tuple(observation.best_bid for observation in window)
+            valid_bids
         )
         absolute_spread = spread_absolute(current_ask, current_bid)
         ratio_spread = spread_ratio(current_ask, current_bid)
@@ -102,16 +110,31 @@ class RuleBasedV1:
             if median_bid is not None
             else None
         )
+        if not is_valid_market_price(reference_sell_price, request.market_rules):
+            reference_sell_price = None
         sale_proceeds = None
         fee_amount = None
         gross_profit = None
         net_profit = None
         net_roi = None
         break_even_sell_price = None
+        break_even_reachable = None
+        maximum_listing_price = request.market_rules.maximum_listing_price
+        maximum_sale_proceeds = request.market_rules.maximum_sale_proceeds
+        maximum_net_profit = None
         if current_ask is not None:
-            break_even_sell_price = calculate_break_even_sell_price(
+            required_break_even = calculate_break_even_sell_price(
                 current_ask,
                 request.fee_policy,
+            )
+            if required_break_even <= maximum_listing_price:
+                break_even_sell_price = required_break_even
+                break_even_reachable = True
+            else:
+                break_even_reachable = False
+                reason_codes.append(ReasonCode.BREAK_EVEN_UNREACHABLE_UNDER_MARKET_CAP)
+            maximum_net_profit = (maximum_sale_proceeds - current_ask).quantize(
+                request.market_rules.currency_quantum
             )
         if current_ask is not None and reference_sell_price is not None:
             sale_proceeds = calculate_sale_proceeds(reference_sell_price, request.fee_policy)
@@ -152,6 +175,10 @@ class RuleBasedV1:
             net_profit=net_profit,
             net_roi=net_roi,
             break_even_sell_price=break_even_sell_price,
+            break_even_reachable=break_even_reachable,
+            maximum_listing_price=maximum_listing_price,
+            maximum_sale_proceeds=maximum_sale_proceeds,
+            maximum_net_profit=maximum_net_profit,
             spread_absolute=absolute_spread,
             spread_ratio=ratio_spread,
             median_bid=median_bid,
@@ -165,6 +192,8 @@ class RuleBasedV1:
             nominal_fee_rate=request.fee_policy.nominal_rate,
             currency_quantum=request.fee_policy.currency_quantum,
             proceeds_rounding=request.fee_policy.proceeds_rounding,
+            market_rules_name=request.market_rules.name,
+            market_rules_version=request.market_rules.version,
             reason_codes=tuple(dict.fromkeys(reason_codes)),
         )
 
@@ -252,12 +281,66 @@ class RuleBasedV1:
         )
 
 
-def _has_invalid_price(observations: tuple[MarketObservation, ...]) -> bool:
+def _has_invalid_non_cap_price(observations: tuple[MarketObservation, ...]) -> bool:
     return any(
-        (observation.best_ask is not None and valid_price(observation.best_ask) is None)
-        or (observation.best_bid is not None and valid_price(observation.best_bid) is None)
+        (observation.best_ask is not None and _is_invalid_non_cap_price(observation.best_ask))
+        or (observation.best_bid is not None and _is_invalid_non_cap_price(observation.best_bid))
         for observation in observations
     )
+
+
+def _has_price_above_market_cap(
+    observations: tuple[MarketObservation, ...],
+    market_rules: MarketRules,
+) -> bool:
+    return any(
+        (
+            observation.best_ask is not None
+            and isinstance(observation.best_ask, Decimal)
+            and observation.best_ask.is_finite()
+            and observation.best_ask > market_rules.maximum_listing_price
+        )
+        or (
+            observation.best_bid is not None
+            and isinstance(observation.best_bid, Decimal)
+            and observation.best_bid.is_finite()
+            and observation.best_bid > market_rules.maximum_listing_price
+        )
+        for observation in observations
+    )
+
+
+def _is_invalid_non_cap_price(value: Decimal) -> bool:
+    return not isinstance(value, Decimal) or not value.is_finite() or value <= Decimal("0")
+
+
+def _valid_market_prices(
+    values: tuple[Decimal | None, ...],
+    market_rules: MarketRules,
+) -> tuple[Decimal, ...]:
+    return tuple(value for value in values if is_valid_market_price(value, market_rules))
+
+
+def _latest_valid_market_ask(
+    observations: tuple[MarketObservation, ...],
+    market_rules: MarketRules,
+) -> Decimal | None:
+    for observation in reversed(observations):
+        price = observation.best_ask
+        if is_valid_market_price(price, market_rules):
+            return price
+    return None
+
+
+def _latest_valid_market_bid(
+    observations: tuple[MarketObservation, ...],
+    market_rules: MarketRules,
+) -> Decimal | None:
+    for observation in reversed(observations):
+        price = observation.best_bid
+        if is_valid_market_price(price, market_rules):
+            return price
+    return None
 
 
 def _append_once(reason_codes: list[ReasonCode], reason_code: ReasonCode) -> None:

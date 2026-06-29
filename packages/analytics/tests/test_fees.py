@@ -81,6 +81,40 @@ def test_break_even_handles_non_quantum_buy_price() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("buy_price", "expected"),
+    [
+        (Decimal("0.01"), Decimal("0.02")),
+        (Decimal("12.34"), Decimal("14.52")),
+        (Decimal("1699.99"), Decimal("1999.99")),
+        (Decimal("1700.00"), Decimal("2000.00")),
+        (Decimal("1700.01"), Decimal("2000.02")),
+    ],
+)
+def test_break_even_uses_bounded_correction_not_quantum_enumeration(
+    buy_price: Decimal,
+    expected: Decimal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gaijin_market_analytics import fees
+
+    calls = 0
+    original = fees.calculate_sale_proceeds
+
+    def counting_sale_proceeds(
+        sell_price: Decimal,
+        policy: FeePolicy = GAIJIN_MARKET_FEE_POLICY_V1,
+    ) -> Decimal:
+        nonlocal calls
+        calls += 1
+        return original(sell_price, policy)
+
+    monkeypatch.setattr(fees, "calculate_sale_proceeds", counting_sale_proceeds)
+
+    assert fees.calculate_break_even_sell_price(buy_price) == expected
+    assert calls <= 6
+
+
 def test_same_inputs_are_deterministic() -> None:
     first = calculate_net_profit(Decimal("1.69"), Decimal("1.99"))
     second = calculate_net_profit(Decimal("1.69"), Decimal("1.99"))

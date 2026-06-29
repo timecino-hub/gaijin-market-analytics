@@ -168,9 +168,14 @@ test("ItemAnalysisResponse decimal fields remain strings or null at runtime", as
 
     assert.equal(response.effective_inputs.fee_policy.nominal_fee_rate, "0.15");
     assert.equal(response.effective_inputs.fee_policy.currency_quantum, "0.01");
+    assert.ok(response.effective_inputs.market_rules);
+    assert.equal(response.effective_inputs.market_rules.maximum_listing_price, "2000.00");
+    assert.equal(response.effective_inputs.market_rules.maximum_sale_proceeds, "1700.00");
     assert.equal(typeof response.current_ask, "string");
     assert.equal(typeof response.sale_proceeds, "string");
     assert.equal(typeof response.fee_amount, "string");
+    assert.equal(typeof response.maximum_net_profit, "string");
+    assert.equal(typeof response.break_even_reachable, "boolean");
     assert.equal(response.current_bid, null);
   } finally {
     globalThis.fetch = originalFetch;
@@ -318,6 +323,13 @@ function analysisResponse({
         nominal_fee_rate: "0.15",
         currency_quantum: "0.01",
         proceeds_rounding: "seller_proceeds_round_down"
+      },
+      market_rules: {
+        name: "gaijin_market",
+        version: "1.0.0",
+        maximum_listing_price: "2000.00",
+        maximum_sale_proceeds: "1700.00",
+        currency_quantum: "0.01"
       }
     },
     status: "ok",
@@ -336,6 +348,8 @@ function analysisResponse({
     net_profit: "-2.650000",
     net_roi: "-0.2208333333333333333333333333",
     break_even_sell_price: "14.11764705882352941176470588",
+    break_even_reachable: true,
+    maximum_net_profit: "1688.000000",
     spread_absolute: "1.000000",
     spread_ratio: "0.09090909090909090909090909091",
     median_bid: "10.000000",

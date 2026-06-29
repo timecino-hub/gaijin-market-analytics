@@ -17,12 +17,25 @@ class AnalysisFeePolicy(BaseModel):
         return str(value)
 
 
+class AnalysisMarketRules(BaseModel):
+    name: str
+    version: str
+    maximum_listing_price: Decimal
+    maximum_sale_proceeds: Decimal
+    currency_quantum: Decimal
+
+    @field_serializer("maximum_listing_price", "maximum_sale_proceeds", "currency_quantum")
+    def serialize_decimal(self, value: Decimal) -> str:
+        return str(value)
+
+
 class AnalysisEffectiveInputs(BaseModel):
     horizon: Literal[7, 30, 90, 180]
     as_of: datetime
     maximum_snapshot_age_seconds: int
     minimum_snapshot_count: int
     fee_policy: AnalysisFeePolicy
+    market_rules: AnalysisMarketRules
 
 
 class AnalysisResponse(BaseModel):
@@ -46,6 +59,8 @@ class AnalysisResponse(BaseModel):
     net_profit: Decimal | None
     net_roi: Decimal | None
     break_even_sell_price: Decimal | None
+    break_even_reachable: bool | None
+    maximum_net_profit: Decimal | None
     spread_absolute: Decimal | None
     spread_ratio: Decimal | None
     median_bid: Decimal | None
@@ -66,6 +81,7 @@ class AnalysisResponse(BaseModel):
         "net_profit",
         "net_roi",
         "break_even_sell_price",
+        "maximum_net_profit",
         "spread_absolute",
         "spread_ratio",
         "median_bid",

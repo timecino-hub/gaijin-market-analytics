@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult
 from gaijin_market_analytics.enums import AnalysisHorizon
 from gaijin_market_analytics.exceptions import AnalyticsError, ContractValidationError
-from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1
 from gaijin_market_analytics.horizons import horizon_delta
+from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,7 +76,8 @@ class ItemAnalysisService:
                 horizon=horizon,
                 as_of=as_of,
                 observations=observations,
-                fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+                fee_policy=GAIJIN_MARKET_RULES_V1.fee_policy,
+                market_rules=GAIJIN_MARKET_RULES_V1,
                 maximum_snapshot_age=timedelta(hours=maximum_snapshot_age_hours),
                 minimum_snapshot_count=minimum_snapshot_count,
             )
