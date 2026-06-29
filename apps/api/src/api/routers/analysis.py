@@ -10,7 +10,12 @@ from api.analytics_registry import get_strategy_registry
 from api.clock import UtcClock, get_utc_clock
 from api.config import Settings, get_settings
 from api.db.session import get_session
-from api.schemas.analysis import AnalysisEffectiveInputs, AnalysisFeePolicy, AnalysisResponse
+from api.schemas.analysis import (
+    AnalysisEffectiveInputs,
+    AnalysisFeePolicy,
+    AnalysisMarketRules,
+    AnalysisResponse,
+)
 from api.services.analysis import (
     AnalysisInputError,
     AnalysisServiceResult,
@@ -165,6 +170,13 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
                 currency_quantum=result.currency_quantum,
                 proceeds_rounding=result.proceeds_rounding,
             ),
+            market_rules=AnalysisMarketRules(
+                name=result.market_rules_name,
+                version=result.market_rules_version,
+                maximum_listing_price=result.maximum_listing_price,
+                maximum_sale_proceeds=result.maximum_sale_proceeds,
+                currency_quantum=result.currency_quantum,
+            ),
         ),
         status=result.status.value,
         strategy_name=result.strategy_name,
@@ -182,6 +194,8 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
         net_profit=result.net_profit,
         net_roi=result.net_roi,
         break_even_sell_price=result.break_even_sell_price,
+        break_even_reachable=result.break_even_reachable,
+        maximum_net_profit=result.maximum_net_profit,
         spread_absolute=result.spread_absolute,
         spread_ratio=result.spread_ratio,
         median_bid=result.median_bid,

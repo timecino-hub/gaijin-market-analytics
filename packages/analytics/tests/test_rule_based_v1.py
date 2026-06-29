@@ -7,6 +7,7 @@ import pytest
 from gaijin_market_analytics.contracts import AnalysisRequest, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
 from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1, FeePolicy, calculate_sale_proceeds
+from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1, RuleBasedV1Config
 
 
@@ -46,6 +47,7 @@ def request(
         as_of=AS_OF,
         observations=observations,
         fee_policy=GAIJIN_MARKET_FEE_POLICY_V1,
+        market_rules=GAIJIN_MARKET_RULES_V1,
         maximum_snapshot_age=maximum_snapshot_age,
         minimum_snapshot_count=minimum_snapshot_count,
     )
@@ -139,6 +141,10 @@ def test_normal_rule_based_result_uses_median_bid_reference_price_and_decimal_ou
     assert result.fee_amount == Decimal("1.35")
     assert result.net_profit == Decimal("-4.35")
     assert result.break_even_sell_price == Decimal("14.12")
+    assert result.break_even_reachable is True
+    assert result.maximum_listing_price == Decimal("2000.00")
+    assert result.maximum_sale_proceeds == Decimal("1700.00")
+    assert result.maximum_net_profit == Decimal("1688.00")
     assert result.fee_policy_name == "gaijin_market"
     assert result.fee_policy_version == "1.0.0"
     assert result.nominal_fee_rate == Decimal("0.15")
@@ -166,6 +172,91 @@ def test_reference_sell_price_is_quantized_down_to_currency_quantum() -> None:
     assert result.reference_sell_price == Decimal("1.01")
 
 
+def test_prices_above_market_cap_are_excluded_before_reference_median() -> None:
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        request(
+            (
+                obs(7, ask="2000.01", bid="2000.01", key="a"),
+                obs(3, ask="100.00", bid="100.00", key="b"),
+                obs(0, ask="120.00", bid="120.00", key="c"),
+            ),
+            minimum_snapshot_count=3,
+        )
+    )
+
+    assert result.current_ask == Decimal("120.00")
+    assert result.current_bid == Decimal("120.00")
+    assert result.median_bid == Decimal("110.00")
+    assert result.reference_sell_price == Decimal("110.00")
+    assert result.reference_sell_price <= Decimal("2000.00")
+    assert ReasonCode.PRICE_ABOVE_MARKET_CAP in result.reason_codes
+
+
+def test_all_bids_above_market_cap_return_no_valid_bid() -> None:
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        request(
+            (
+                obs(7, ask="100.00", bid="2000.01", key="a"),
+                obs(0, ask="120.00", bid="2500.00", key="b"),
+            )
+        )
+    )
+
+    assert result.status == AnalysisStatus.NO_VALID_PRICE
+    assert result.current_bid is None
+    assert result.reference_sell_price is None
+    assert ReasonCode.NO_CURRENT_BID in result.reason_codes
+    assert ReasonCode.PRICE_ABOVE_MARKET_CAP in result.reason_codes
+
+
+def test_break_even_at_market_cap_is_reachable() -> None:
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        request(
+            (
+                obs(7, ask="1700.00", bid="2000.00", key="a"),
+                obs(0, ask="1700.00", bid="2000.00", key="b"),
+            )
+        )
+    )
+
+    assert result.break_even_sell_price == Decimal("2000.00")
+    assert result.break_even_reachable is True
+    assert result.maximum_net_profit == Decimal("0.00")
+    assert ReasonCode.BREAK_EVEN_UNREACHABLE_UNDER_MARKET_CAP not in result.reason_codes
+
+
+def test_break_even_above_market_cap_is_unreachable_without_clamping() -> None:
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        request(
+            (
+                obs(7, ask="1700.01", bid="2000.00", key="a"),
+                obs(0, ask="1700.01", bid="2000.00", key="b"),
+            )
+        )
+    )
+
+    assert result.break_even_sell_price is None
+    assert result.break_even_reachable is False
+    assert result.maximum_net_profit == Decimal("-0.01")
+    assert ReasonCode.BREAK_EVEN_UNREACHABLE_UNDER_MARKET_CAP in result.reason_codes
+
+
+def test_break_even_reachable_is_none_when_current_ask_is_missing() -> None:
+    result = RuleBasedV1(RuleBasedV1Config(minimum_coverage_ratio=Decimal("0"))).analyze(
+        request(
+            (
+                obs(7, ask=None, bid="100.00", key="a"),
+                obs(0, ask=None, bid="120.00", key="b"),
+            )
+        )
+    )
+
+    assert result.break_even_sell_price is None
+    assert result.break_even_reachable is None
+    assert result.maximum_net_profit is None
+    assert ReasonCode.BREAK_EVEN_UNREACHABLE_UNDER_MARKET_CAP not in result.reason_codes
+
+
 def test_rule_based_v1_uses_request_fee_policy_and_not_free_fee_rate() -> None:
     policy = FeePolicy(
         name="gaijin_market",
@@ -180,6 +271,7 @@ def test_rule_based_v1_uses_request_fee_policy_and_not_free_fee_rate() -> None:
         as_of=AS_OF,
         observations=(obs(7, ask="1.99", bid="1.99"), obs(0, ask="1.99", bid="1.99")),
         fee_policy=policy,
+        market_rules=GAIJIN_MARKET_RULES_V1,
         maximum_snapshot_age=timedelta(days=2),
         minimum_snapshot_count=2,
     )

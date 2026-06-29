@@ -182,6 +182,25 @@ Read-only market query endpoints:
 - `GET /api/v1/items/{item_id}/snapshots`
 - `GET /api/v1/items/{item_id}/analysis`
 
+Developer backtesting is available only as a read-only CLI. It does not add a
+public HTTP route, web page, result table, or background job:
+
+```sh
+cd apps/api
+uv run python -m api.backtesting_cli \
+  --item-id 123 \
+  --lookback-horizon 30 \
+  --forward-horizon 30 \
+  --start 2026-01-01T00:00:00Z \
+  --end 2026-06-01T00:00:00Z \
+  --cadence-days 7 \
+  --pretty
+```
+
+Backtesting separates the analysis lookback window from the future snapshot
+evaluation window. Future `best_bid` values are evaluation proxies, not evidence
+of executed trades or profit guarantees. See `docs/backtesting.md`.
+
 These endpoints expose only items and snapshots already imported into
 PostgreSQL from allowed sources. They do not create, edit, delete, enrich,
 backfill, interpolate, or calculate returns from market data.
@@ -345,7 +364,8 @@ Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
 tables, compliant CSV market data import, web CSV upload flow, read-only
 item/snapshot query APIs, read-only immediate baseline analysis API, item detail
-analysis UI, and the standalone pure Python analytics foundation.
+analysis UI, the standalone pure Python analytics foundation, and a read-only
+developer CLI for walk-forward backtesting of imported snapshots.
 
 Not implemented: item write APIs, standalone snapshot write APIs, persisted
 analysis results, machine-learning dependencies, user accounts, marketplace

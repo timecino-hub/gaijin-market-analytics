@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisStatus, ReasonCode
+from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy import create_engine, inspect, text
 
@@ -584,6 +585,10 @@ def test_orm_objects_are_not_passed_to_strategy(
                 net_profit=None,
                 net_roi=None,
                 break_even_sell_price=None,
+                break_even_reachable=None,
+                maximum_listing_price=GAIJIN_MARKET_RULES_V1.maximum_listing_price,
+                maximum_sale_proceeds=GAIJIN_MARKET_RULES_V1.maximum_sale_proceeds,
+                maximum_net_profit=None,
                 spread_absolute=None,
                 spread_ratio=None,
                 median_bid=None,
@@ -597,6 +602,8 @@ def test_orm_objects_are_not_passed_to_strategy(
                 nominal_fee_rate=Decimal("0.15"),
                 currency_quantum=Decimal("0.01"),
                 proceeds_rounding="seller_proceeds_round_down",
+                market_rules_name="gaijin_market",
+                market_rules_version="1.0.0",
                 reason_codes=(ReasonCode.INSUFFICIENT_SNAPSHOTS,),
             )
 

@@ -250,6 +250,35 @@ Normal data insufficiency returns HTTP 200 with analytics `status` and
 parameters, contract-level invalid inputs, unavailable strategies, invalid
 analytics configuration, or unexpected service failures.
 
+## Backtesting Foundation
+
+The pure analytics backtesting package lives under
+`gaijin_market_analytics.backtesting`. It contains frozen dataclasses and domain
+enums only; JSON formatting, stdout behavior, CLI errors, and pretty printing
+belong to the API-side CLI adapter.
+
+Backtests distinguish `lookback_horizon_days` from `forward_horizon_days`.
+`RuleBasedV1` receives only observations where
+`as_of - lookback_horizon <= observed_at <= as_of`. Future evaluation receives
+only observations where `as_of < observed_at <= as_of + forward_horizon`.
+
+The engine accepts an already resolved strategy, or an explicit
+`StrategyRegistry` plus strategy name/version. It does not use hidden global
+registry state. The production CLI resolves `rule_based` `1.0.0` through the
+current explicit registry and uses fixed Gaijin Market fee and market rules.
+
+Future evaluation uses legal future `best_bid` values only. It does not use
+future asks as substitutes and does not describe maximum future bid as a
+guaranteed achievable trade price. `reference_reached` and
+`break_even_reached` can be true at time zero when the cutoff current bid already
+meets the relevant condition. Break-even reach checks seller proceeds directly
+with the fixed fee policy.
+
+By default, a forward window is complete only when the item dataset's maximum
+`observed_at` is at least `cutoff + forward_horizon`. Incomplete cases are kept
+with a skip reason but excluded from formal summary denominators. Overlapping
+forward windows are allowed and mean cases may not be independent.
+
 ## Web Presentation
 
 The item detail page presents the immediate API result without persisting it.
