@@ -9,6 +9,29 @@ truth, and local OCR output. It does not access Gaijin Market, automate a
 browser, log in, reuse cookies, call internal endpoints, trade, write the
 database, or call the CSV import API.
 
+## Current Milestone
+
+The recommended short-term acceptance path is current-only CUT-20. It uses only
+the 20 current market page screenshots named `001.png` through `020.png` and
+the existing `api.screen_recognition_cut run` command. The run input directory
+should contain only those current screenshots; `_1` history screenshots are not
+counted as missing files or failures for this milestone.
+
+Current-only CUT-20 checks image readability, `gaijin-market-desktop-v1`
+layout compatibility, `item_name`, `best_bid`, `best_ask`,
+`total_bid_quantity`, `total_ask_quantity`, optional visible bid and ask
+levels, exact versus aggregate price parsing, and domain validation. Prices use
+Decimal strings, `best_bid` is the highest buy order, `best_ask` is the lowest
+sell order, displayed total quantities mean displayed item quantities, and
+aggregate displays such as `89.00+` must not be treated as exact `89.00`.
+
+History screenshots named `001_1.png` through `020_1.png` may remain in a
+private archive or private working directory, but they are deferred. They must
+not be OCR'd, scored, used for red price area extraction, blue volume line
+extraction, sampled-point estimation, training, CSV generation, or database
+import during the current-only milestone. Dynamic hover tooltips on history
+charts are outside the current recognition contract.
+
 ## Current OCR Backend
 
 The first end-to-end backend is `windows-ocr`. It uses Windows Media OCR through
@@ -112,7 +135,9 @@ uv run python -m api.screen_recognition_cut run \
 
 ## Paired CUT-20 Workflow
 
-`Screen Recognition Paired CUT-20` treats each sample as a pair:
+`Screen Recognition Paired CUT-20` is retained as future experimental tooling.
+It is not the recommended short-term acceptance path. It treats each sample as
+a pair:
 
 - `001.png`: current item page with current price and order-book information.
 - `001_1.png`: history/chart page for the same item.
@@ -149,6 +174,12 @@ ROI and color parameters. Evaluation must use the frozen configuration recorded
 by SHA-256 in `run_metadata.json`.
 
 ## History Chart Recognition
+
+History chart recognition is future experimental scope and is not part of the
+current-only CUT-20 milestone. History screenshots can contain dynamic hover
+tooltips, and those tooltips are not part of the current recognition contract.
+Historical chart data must not enter training, import CSVs, or database writes
+from current-only acceptance work.
 
 History recognition is reported in three levels:
 
@@ -326,7 +357,16 @@ database.
 ## Private Screenshot ZIPs
 
 Private screenshot ZIPs should be handled outside the repository. The ZIP
-safety helper accepts only root-level PNG/JPG/JPEG files, rejects path
-traversal, rejects symbolic links, and rejects executable/script files. The
-current task does not automatically run the user's private 20-image batch; that
-requires a separate approval after the framework is verified.
+safety helper accepts PNG/JPG/JPEG files either directly at the ZIP root or
+inside one single top-level wrapper directory. When a wrapper directory is
+used, extraction strips that prefix so the output directory contains
+`001.png`, `001_1.png`, and the remaining paired files directly.
+
+The helper rejects absolute paths, Windows drive or UNC paths, path traversal,
+symbolic links, hard links or special files, nested directories below the
+single wrapper, multiple top-level directories, mixed root and wrapped images,
+nested archives, executable/script/shortcut files, non-image files,
+case-insensitive duplicate filenames, abnormal compression ratios, and overly
+large uncompressed archives. The current task does not automatically run the
+user's private 20-image batch; that requires a separate approval after the
+framework is verified.
