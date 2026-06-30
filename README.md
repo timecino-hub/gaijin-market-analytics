@@ -209,6 +209,53 @@ Backtesting separates the analysis lookback window from the future snapshot
 evaluation window. Future `best_bid` values are evaluation proxies, not evidence
 of executed trades or profit guarantees. See `docs/backtesting.md`.
 
+Developer screen-recognition acceptance is available as a local-only CLI. It is
+for Screen Recognition CUT-20 on user-provided PNG/JPEG screenshots and
+manually labeled ground truth. It does not access Gaijin Market, automate a
+browser, generate import CSVs, call the CSV import API, or write the database.
+
+```sh
+cd apps/api
+uv run python -m api.screen_recognition_cut init \
+  --images-dir <path-outside-repo>/images \
+  --output <path-outside-repo>/ground_truth.jsonl
+
+uv run python -m api.screen_recognition_cut run \
+  --images-dir <path-outside-repo>/images \
+  --ground-truth <path-outside-repo>/ground_truth.jsonl \
+  --output-dir <path-outside-repo>/output \
+  --layout-profile gaijin-market-desktop-v1 \
+  --ocr-backend windows-ocr \
+  --strict
+```
+
+The `windows-ocr` backend uses local Windows Media OCR through PowerShell. The
+`sidecar` backend is parser-only and must not be mixed with end-to-end accuracy
+statistics. See `docs/screen-recognition-cut.md`.
+
+Paired screen-recognition acceptance is also available for current/history
+image pairs such as `001.png` and `001_1.png`:
+
+```sh
+cd apps/api
+uv run python -m api.screen_recognition_cut init-paired \
+  --images-dir <path-outside-repo>/images \
+  --output <path-outside-repo>/paired_ground_truth.jsonl
+
+uv run python -m api.screen_recognition_cut run-paired \
+  --images-dir <path-outside-repo>/images \
+  --ground-truth <path-outside-repo>/paired_ground_truth.jsonl \
+  --output-dir <path-outside-repo>/paired-output \
+  --current-layout gaijin-market-desktop-v1 \
+  --history-layout gaijin-market-history-v1 \
+  --ocr-backend windows-ocr \
+  --strict
+```
+
+Paired history analysis uses local Pillow-based color masks for red price areas
+and blue volume lines. Chart-derived values are estimates (`exact=false`) and
+are never imported or persisted automatically.
+
 These endpoints expose only items and snapshots already imported into
 PostgreSQL from allowed sources. They do not create, edit, delete, enrich,
 backfill, interpolate, or calculate returns from market data.
