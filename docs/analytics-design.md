@@ -24,6 +24,7 @@ packages/analytics/
 |   +-- exceptions.py
 |   +-- fees.py
 |   +-- market_rules.py
+|   +-- screen_recognition.py
 |   +-- horizons.py
 |   +-- statistics.py
 |   +-- registry.py
@@ -116,6 +117,50 @@ breaks even at `2000.00`, while `buy_price = 1700.01` has no reachable
 break-even price under the cap.
 
 `buy_price` and `sell_price` must be finite Decimals greater than zero.
+
+## Screen Recognition Semantics
+
+The optional screen-recognition contract is limited to user-provided screenshots
+or text produced by an authorized OCR workflow. It does not access Gaijin
+Market pages, automate a browser, reuse cookies, call internal endpoints, place
+orders, or perform account actions.
+
+The screen order book follows limit-order-book semantics:
+
+- `best_bid` is the current highest bid and is the single-unit immediate sell
+  reference.
+- `best_ask` is the current lowest ask and is the single-unit immediate buy
+  reference.
+- `total_bid_quantity` and `total_ask_quantity` represent displayed item
+  quantities, not independent order counts.
+
+`OrderBookLevel` supports both exact price levels and aggregate displayed
+intervals:
+
+- `exact_price: Decimal | None`
+- `price_lower_bound: Decimal | None`
+- `price_upper_bound: Decimal | None`
+- `lower_bound_inclusive: bool | None`
+- `upper_bound_inclusive: bool | None`
+- `aggregation_type: exact`, `greater_than`, `greater_than_or_equal`,
+  `less_than`, `less_than_or_equal`, or `unknown_aggregate`
+- `raw_display_price: str`
+
+A display value such as `89.00+` is parsed as an aggregate ask interval with
+`price_lower_bound = Decimal("89.00")`, `lower_bound_inclusive = True`, and
+`exact_price = None`. It must never be treated as the exact price `89.00`.
+
+Validation checks that the first exact bid equals `best_bid`, the first exact
+ask equals `best_ask`, exact bid levels are descending, exact ask levels are
+ascending, aggregate ask lower bounds do not fall below preceding exact ask
+prices, and displayed level quantities sum to the displayed totals.
+
+Multi-unit immediate execution estimates consume exact visible levels only. If
+the requested quantity enters an aggregate interval, the estimate is marked
+incomplete and does not assume the aggregate quantity is available at the
+displayed boundary price. Seller proceeds are calculated only through the
+confirmed `GAIJIN_MARKET_FEE_POLICY_V1`; the screen parser itself does not
+define a separate fee rate.
 
 ## Market Rules
 

@@ -85,8 +85,26 @@ price, producing `1700.00` GJN. This is not a fixed profit cap for every item;
 the theoretical maximum net profit under the current buy price is
 `maximum_sale_proceeds - current_ask`.
 
+The analytics package also includes a screen-recognition contract for
+user-provided screenshots or authorized OCR text. It models Gaijin Market's
+displayed order book as a limit-order-book-like snapshot: `best_bid` is the
+highest bid, `best_ask` is the lowest ask, and displayed totals are named
+`total_bid_quantity` and `total_ask_quantity` because they represent item
+quantities rather than independent order counts. Display values such as
+`89.00+` are aggregate intervals, not exact prices; they are represented with
+`exact_price = None`, `price_lower_bound = Decimal("89.00")`, and
+`aggregation_type = "greater_than_or_equal"`.
+
+Immediate single-item buy references use `best_ask`; immediate single-item sell
+references use `best_bid`. Multi-quantity estimates consume exact visible
+levels only and are marked incomplete when they enter an aggregate interval.
+Seller proceeds are calculated only through the confirmed
+`GAIJIN_MARKET_FEE_POLICY_V1`; the screen-recognition parser does not define a
+separate fee rate.
+
 See `docs/analytics-design.md` for the input/output contracts, fee math,
-scoring formulas, data insufficiency behavior, and registry design.
+screen-recognition semantics, scoring formulas, data insufficiency behavior,
+and registry design.
 
 ## Install
 
@@ -374,9 +392,11 @@ Next.js shell, local configuration examples, PostgreSQL Docker Compose service,
 SQLAlchemy async database setup, Alembic migration commands, database foundation
 tables, compliant CSV market data import, web CSV upload flow, read-only
 item/snapshot query APIs, read-only immediate baseline analysis API, item detail
-analysis UI, the standalone pure Python analytics foundation, and a read-only
-developer CLI for walk-forward backtesting of imported snapshots.
+analysis UI, the standalone pure Python analytics foundation, user-provided or
+authorized OCR text order-book recognition contracts, and a read-only developer
+CLI for walk-forward backtesting of imported snapshots.
 
 Not implemented: item write APIs, standalone snapshot write APIs, persisted
 analysis results, machine-learning dependencies, user accounts, marketplace
-scraping, login automation, or automated trading actions.
+screenshots capture/OCR engine, marketplace scraping, login automation, or
+automated trading actions.
