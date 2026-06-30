@@ -345,3 +345,24 @@ python -m compileall src
 uv --cache-dir ../../.uv-cache run pytest
 uv --cache-dir ../../.uv-cache lock --check
 ```
+
+## Screen Recognition CUT Boundary
+
+Screen Recognition CUT-20 lives in the API/tooling layer under
+`apps/api/src/api/screen_recognition`. It may read local PNG/JPEG screenshots,
+invoke a local OCR backend, parse OCR text into a screen order-book contract,
+compare against manually labeled ground truth, and write local test reports.
+Paired CUT-20 additionally analyzes paired history screenshots with local
+Pillow image processing for red price areas and blue volume lines. These
+chart-derived values are estimates, marked `exact=false`, and remain outside
+analytics inputs unless a separate reviewed data contract is approved later.
+
+The analytics package does not read screenshots, unzip archives, call OCR,
+parse OCR text, access files, access the network, or write CUT results. CUT
+outputs do not automatically become market data, do not call the CSV import
+API, and do not write the database.
+
+Current screenshot quantities `total_bid_quantity` and `total_ask_quantity`
+represent displayed item quantities. They are not automatically mapped to the
+CSV import fields `bid_count` and `ask_count`; that mapping requires a separate
+contract decision.
