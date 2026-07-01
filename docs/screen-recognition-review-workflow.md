@@ -191,6 +191,18 @@ It provides:
 - warnings/errors and collapsible OCR evidence
 - `识别置信度：不可用`
 - copy/download candidate JSON after confirmation
+- local extension pairing controls that copy a versioned payload:
+
+```json
+{
+  "version": "local_extension_pairing_v1",
+  "pairing_code_id": "<id>",
+  "pairing_code": "<one-time-code>"
+}
+```
+
+The future browser extension parses `pairing_code_id` and `pairing_code` from
+that payload, then submits them to `POST /api/v1/local-recognition/pair`.
 - capabilities, layout, OCR, privacy, and diagnostic panels
 - extension placeholders: `浏览器扩展：未连接` and `自动识别：下一阶段提供`
 

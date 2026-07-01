@@ -190,6 +190,20 @@ service restart. The candidate records `imported=false` and
 imported, and does not generate CSV. See
 `docs/screen-recognition-review-workflow.md`.
 
+The same page also creates local browser-extension pairing codes and copies a
+versioned pairing payload for the future extension:
+
+```json
+{
+  "version": "local_extension_pairing_v1",
+  "pairing_code_id": "<id>",
+  "pairing_code": "<one-time-code>"
+}
+```
+
+The extension parses `pairing_code_id` and `pairing_code` from the copied
+payload and submits both fields to `POST /api/v1/local-recognition/pair`.
+
 Import statuses shown by the web page:
 
 - `completed`: the CSV was accepted and valid rows were imported into the
@@ -372,7 +386,8 @@ Web routes:
   table with time range filters, plus the read-only RuleBasedV1 analysis panel
   for 7, 30, 90, and 180 day windows.
 - `/screen-recognition`: local-only manual review page for uploaded current
-  screenshots and reviewed candidate JSON generation.
+  screenshots, reviewed candidate JSON generation, and versioned local
+  extension pairing payload copy.
 
 Example item list response:
 
