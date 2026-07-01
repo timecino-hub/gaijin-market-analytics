@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import struct
 import zlib
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
+import api.routers.local_recognition as local_recognition_router
 from api.screen_recognition.contracts import OcrFieldEvidence, OcrResult
+from api.routers.local_recognition import _require_loopback_request
 from api.services.local_extension_pairing import (
     CaptureAlreadyReserved,
     LocalExtensionPairingStore,
@@ -42,6 +46,41 @@ def test_management_endpoints_require_allowed_origin(client: TestClient) -> None
     assert denied.json()["detail"]["code"] == "local_management_origin_denied"
     assert allowed.status_code == 201
     assert len(allowed.json()["pairing_code"].replace("-", "")) == 12
+
+
+def test_management_origin_protects_status_and_revoke_but_not_pair_or_upload(client: TestClient) -> None:
+    created = create_pairing_code(client)
+    paired = pair_code(client, created).json()
+
+    missing_status = client.get("/api/v1/local-recognition/extension-status")
+    denied_status = client.get(
+        "/api/v1/local-recognition/extension-status",
+        headers={"Origin": "http://example.invalid"},
+    )
+    missing_revoke = client.delete(f"/api/v1/local-recognition/pairings/{paired['pairing_id']}")
+    upload_without_origin = extension_upload(client, paired["token"])
+
+    assert missing_status.status_code == 403
+    assert missing_status.json()["detail"]["code"] == "local_management_origin_required"
+    assert denied_status.status_code == 403
+    assert denied_status.json()["detail"]["code"] == "local_management_origin_denied"
+    assert missing_revoke.status_code == 403
+    assert missing_revoke.json()["detail"]["code"] == "local_management_origin_required"
+    assert upload_without_origin.status_code == 202
+
+
+def test_management_allows_localhost_and_127_equivalent_origins(client: TestClient) -> None:
+    localhost = client.post(
+        "/api/v1/local-recognition/pairing-codes",
+        headers={"Origin": "http://localhost:3000"},
+    )
+    loopback = client.get(
+        "/api/v1/local-recognition/extension-status",
+        headers={"Origin": "http://127.0.0.1:3000"},
+    )
+
+    assert localhost.status_code == 201
+    assert loopback.status_code == 200
 
 
 def test_pairing_code_is_one_time_and_store_does_not_save_plaintext_token(client: TestClient) -> None:
@@ -131,6 +170,44 @@ def test_extension_upload_creates_browser_extension_review_with_sanitized_source
     assert detail.json()["candidate"] is None
 
 
+def test_confirmed_extension_candidate_excludes_browser_metadata(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("api.services.local_recognition.get_recognizer", lambda _name: FakeRecognizer())
+    paired = pair_code(client, create_pairing_code(client)).json()
+    uploaded = extension_upload(
+        client,
+        paired["token"],
+        data={
+            "source_url": "https://user:secret@example.com/path/item?token=hidden#frag",
+            "source_tab_title": "Visible Market Tab",
+            "extension_version": "0.1.0",
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{uploaded.json()['review_id']}/confirm",
+        json={"item_key": "synthetic-alpha", "final_item_name": "Synthetic Alpha"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    candidate = body["candidate"]
+    assert candidate["candidate_version"] == "screen_review_candidate_v1"
+    assert candidate["imported"] is False
+    assert candidate["database_written"] is False
+    assert candidate["market_snapshot_created"] is False
+    assert "source_metadata" not in candidate
+    assert "source_url_safe" not in candidate
+    assert "source_tab_title" not in candidate
+    assert "pairing_id" not in candidate
+    assert "client_name" not in candidate
+    assert body["source_metadata"]["source_url_safe"] == "https://example.com/path/item"
+    assert body["source_metadata"]["source_tab_title"] == "Visible Market Tab"
+    assert body["source_metadata"]["pairing_id"] == paired["pairing_id"]
+
+
 def test_extension_upload_deduplicates_same_capture_without_second_ocr(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -147,6 +224,115 @@ def test_extension_upload_deduplicates_same_capture_without_second_ocr(
     assert second.json()["deduplicated"] is True
     assert second.json()["review_id"] == first.json()["review_id"]
     assert review_store.count() == 1
+
+
+def test_extension_upload_deduplicates_same_capture_when_url_changes_or_is_missing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("api.services.local_recognition.get_recognizer", lambda _name: FakeRecognizer())
+    paired = pair_code(client, create_pairing_code(client)).json()
+
+    first = extension_upload(
+        client,
+        paired["token"],
+        data={"source_url": "https://example.com/first?secret=one#hidden"},
+    )
+    changed_url = extension_upload(
+        client,
+        paired["token"],
+        data={"source_url": "https://other.example/second?secret=two#hidden"},
+    )
+    missing_url = extension_upload(client, paired["token"])
+
+    assert first.status_code == 202
+    assert changed_url.status_code == 200
+    assert missing_url.status_code == 200
+    assert changed_url.json()["deduplicated"] is True
+    assert missing_url.json()["deduplicated"] is True
+    assert changed_url.json()["review_id"] == first.json()["review_id"]
+    assert missing_url.json()["review_id"] == first.json()["review_id"]
+    assert review_store.count() == 1
+
+
+def test_extension_upload_does_not_deduplicate_across_pairings(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("api.services.local_recognition.get_recognizer", lambda _name: FakeRecognizer())
+    first_pairing = pair_code(client, create_pairing_code(client)).json()
+    second_pairing = pair_code(client, create_pairing_code(client)).json()
+
+    first = extension_upload(client, first_pairing["token"])
+    second = extension_upload(client, second_pairing["token"])
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert first.json()["review_id"] != second.json()["review_id"]
+    assert first.json()["deduplicated"] is False
+    assert second.json()["deduplicated"] is False
+    assert review_store.count() == 2
+
+
+def test_extension_upload_deduplicates_while_first_review_is_processing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("api.routers.local_recognition.process_review_image", lambda *_args: None)
+    paired = pair_code(client, create_pairing_code(client)).json()
+
+    first = extension_upload(client, paired["token"])
+    second = extension_upload(client, paired["token"])
+
+    assert first.status_code == 202
+    assert second.status_code == 200
+    assert second.json()["deduplicated"] is True
+    assert second.json()["review_id"] == first.json()["review_id"]
+    assert second.json()["status"] == "processing"
+    assert review_store.count() == 1
+
+
+def test_concurrent_identical_uploads_share_one_review(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("api.routers.local_recognition.process_review_image", lambda *_args: None)
+    real_create_review_record = local_recognition_router.create_review_record
+
+    def slow_create_review_record(*args: object, **kwargs: object) -> object:
+        time.sleep(0.05)
+        return real_create_review_record(*args, **kwargs)
+
+    monkeypatch.setattr("api.routers.local_recognition.create_review_record", slow_create_review_record)
+    paired = pair_code(client, create_pairing_code(client)).json()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: extension_upload(client, paired["token"]), range(2)))
+
+    bodies = sorted((response.status_code, response.json()) for response in responses)
+
+    assert [status_code for status_code, _body in bodies] == [200, 202]
+    review_ids = {body["review_id"] for _status_code, body in bodies}
+    assert len(review_ids) == 1
+    assert any(body["deduplicated"] is True for _status_code, body in bodies)
+    assert review_store.count() == 1
+
+
+def test_dedup_window_expiry_allows_same_capture_again() -> None:
+    store = LocalExtensionPairingStore()
+    key = {"pairing_id": "pair_1", "capture_sha256": "a" * 64}
+    now = datetime(2026, 7, 1, tzinfo=UTC)
+
+    first = store.reserve_capture(**key, now=now)
+    store.bind_capture(**key, review_id="review_1")
+    duplicate = store.reserve_capture(**key, now=now + timedelta(seconds=19))
+    after_window = store.reserve_capture(**key, now=now + timedelta(seconds=21))
+
+    assert first.reserved is True
+    assert duplicate.reserved is False
+    assert duplicate.review_id == "review_1"
+    assert after_window.reserved is True
+    assert after_window.review_id is None
 
 
 def test_extension_upload_rolls_back_dedup_reservation_when_review_creation_fails(
@@ -221,6 +407,34 @@ def test_capture_reservation_is_atomic_and_can_be_rolled_back() -> None:
     assert store.reserve_capture(**key).review_id == "review_1"
     store.rollback_capture(**key)
     assert store.reserve_capture(**key).reserved is True
+
+
+def test_loopback_check_uses_request_client_host_and_not_forwarded_headers() -> None:
+    loopback_with_forwarded_for = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/local-recognition/extension-reviews",
+            "headers": [(b"x-forwarded-for", b"203.0.113.10")],
+            "client": ("127.0.0.1", 54321),
+        }
+    )
+    remote_with_loopback_forwarded_for = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/local-recognition/extension-reviews",
+            "headers": [(b"x-forwarded-for", b"127.0.0.1")],
+            "client": ("203.0.113.10", 54321),
+        }
+    )
+
+    _require_loopback_request(loopback_with_forwarded_for)
+    with pytest.raises(HTTPException) as exc_info:
+        _require_loopback_request(remote_with_loopback_forwarded_for)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "extension_loopback_required"
 
 
 def create_pairing_code(client: TestClient) -> dict[str, str]:
