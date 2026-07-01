@@ -4,9 +4,12 @@ import {
   ApiRequestError,
   buildApiUrl,
   confirmLocalRecognitionReview,
+  createLocalExtensionPairingCode,
+  getLocalExtensionStatus,
   getItemAnalysis,
   getLocalRecognitionReview,
   patchLocalRecognitionReview,
+  revokeLocalExtensionPairing,
   toDisplayError,
   uploadLocalRecognitionReview,
   uploadCsvImport
@@ -335,6 +338,56 @@ test("uploadLocalRecognitionReview posts screenshot FormData to local review API
   }
 });
 
+test("local extension bridge client supports status, pairing code, and revoke", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: Array<{ url: string; init?: RequestInit }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), init });
+    if (String(url).endsWith("/pairing-codes")) {
+      return Response.json(
+        {
+          pairing_code_id: "pc_1",
+          pairing_code: "ABCD-EFGH-JK12",
+          expires_at: "2026-07-01T00:10:00Z",
+          ttl_seconds: 600
+        },
+        { status: 201 }
+      );
+    }
+    if (String(url).includes("/pairings/")) {
+      return new Response(null, { status: 204 });
+    }
+    return Response.json({
+      bridge_available: true,
+      restart_notice: "Restart requires pairing again.",
+      pairings: [],
+      pairing_code_ttl_seconds: 600,
+      pairing_code_max_failed_attempts: 5,
+      pair_attempts_per_client_per_minute: 10,
+      global_pair_attempts_per_minute: 30,
+      extension_uploads_per_minute: 6,
+      extension_upload_burst: 3,
+      extension_dedup_window_seconds: 20
+    });
+  };
+
+  try {
+    const status = await getLocalExtensionStatus();
+    const code = await createLocalExtensionPairingCode();
+    await revokeLocalExtensionPairing("pair/a");
+
+    assert.equal(status.bridge_available, true);
+    assert.equal(code.pairing_code_id, "pc_1");
+    assert.equal(captured[0].url, "http://localhost:8000/api/v1/local-recognition/extension-status");
+    assert.equal(captured[1].init?.method, "POST");
+    assert.equal(captured[2].url, "http://localhost:8000/api/v1/local-recognition/pairings/pair%2Fa");
+    assert.equal(captured[2].init?.method, "DELETE");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("local recognition client supports review detail patch and confirm", async () => {
   const originalFetch = globalThis.fetch;
   const captured: Array<{ url: string; init?: RequestInit }> = [];
@@ -504,6 +557,14 @@ function localReviewResponse() {
       fields: {},
       confidence_source: "unavailable",
       confidence_available: false
+    },
+    source_metadata: {
+      source: "manual_upload",
+      extension_version: null,
+      source_url_safe: null,
+      source_tab_title: null,
+      capture_sha256: null,
+      pairing_id: null
     },
     warnings: [],
     errors: [],

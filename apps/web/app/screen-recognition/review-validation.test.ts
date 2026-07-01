@@ -138,6 +138,13 @@ test("mergeReviewsByPolling does not overwrite dirty form state and reports term
   assert.equal(merged.review?.ocr_candidate.best_bid, "12.34");
 });
 
+test("review fixtures preserve source metadata for source labels", () => {
+  const review = reviewFixture({});
+
+  assert.equal(review.source_metadata.source, "manual_upload");
+  assert.equal(review.source_metadata.source_url_safe, null);
+});
+
 function reviewFixture(overrides: Partial<LocalRecognitionReview["ocr_candidate"]> & { status?: LocalRecognitionReview["status"] }): LocalRecognitionReview {
   const bid = "best_bid" in overrides ? overrides.best_bid ?? null : "12.34";
   const ask = "best_ask" in overrides ? overrides.best_ask ?? null : "13.00";
@@ -194,6 +201,14 @@ function reviewFixture(overrides: Partial<LocalRecognitionReview["ocr_candidate"
       fields: {},
       confidence_source: "unavailable",
       confidence_available: false
+    },
+    source_metadata: {
+      source: "manual_upload",
+      extension_version: null,
+      source_url_safe: null,
+      source_tab_title: null,
+      capture_sha256: null,
+      pairing_id: null
     },
     warnings: [],
     errors: [],

@@ -6,6 +6,8 @@ import type {
   ItemAnalysisResponse,
   ItemDetail,
   ItemListQuery,
+  LocalExtensionPairingCode,
+  LocalExtensionStatus,
   LocalRecognitionCapabilities,
   LocalRecognitionDraftPayload,
   LocalRecognitionReview,
@@ -84,6 +86,43 @@ export async function getImportJob(jobId: number): Promise<ImportJobResponse> {
 
 export async function getLocalRecognitionCapabilities(): Promise<LocalRecognitionCapabilities> {
   return fetchJson<LocalRecognitionCapabilities>("/api/v1/local-recognition/capabilities");
+}
+
+export async function createLocalExtensionPairingCode(): Promise<LocalExtensionPairingCode> {
+  const response = await fetch(buildApiUrl("/api/v1/local-recognition/pairing-codes"), {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new ApiRequestError(await parseApiError(response));
+  }
+
+  return (await response.json()) as LocalExtensionPairingCode;
+}
+
+export async function getLocalExtensionStatus(signal?: AbortSignal): Promise<LocalExtensionStatus> {
+  return fetchJson<LocalExtensionStatus>("/api/v1/local-recognition/extension-status", undefined, signal);
+}
+
+export async function revokeLocalExtensionPairing(pairingId: string): Promise<void> {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/local-recognition/pairings/${encodeURIComponent(pairingId)}`),
+    {
+      method: "DELETE",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json"
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(await parseApiError(response));
+  }
 }
 
 export async function uploadLocalRecognitionReview(
@@ -397,7 +436,23 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
     observed_at_timezone_required: "观测时间必须包含时区。",
     observed_at_in_future: "观测时间不能明显晚于当前时间。",
     invalid_status_transition: "当前状态不允许该操作。",
-    clear_confirmation_required: "清空内存复核记录需要显式确认。"
+    clear_confirmation_required: "清空内存复核记录需要显式确认。",
+    local_management_origin_required: "本地 Bridge 管理请求缺少允许的 Origin。",
+    local_management_origin_denied: "本地 Bridge 管理请求来源不被允许。",
+    pairing_code_invalid: "配对码无效，请重新生成后再试。",
+    pairing_code_expired: "配对码已过期，请重新生成。",
+    pairing_code_consumed: "配对码已被使用，请重新生成。",
+    pairing_code_attempts_exceeded: "配对码尝试次数过多，已失效。",
+    pairing_store_full: "本地扩展配对存储已满，请撤销旧配对后重试。",
+    pairing_not_found: "配对不存在，可能已撤销或后端已重启。",
+    extension_token_required: "扩展未完成配对或缺少本地令牌。",
+    extension_token_invalid: "扩展令牌无效，需要重新配对。",
+    extension_token_revoked: "扩展配对已撤销，需要重新配对。",
+    extension_rate_limited: "扩展上传过于频繁，请稍后再试。",
+    extension_loopback_required: "扩展上传只能来自本机 loopback。",
+    source_url_invalid: "扩展提供的页面 URL 无法安全保存。",
+    source_url_too_long: "扩展提供的页面 URL 过长。",
+    source_title_too_long: "扩展提供的页面标题过长。"
   };
 
   if (code in localRecognitionMessages) {

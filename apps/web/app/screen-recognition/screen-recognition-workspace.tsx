@@ -4,19 +4,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import {
   clearLocalRecognitionReviews,
   confirmLocalRecognitionReview,
+  createLocalExtensionPairingCode,
   getItems,
+  getLocalExtensionStatus,
   getLocalRecognitionCapabilities,
   getLocalRecognitionReview,
   getLocalRecognitionReviews,
   markLocalRecognitionReviewUnreadable,
   patchLocalRecognitionReview,
   rejectLocalRecognitionReview,
+  revokeLocalExtensionPairing,
   toDisplayError,
   uploadLocalRecognitionReview
 } from "../../lib/api-client";
 import type {
   ApiError,
   ItemSummary,
+  LocalExtensionPairingCode,
+  LocalExtensionStatus,
   LocalRecognitionCapabilities,
   LocalRecognitionReview,
   LocalRecognitionReviewList
@@ -44,6 +49,9 @@ type UploadState = {
 
 export function ScreenRecognitionWorkspace() {
   const [capabilities, setCapabilities] = useState<LocalRecognitionCapabilities | null>(null);
+  const [extensionStatus, setExtensionStatus] = useState<LocalExtensionStatus | null>(null);
+  const [pairingCode, setPairingCode] = useState<LocalExtensionPairingCode | null>(null);
+  const [pairingCountdown, setPairingCountdown] = useState(0);
   const [reviewList, setReviewList] = useState<LocalRecognitionReviewList | null>(null);
   const [selectedReview, setSelectedReview] = useState<LocalRecognitionReview | null>(null);
   const [form, setForm] = useState<ReviewFormState | null>(null);
@@ -80,7 +88,9 @@ export function ScreenRecognitionWorkspace() {
           getLocalRecognitionReviews(controller.signal),
           selectedReviewId ? getLocalRecognitionReview(selectedReviewId, controller.signal) : Promise.resolve(null)
         ]);
+        const nextExtensionStatus = await getLocalExtensionStatus(controller.signal).catch(() => null);
         setCapabilities(nextCapabilities);
+        setExtensionStatus(nextExtensionStatus);
         setReviewList(nextList);
         if (nextSelected) {
           setSelectedReview((current) => {
@@ -171,6 +181,23 @@ export function ScreenRecognitionWorkspace() {
       window.clearTimeout(timeout);
     };
   }, [itemSearch]);
+
+  useEffect(() => {
+    if (!pairingCode) {
+      setPairingCountdown(0);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((new Date(pairingCode.expires_at).getTime() - Date.now()) / 1000));
+      setPairingCountdown(remaining);
+      if (remaining === 0) {
+        setPairingCode(null);
+      }
+    };
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => window.clearInterval(interval);
+  }, [pairingCode]);
 
   function selectFile(file: File | null) {
     const validation = validateScreenshotFile(file);
@@ -313,12 +340,43 @@ export function ScreenRecognitionWorkspace() {
     }
   }
 
+  async function generatePairingCode() {
+    try {
+      const created = await createLocalExtensionPairingCode();
+      setPairingCode(created);
+      setActionMessage("配对码已生成。过期或使用后请重新生成。");
+      await load();
+    } catch (error) {
+      setApiError(toDisplayError(error));
+    }
+  }
+
+  async function copyPairingCode() {
+    if (pairingCode) {
+      await navigator.clipboard.writeText(pairingCode.pairing_code);
+      setActionMessage("配对码已复制。");
+    }
+  }
+
+  async function revokePairing(pairingId: string) {
+    try {
+      await revokeLocalExtensionPairing(pairingId);
+      setActionMessage("扩展配对已撤销。");
+      await load();
+    } catch (error) {
+      setApiError(toDisplayError(error));
+    }
+  }
+
   const canEdit = selectedReview?.status === "pending_review" && form !== null;
+  const recentExtensionReviews = (reviewList?.reviews ?? [])
+    .filter((review) => review.source_metadata.source === "browser_extension")
+    .slice(0, 5);
 
   return (
     <div className="screen-review-layout">
       <aside className="panel screen-review-sidebar" aria-label="功能列表">
-        {["实时识别", "待复核队列", "已确认记录", "布局配置", "OCR设置", "隐私与权限", "诊断"].map((label) => (
+        {["本地扩展桥接", "实时识别", "待复核队列", "已确认记录", "布局配置", "OCR设置", "隐私与权限", "诊断"].map((label) => (
           <a key={label} href={`#${label}`} className="screen-review-nav-item">
             {label}
           </a>
@@ -326,6 +384,16 @@ export function ScreenRecognitionWorkspace() {
       </aside>
 
       <section className="screen-review-main">
+        <BridgePanel
+          extensionStatus={extensionStatus}
+          pairingCode={pairingCode}
+          pairingCountdown={pairingCountdown}
+          recentExtensionReviews={recentExtensionReviews}
+          onCopyPairingCode={copyPairingCode}
+          onGeneratePairingCode={generatePairingCode}
+          onRevokePairing={revokePairing}
+        />
+
         <UploadPanel
           upload={upload}
           onFile={selectFile}
@@ -497,6 +565,7 @@ function ReviewTable({
         <thead>
           <tr>
             <th>创建时间</th>
+            <th>来源</th>
             <th>OCR 名称</th>
             <th>best bid</th>
             <th>best ask</th>
@@ -512,6 +581,7 @@ function ReviewTable({
                   {formatDateTime(review.created_at)}
                 </button>
               </td>
+              <td>{sourceLabel(review)}</td>
               <td>{review.ocr_candidate.item_name_normalized ?? review.ocr_candidate.item_name_raw ?? "—"}</td>
               <td>{review.ocr_candidate.best_bid ?? "—"}</td>
               <td>{review.ocr_candidate.best_ask ?? "—"}</td>
@@ -597,6 +667,9 @@ function ReviewPanel({
 
       <div className="detail-grid compact">
         <Info label="原始文件" value={review.image?.original_filename ?? "—"} />
+        <Info label="来源" value={sourceLabel(review)} />
+        <Info label="安全化URL" value={review.source_metadata.source_url_safe ?? "—"} />
+        <Info label="页面标题" value={review.source_metadata.source_tab_title ?? "—"} />
         <Info label="图片尺寸" value={review.image ? `${review.image.width} x ${review.image.height}` : "—"} />
         <Info label="Layout" value={`${review.recognition.layout_name} ${review.recognition.layout_version}`} />
         <Info label="OCR backend" value={review.recognition.ocr_backend} />
@@ -656,6 +729,107 @@ function ReviewPanel({
       </div>
 
       <CandidatePanel review={review} />
+    </section>
+  );
+}
+
+function BridgePanel({
+  extensionStatus,
+  onCopyPairingCode,
+  onGeneratePairingCode,
+  onRevokePairing,
+  pairingCode,
+  pairingCountdown,
+  recentExtensionReviews
+}: {
+  extensionStatus: LocalExtensionStatus | null;
+  onCopyPairingCode: () => void;
+  onGeneratePairingCode: () => void;
+  onRevokePairing: (pairingId: string) => void;
+  pairingCode: LocalExtensionPairingCode | null;
+  pairingCountdown: number;
+  recentExtensionReviews: LocalRecognitionReview[];
+}) {
+  const activePairings = extensionStatus?.pairings.filter((pairing) => !pairing.revoked_at) ?? [];
+  return (
+    <section id="本地扩展桥接" className="panel" aria-labelledby="bridge-heading">
+      <div className="section-heading">
+        <div>
+          <h2 id="bridge-heading">本地扩展桥接</h2>
+          <p>配对仅保存在本机 API 内存中，服务重启后需要重新配对。</p>
+        </div>
+        <button type="button" onClick={onGeneratePairingCode}>
+          生成配对码
+        </button>
+      </div>
+      <div className="detail-grid compact">
+        <Info label="Bridge" value={extensionStatus?.bridge_available ? "可用" : "离线或待连接"} />
+        <Info label="active pairings" value={`${activePairings.length}`} />
+        <Info label="上传限速" value={extensionStatus ? `${extensionStatus.extension_uploads_per_minute}/min burst ${extensionStatus.extension_upload_burst}` : "—"} />
+        <Info label="去重窗口" value={extensionStatus ? `${extensionStatus.extension_dedup_window_seconds}s` : "—"} />
+      </div>
+      {pairingCode ? (
+        <div className="compact-message">
+          <div className="section-heading compact-heading">
+            <div>
+              <h3>{pairingCode.pairing_code}</h3>
+              <p>剩余 {pairingCountdown}s，使用后立即失效。</p>
+            </div>
+            <button className="plain-button" type="button" onClick={onCopyPairingCode}>
+              复制配对码
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <p className="field-hint">{extensionStatus?.restart_notice ?? "如果 API 不可访问，请确认本地服务运行在 loopback 地址。"}</p>
+      {extensionStatus && extensionStatus.pairings.length > 0 ? (
+        <div className="table-wrap compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>client</th>
+                <th>version</th>
+                <th>created</th>
+                <th>last seen</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {extensionStatus.pairings.map((pairing) => (
+                <tr key={pairing.pairing_id}>
+                  <td>{pairing.client_name ?? "未命名扩展"}</td>
+                  <td>{pairing.extension_version ?? "—"}</td>
+                  <td>{formatDateTime(pairing.created_at)}</td>
+                  <td>{formatDateTime(pairing.last_seen_at)}</td>
+                  <td>{pairing.revoked_at ? "已撤销" : "已配对"}</td>
+                  <td>
+                    <button className="plain-button" type="button" disabled={Boolean(pairing.revoked_at)} onClick={() => onRevokePairing(pairing.pairing_id)}>
+                      撤销
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h3>尚未配对扩展</h3>
+        </div>
+      )}
+      {recentExtensionReviews.length > 0 ? (
+        <div className="review-subsection">
+          <h3>最近扩展任务</h3>
+          <ul className="privacy-list">
+            {recentExtensionReviews.map((review) => (
+              <li key={review.review_id}>
+                {formatDateTime(review.created_at)} · {reviewStatusLabel(review.status)} · {review.source_metadata.source_tab_title ?? review.source_metadata.source_url_safe ?? review.review_id}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -948,6 +1122,10 @@ function DiagnosticsPanel({
       </section>
     </div>
   );
+}
+
+function sourceLabel(review: LocalRecognitionReview): string {
+  return review.source_metadata.source === "browser_extension" ? "浏览器扩展" : "手动上传";
 }
 
 function IssueBlock({ issues, title }: { issues: string[]; title: string }) {
