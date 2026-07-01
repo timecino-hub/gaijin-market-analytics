@@ -110,6 +110,11 @@ Default local URLs:
 - Item browser: http://localhost:3000/items
 - PostgreSQL: localhost:5432
 
+The API process binds to `127.0.0.1` by default when run directly. If an API
+container is added later, it may listen on `0.0.0.0` inside the container, but
+the host port should be published only on loopback, for example
+`127.0.0.1:8000:8000`.
+
 ## Database
 
 Local API runs should use a `DATABASE_URL` with `localhost`, for example:

@@ -127,6 +127,9 @@ Start the API on port 8000:
 make api-dev
 ```
 
+The API development entry point binds to `127.0.0.1` by default. Keep local
+bridge endpoints on loopback; do not expose them to the LAN.
+
 Start the web app on port 3000:
 
 ```sh
@@ -151,6 +154,10 @@ available at the default `/openapi.json`.
 The API enables CORS for configured origins only. Local development defaults to
 `CORS_ALLOWED_ORIGINS=http://localhost:3000`; it does not use a wildcard origin
 or browser credentials.
+
+The Local Extension Bridge management endpoints also require an allowed local
+Web `Origin`. This is a localhost cross-site request protection, not a defense
+against a process that already controls the local machine.
 
 CSV import endpoints:
 

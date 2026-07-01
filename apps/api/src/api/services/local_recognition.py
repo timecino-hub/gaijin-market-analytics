@@ -26,7 +26,17 @@ from api.schemas.local_recognition import (
     ReviewConfirmRequest,
     ReviewDraft,
     ReviewPatchRequest,
+    ReviewSourceMetadata,
     ReviewStatus,
+)
+from api.services.local_extension_pairing import (
+    CAPTURE_DEDUP_WINDOW_SECONDS,
+    GLOBAL_PAIR_ATTEMPTS_PER_MINUTE,
+    PAIRING_CODE_MAX_FAILED_ATTEMPTS,
+    PAIRING_CODE_TTL_SECONDS,
+    PAIR_ATTEMPTS_PER_CLIENT_PER_MINUTE,
+    UPLOAD_RATE_LIMIT_CAPACITY,
+    UPLOAD_RATE_LIMIT_REFILL_PER_MINUTE,
 )
 from api.screen_recognition.config import default_current_cut_config
 from api.screen_recognition.contracts import CUT_RUNNER_VERSION, PARSER_VERSION
@@ -46,9 +56,11 @@ from api.services.local_recognition_store import (
     make_candidate,
     review_store,
 )
+from api.services.local_recognition_source import manual_source_metadata
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_MULTIPART_BODY_BYTES = MAX_IMAGE_BYTES + 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 SUPPORTED_FORMATS = ("png", "jpeg")
 DEFAULT_LAYOUT_PROFILE = "gaijin-market-desktop-v1"
@@ -115,6 +127,32 @@ def validate_image_upload(*, filename: str | None, content: bytes) -> tuple[Imag
 
 
 def create_processing_review(*, image: ImageMetadata) -> ReviewRecord:
+    return create_review_record(image=image, source_metadata=manual_source_metadata())
+
+
+def create_review_from_image(
+    *,
+    filename: str | None,
+    content: bytes,
+    source_metadata: ReviewSourceMetadata | None = None,
+) -> tuple[ReviewRecord, Path]:
+    image, temp_path = validate_image_upload(filename=filename, content=content)
+    try:
+        record = create_review_record(
+            image=image,
+            source_metadata=source_metadata or manual_source_metadata(),
+        )
+    except Exception:
+        _delete_temp_file(temp_path)
+        raise
+    return record, temp_path
+
+
+def create_review_record(
+    *,
+    image: ImageMetadata,
+    source_metadata: ReviewSourceMetadata,
+) -> ReviewRecord:
     created_at = datetime.now(UTC)
     config = default_current_cut_config(
         layout_profile_name=DEFAULT_LAYOUT_PROFILE,
@@ -135,6 +173,7 @@ def create_processing_review(*, image: ImageMetadata) -> ReviewRecord:
             runner_version=CUT_RUNNER_VERSION,
             processing_duration_ms=None,
         ),
+        source_metadata=source_metadata,
     )
 
 
@@ -341,6 +380,7 @@ def capabilities_payload() -> dict[str, Any]:
         "layout_version": profile.version,
         "config_sha256": config.sha256(),
         "max_image_bytes": MAX_IMAGE_BYTES,
+        "max_multipart_body_bytes": MAX_MULTIPART_BODY_BYTES,
         "max_image_pixels": MAX_IMAGE_PIXELS,
         "supported_image_formats": list(SUPPORTED_FORMATS),
         "store_capacity": review_store.max_reviews,
@@ -349,6 +389,15 @@ def capabilities_payload() -> dict[str, Any]:
         "handles_history_images": False,
         "browser_extension_connected": False,
         "automatic_recognition_available": False,
+        "local_extension_bridge_available": True,
+        "pairing_code_ttl_seconds": PAIRING_CODE_TTL_SECONDS,
+        "pairing_code_entropy_bits": 60,
+        "pairing_code_max_failed_attempts": PAIRING_CODE_MAX_FAILED_ATTEMPTS,
+        "pair_attempts_per_client_per_minute": PAIR_ATTEMPTS_PER_CLIENT_PER_MINUTE,
+        "global_pair_attempts_per_minute": GLOBAL_PAIR_ATTEMPTS_PER_MINUTE,
+        "extension_uploads_per_minute": UPLOAD_RATE_LIMIT_REFILL_PER_MINUTE,
+        "extension_upload_burst": UPLOAD_RATE_LIMIT_CAPACITY,
+        "extension_dedup_window_seconds": CAPTURE_DEDUP_WINDOW_SECONDS,
     }
 
 

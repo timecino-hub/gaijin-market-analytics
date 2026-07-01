@@ -18,8 +18,11 @@ upload PNG/JPEG
 ```
 
 Deferred scope includes `_1` history screenshots, historical charts, tooltip
-recognition, browser extensions, automatic screenshots, community submission,
-CSV generation, market snapshot writes, and any account or trading action.
+recognition, browser extension source code, automatic screenshots, community
+submission, CSV generation, market snapshot writes, and any account or trading
+action. The in-repository Local Extension Bridge is documented separately in
+`docs/local-extension-bridge.md`; it accepts authenticated future extension
+uploads but does not implement the extension itself.
 
 ## Storage Boundary
 
@@ -66,12 +69,22 @@ POST   /reviews/{review_id}/confirm
 POST   /reviews/{review_id}/reject
 POST   /reviews/{review_id}/unreadable
 DELETE /reviews/{review_id}
+POST   /pairing-codes
+POST   /pair
+GET    /extension-status
+DELETE /pairings/{pairing_id}
+POST   /extension-reviews
 ```
 
 `POST /reviews` returns HTTP 202 with `status=processing`. The OCR task runs in
 the background and updates the review to `pending_review`, `unreadable`, or
 `failed`. OCR exceptions are captured as stable review errors and are not
 exposed as stack traces.
+
+`POST /extension-reviews` requires `Authorization: Bearer <token>` from a
+successful local pairing. It reuses the same image validation, OCR background
+task, Review Store, state machine, and confirm/reject/unreadable/candidate
+contracts as manual upload.
 
 ## State Machine
 
@@ -154,6 +167,9 @@ Confirmation returns a candidate object with:
 The candidate is not a formal market snapshot and is not imported
 automatically. The web page can copy or download the single candidate JSON in
 the browser.
+
+Candidate JSON remains minimal. It does not include pairing IDs, source URLs,
+tab titles, extension client names, or other browsing metadata.
 
 ## Web Page
 

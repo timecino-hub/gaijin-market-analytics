@@ -217,6 +217,15 @@ export type LocalRecognitionCapabilities = {
   handles_history_images: false;
   browser_extension_connected: false;
   automatic_recognition_available: false;
+  local_extension_bridge_available: boolean;
+  pairing_code_ttl_seconds: number;
+  pairing_code_entropy_bits: number;
+  pairing_code_max_failed_attempts: number;
+  pair_attempts_per_client_per_minute: number;
+  global_pair_attempts_per_minute: number;
+  extension_uploads_per_minute: number;
+  extension_upload_burst: number;
+  extension_dedup_window_seconds: number;
 };
 
 export type LocalRecognitionReviewCreate = {
@@ -302,6 +311,15 @@ export type LocalRecognitionCandidate = {
   market_snapshot_created: false;
 };
 
+export type LocalRecognitionSourceMetadata = {
+  source: "manual_upload" | "browser_extension";
+  extension_version: string | null;
+  source_url_safe: string | null;
+  source_tab_title: string | null;
+  capture_sha256: string | null;
+  pairing_id: string | null;
+};
+
 export type LocalRecognitionReview = {
   review_id: string;
   created_at: string;
@@ -317,11 +335,41 @@ export type LocalRecognitionReview = {
     confidence_source: string;
     confidence_available: boolean;
   };
+  source_metadata: LocalRecognitionSourceMetadata;
   warnings: string[];
   errors: string[];
   candidate: LocalRecognitionCandidate | null;
   confirmed_at: string | null;
   rejected_at: string | null;
+};
+
+export type LocalExtensionPairingCode = {
+  pairing_code_id: string;
+  pairing_code: string;
+  expires_at: string;
+  ttl_seconds: number;
+};
+
+export type LocalExtensionPairingSummary = {
+  pairing_id: string;
+  created_at: string;
+  last_seen_at: string;
+  revoked_at: string | null;
+  extension_version: string | null;
+  client_name: string | null;
+};
+
+export type LocalExtensionStatus = {
+  bridge_available: boolean;
+  restart_notice: string;
+  pairings: LocalExtensionPairingSummary[];
+  pairing_code_ttl_seconds: number;
+  pairing_code_max_failed_attempts: number;
+  pair_attempts_per_client_per_minute: number;
+  global_pair_attempts_per_minute: number;
+  extension_uploads_per_minute: number;
+  extension_upload_burst: number;
+  extension_dedup_window_seconds: number;
 };
 
 export type LocalRecognitionReviewList = {

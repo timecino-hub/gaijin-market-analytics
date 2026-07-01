@@ -74,7 +74,8 @@ async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[
 def main() -> None:
     import uvicorn
 
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
+    run_settings = get_settings()
+    uvicorn.run("api.main:app", host=run_settings.api_host, port=run_settings.api_port, reload=True)
 
 
 def _validation_message(code: str) -> str:
