@@ -10,6 +10,7 @@ from decimal import Decimal
 from api.schemas.local_recognition import (
     CandidateRecognition,
     ImageMetadata,
+    IdentityFieldSource,
     ItemIdentity,
     ObservedAtSource,
     OcrCandidate,
@@ -287,9 +288,19 @@ class LocalReviewStore:
 
 
 def _draft_from_ocr(draft: ReviewDraft, candidate: OcrCandidate) -> ReviewDraft:
+    identity_sources = draft.identity_sources.model_copy(
+        update={
+            "final_item_name": (
+                IdentityFieldSource.OCR_INITIAL
+                if candidate.item_name_normalized
+                else draft.identity_sources.final_item_name
+            )
+        }
+    )
     return draft.model_copy(
         update={
             "final_item_name": candidate.item_name_normalized,
+            "identity_sources": identity_sources,
             "final_best_bid": candidate.best_bid,
             "final_best_ask": candidate.best_ask,
             "final_total_bid_quantity": candidate.total_bid_quantity,
@@ -356,4 +367,3 @@ def _decimal_equal(left: Decimal | None, right: Decimal | None) -> bool:
 
 
 review_store = LocalReviewStore(max_reviews=100, ttl_seconds=7200)
-

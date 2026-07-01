@@ -25,6 +25,7 @@ import { formatDateTime } from "../../lib/formatters";
 import { reviewStatusLabel } from "./review-labels";
 import {
   MAX_SCREENSHOT_BYTES,
+  applyReviewFormUpdate,
   formFromReview,
   mergeReviewsByPolling,
   payloadFromForm,
@@ -219,7 +220,7 @@ export function ScreenRecognitionWorkspace() {
   }
 
   function updateForm(values: Partial<ReviewFormState>) {
-    setForm((current) => (current ? { ...current, ...values } : current));
+    setForm((current) => (current ? applyReviewFormUpdate(current, values) : current));
     setDirty(true);
   }
 
@@ -571,6 +572,8 @@ function ReviewPanel({
     );
   }
 
+  const confirmValidation = validateReviewForm(form);
+
   return (
     <section className="panel review-editor-panel" aria-labelledby="review-heading">
       <div className="section-heading">
@@ -642,7 +645,11 @@ function ReviewPanel({
         <button className="plain-button" type="button" disabled={!canEdit} onClick={onMarkUnreadable}>
           标记无法读取
         </button>
-        <button type="button" disabled={!canEdit || Boolean(conflictMessage)} onClick={onConfirm}>
+        <button
+          type="button"
+          disabled={!canEdit || Boolean(conflictMessage) || !confirmValidation.ok}
+          onClick={onConfirm}
+        >
           确认结果
         </button>
         {dirty ? <span className="field-hint">有未保存修改</span> : null}
@@ -676,6 +683,7 @@ function IdentityEditor({
       <div className="detail-grid compact">
         <Info label="OCR 原始名称" value={review.ocr_candidate.item_name_raw ?? "—"} />
         <Info label="OCR normalized 名称" value={review.ocr_candidate.item_name_normalized ?? "—"} />
+        <Info label="OCR 建议名称" value={review.ocr_candidate.item_name_normalized ?? "未提供"} />
         <Info label="身份方式" value={form.identityMode === "existing" ? "已有 item" : "管理员手工身份"} />
         <Info label="是否修改名称" value={form.finalItemName !== (review.ocr_candidate.item_name_normalized ?? "") ? "是" : "否"} />
       </div>

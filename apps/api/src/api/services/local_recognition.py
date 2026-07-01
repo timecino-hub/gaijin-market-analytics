@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.models import Item
 from api.schemas.local_recognition import (
     ImageMetadata,
+    IdentityFieldSource,
     ItemIdentity,
     ObservedAtSource,
     OcrCandidate,
@@ -213,7 +214,12 @@ def process_review_image(review_id: str, image_path: Path) -> None:
         _delete_temp_file(image_path)
 
 
-def patch_review_draft(record: ReviewRecord, request: ReviewPatchRequest) -> ReviewDraft:
+def patch_review_draft(
+    record: ReviewRecord,
+    request: ReviewPatchRequest,
+    *,
+    identity_source: IdentityFieldSource = IdentityFieldSource.USER_DRAFT,
+) -> ReviewDraft:
     fields_set = request.model_fields_set
     observed_at = (
         request.observed_at
@@ -227,13 +233,42 @@ def patch_review_draft(record: ReviewRecord, request: ReviewPatchRequest) -> Rev
         and request.observed_at != record.suggested_observed_at
         else record.draft.observed_at_source
     )
+    selected_item_id = _field_value(request, "selected_item_id", record.draft.selected_item_id)
+    item_key = _blank_to_none(_field_value(request, "item_key", record.draft.item_key))
+    final_item_name = _blank_to_none(
+        _field_value(request, "final_item_name", record.draft.final_item_name)
+    )
+    identity_sources = record.draft.identity_sources.model_copy(
+        update={
+            "selected_item_id": _updated_identity_source(
+                request,
+                "selected_item_id",
+                selected_item_id,
+                record.draft.identity_sources.selected_item_id,
+                identity_source,
+            ),
+            "item_key": _updated_identity_source(
+                request,
+                "item_key",
+                item_key,
+                record.draft.identity_sources.item_key,
+                identity_source,
+            ),
+            "final_item_name": _updated_identity_source(
+                request,
+                "final_item_name",
+                final_item_name,
+                record.draft.identity_sources.final_item_name,
+                identity_source,
+            ),
+        }
+    )
     draft = record.draft.model_copy(
         update={
-            "selected_item_id": _field_value(request, "selected_item_id", record.draft.selected_item_id),
-            "item_key": _blank_to_none(_field_value(request, "item_key", record.draft.item_key)),
-            "final_item_name": _blank_to_none(
-                _field_value(request, "final_item_name", record.draft.final_item_name)
-            ),
+            "selected_item_id": selected_item_id,
+            "item_key": item_key,
+            "final_item_name": final_item_name,
+            "identity_sources": identity_sources,
             "final_best_bid": _field_value(request, "final_best_bid", record.draft.final_best_bid),
             "final_best_ask": _field_value(request, "final_best_ask", record.draft.final_best_ask),
             "final_total_bid_quantity": _field_value(
@@ -264,8 +299,14 @@ async def confirm_review(
     record: ReviewRecord,
     request: ReviewConfirmRequest,
 ) -> ReviewRecord:
-    draft = patch_review_draft(record, request)
+    draft = patch_review_draft(
+        record,
+        request,
+        identity_source=IdentityFieldSource.CONFIRM_REQUEST,
+    )
     identity = await _resolve_identity(session, draft)
+    if draft.selected_item_id is not None:
+        draft = _apply_canonical_identity(draft, identity)
     _validate_confirm_values(draft)
     edited_fields = compute_edited_fields(record, draft)
     status = "confirmed_with_edits" if edited_fields else "confirmed"
@@ -389,7 +430,6 @@ def _evidence_summary(fields: dict[str, Any]) -> OcrEvidenceSummary:
 
 async def _resolve_identity(session: AsyncSession, draft: ReviewDraft) -> ItemIdentity:
     has_selected = draft.selected_item_id is not None
-    has_manual = bool(draft.item_key and draft.final_item_name)
     if has_selected and draft.item_key:
         raise LocalRecognitionError(
             "item_identity_conflict",
@@ -400,13 +440,13 @@ async def _resolve_identity(session: AsyncSession, draft: ReviewDraft) -> ItemId
         if item is None:
             raise ItemNotFoundError(f"Item {draft.selected_item_id} was not found.")
         return ItemIdentity(item_id=item.id, item_key=item.external_key, item_name=item.name)
-    if has_manual:
+    if _has_explicit_manual_identity(draft):
         assert draft.item_key is not None
         assert draft.final_item_name is not None
         return ItemIdentity(item_id=None, item_key=draft.item_key, item_name=draft.final_item_name)
     raise LocalRecognitionError(
         "item_identity_required",
-        "A reviewed item identity is required before confirmation.",
+        "Manual identity requires an explicitly provided item_key and final_item_name.",
     )
 
 
@@ -441,3 +481,43 @@ def _field_value(request: ReviewPatchRequest, name: str, fallback: Any) -> Any:
     if name in request.model_fields_set:
         return getattr(request, name)
     return fallback
+
+
+def _updated_identity_source(
+    request: ReviewPatchRequest,
+    name: str,
+    value: object,
+    fallback: IdentityFieldSource | None,
+    identity_source: IdentityFieldSource,
+) -> IdentityFieldSource | None:
+    if name not in request.model_fields_set:
+        return fallback
+    return identity_source if value is not None else None
+
+
+def _has_explicit_manual_identity(draft: ReviewDraft) -> bool:
+    if not draft.item_key or not draft.final_item_name:
+        return False
+    explicit_sources = {
+        IdentityFieldSource.USER_DRAFT,
+        IdentityFieldSource.CONFIRM_REQUEST,
+    }
+    return (
+        draft.identity_sources.item_key in explicit_sources
+        and draft.identity_sources.final_item_name in explicit_sources
+    )
+
+
+def _apply_canonical_identity(draft: ReviewDraft, identity: ItemIdentity) -> ReviewDraft:
+    return draft.model_copy(
+        update={
+            "item_key": identity.item_key,
+            "final_item_name": identity.item_name,
+            "identity_sources": draft.identity_sources.model_copy(
+                update={
+                    "item_key": IdentityFieldSource.CANONICAL_ITEM,
+                    "final_item_name": IdentityFieldSource.CANONICAL_ITEM,
+                }
+            ),
+        }
+    )

@@ -272,6 +272,189 @@ def test_confirm_selected_item_rereads_server_identity(
         "item_key": "server-key",
         "item_name": "Server Name",
     }
+    draft = response.json()["draft"]
+    assert draft["identity_sources"]["item_key"] == "canonical_item"
+    assert draft["identity_sources"]["final_item_name"] == "canonical_item"
+
+
+def test_confirm_item_key_only_does_not_reuse_ocr_final_name(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{review_id}/confirm",
+        json={"item_key": "manual-only"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "item_identity_required"
+    assert (
+        response.json()["detail"]["message"]
+        == "Manual identity requires an explicitly provided item_key and final_item_name."
+    )
+
+
+def test_confirm_final_item_name_only_is_rejected(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{review_id}/confirm",
+        json={"final_item_name": "Manual Name"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "item_identity_required"
+
+
+def test_patch_item_key_only_then_confirm_empty_is_rejected(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    patched = client.patch(
+        f"/api/v1/local-recognition/reviews/{review_id}",
+        json={"item_key": "manual-key"},
+    )
+    response = client.post(f"/api/v1/local-recognition/reviews/{review_id}/confirm", json={})
+
+    assert patched.status_code == 200
+    assert patched.json()["draft"]["identity_sources"]["item_key"] == "user_draft"
+    assert patched.json()["draft"]["identity_sources"]["final_item_name"] == "ocr_initial"
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "item_identity_required"
+
+
+def test_patch_final_item_name_only_then_confirm_empty_is_rejected(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    patched = client.patch(
+        f"/api/v1/local-recognition/reviews/{review_id}",
+        json={"final_item_name": "Manual Name"},
+    )
+    response = client.post(f"/api/v1/local-recognition/reviews/{review_id}/confirm", json={})
+
+    assert patched.status_code == 200
+    assert patched.json()["draft"]["identity_sources"]["item_key"] is None
+    assert patched.json()["draft"]["identity_sources"]["final_item_name"] == "user_draft"
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "item_identity_required"
+
+
+def test_patch_manual_identity_then_confirm_empty_succeeds(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    patched = client.patch(
+        f"/api/v1/local-recognition/reviews/{review_id}",
+        json={"item_key": "manual-key", "final_item_name": "Manual Name"},
+    )
+    response = client.post(f"/api/v1/local-recognition/reviews/{review_id}/confirm", json={})
+
+    assert patched.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["candidate"]["item_identity"] == {
+        "item_id": None,
+        "item_key": "manual-key",
+        "item_name": "Manual Name",
+    }
+    assert response.json()["draft"]["identity_sources"]["item_key"] == "user_draft"
+    assert response.json()["draft"]["identity_sources"]["final_item_name"] == "user_draft"
+
+
+def test_confirm_manual_identity_directly_succeeds(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{review_id}/confirm",
+        json={"item_key": "manual-key", "final_item_name": "Manual Name"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["candidate"]["item_identity"] == {
+        "item_id": None,
+        "item_key": "manual-key",
+        "item_name": "Manual Name",
+    }
+    assert response.json()["draft"]["identity_sources"]["item_key"] == "confirm_request"
+    assert response.json()["draft"]["identity_sources"]["final_item_name"] == "confirm_request"
+
+
+def test_ocr_name_same_as_final_name_without_user_submission_is_rejected(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{review_id}/confirm",
+        json={"item_key": "manual-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "item_identity_required"
+
+
+def test_ocr_name_same_as_user_submitted_final_name_succeeds_without_edit_flag(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api.services.local_recognition.get_recognizer",
+        lambda _name: FakeRecognizer(),
+    )
+    review_id = create_pending_review(client)
+
+    response = client.post(
+        f"/api/v1/local-recognition/reviews/{review_id}/confirm",
+        json={"item_key": "manual-key", "final_item_name": "Synthetic Alpha"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["candidate"]["item_identity"]["item_name"] == "Synthetic Alpha"
+    assert response.json()["draft"]["identity_sources"]["final_item_name"] == "confirm_request"
+    assert "item_name" not in response.json()["candidate"]["recognition"]["edited_fields"]
 
 
 def test_identity_conflict_and_missing_identity_are_rejected(
@@ -284,6 +467,7 @@ def test_identity_conflict_and_missing_identity_are_rejected(
     )
     missing_id = create_pending_review(client)
     conflict_id = create_pending_review(client)
+    full_conflict_id = create_pending_review(client)
 
     missing = client.post(
         f"/api/v1/local-recognition/reviews/{missing_id}/confirm",
@@ -293,11 +477,21 @@ def test_identity_conflict_and_missing_identity_are_rejected(
         f"/api/v1/local-recognition/reviews/{conflict_id}/confirm",
         json={"selected_item_id": 1, "item_key": "manual"},
     )
+    full_conflict = client.post(
+        f"/api/v1/local-recognition/reviews/{full_conflict_id}/confirm",
+        json={
+            "selected_item_id": 1,
+            "item_key": "manual",
+            "final_item_name": "Manual Name",
+        },
+    )
 
     assert missing.status_code == 400
     assert missing.json()["detail"]["code"] == "item_identity_required"
     assert conflict.status_code == 400
     assert conflict.json()["detail"]["code"] == "item_identity_conflict"
+    assert full_conflict.status_code == 400
+    assert full_conflict.json()["detail"]["code"] == "item_identity_conflict"
 
 
 def test_observed_at_rules_and_user_edited_source(

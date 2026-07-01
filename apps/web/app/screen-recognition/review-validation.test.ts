@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { LocalRecognitionReview } from "../../lib/types.ts";
 import {
+  applyReviewFormUpdate,
   formFromReview,
   mergeReviewsByPolling,
   payloadFromForm,
@@ -35,6 +36,8 @@ test("formFromReview keeps missing OCR quantities blank instead of zero", () => 
 test("payloadFromForm preserves explicit manual zero quantity", () => {
   const form = formFromReview(reviewFixture({ total_bid_quantity: null, total_ask_quantity: null }));
   form.itemKey = "manual-key";
+  form.manualItemKeyProvided = true;
+  form.manualFinalItemNameProvided = true;
   form.finalTotalAskQuantity = "0";
 
   const payload = payloadFromForm(form);
@@ -43,12 +46,79 @@ test("payloadFromForm preserves explicit manual zero quantity", () => {
   assert.equal(payload.final_total_ask_quantity, 0);
 });
 
-test("validateReviewForm requires item identity and legal prices", () => {
+test("validateReviewForm does not treat OCR suggested name as confirmed manual identity", () => {
   const form = formFromReview(reviewFixture({}));
   form.itemKey = "";
   assert.equal(validateReviewForm(form).ok, false);
 
   form.itemKey = "manual-key";
+  form.manualItemKeyProvided = true;
+  assert.equal(validateReviewForm(form).ok, false);
+
+  form.finalItemName = "Manual Name";
+  form.manualFinalItemNameProvided = true;
+  assert.equal(validateReviewForm(form).ok, true);
+});
+
+test("payloadFromForm omits unconfirmed OCR final name for manual identity", () => {
+  const form = formFromReview(reviewFixture({}));
+  form.itemKey = "manual-key";
+  form.manualItemKeyProvided = true;
+
+  const payload = payloadFromForm(form);
+
+  assert.equal(payload.item_key, "manual-key");
+  assert.equal("final_item_name" in payload, false);
+});
+
+test("applyReviewFormUpdate clears canonical state when switching identity modes", () => {
+  const existing = formFromReview(reviewFixture({}));
+  const selected = applyReviewFormUpdate(existing, {
+    identityMode: "existing",
+    selectedItemId: 7,
+    finalItemName: "Canonical Name",
+    manualItemKeyProvided: false,
+    manualFinalItemNameProvided: false
+  });
+
+  assert.equal(selected.identityMode, "existing");
+  assert.equal(selected.selectedItemId, 7);
+  assert.equal(selected.manualFinalItemNameProvided, false);
+
+  const manual = applyReviewFormUpdate(selected, {
+    identityMode: "manual",
+    selectedItemId: null
+  });
+
+  assert.equal(manual.selectedItemId, null);
+  assert.equal(manual.manualItemKeyProvided, false);
+  assert.equal(manual.manualFinalItemNameProvided, false);
+
+  const completed = applyReviewFormUpdate(manual, {
+    itemKey: "manual-key",
+    finalItemName: "Manual Name"
+  });
+
+  assert.equal(validateReviewForm(completed).ok, true);
+
+  const backToExisting = applyReviewFormUpdate(completed, {
+    identityMode: "existing",
+    selectedItemId: 8
+  });
+  const payload = payloadFromForm(backToExisting);
+
+  assert.equal(backToExisting.manualItemKeyProvided, false);
+  assert.equal(backToExisting.manualFinalItemNameProvided, false);
+  assert.equal(payload.item_key, null);
+  assert.equal(payload.selected_item_id, 8);
+});
+
+test("validateReviewForm requires legal prices", () => {
+  const form = formFromReview(reviewFixture({}));
+  form.itemKey = "manual-key";
+  form.manualItemKeyProvided = true;
+  form.finalItemName = "Manual Name";
+  form.manualFinalItemNameProvided = true;
   form.finalBestBid = "0";
   const price = validateReviewForm(form);
   assert.equal(price.ok, false);
@@ -107,6 +177,11 @@ function reviewFixture(overrides: Partial<LocalRecognitionReview["ocr_candidate"
       selected_item_id: null,
       item_key: null,
       final_item_name: "Synthetic Alpha",
+      identity_sources: {
+        selected_item_id: null,
+        item_key: null,
+        final_item_name: "ocr_initial"
+      },
       final_best_bid: bid,
       final_best_ask: ask,
       final_total_bid_quantity: bidQuantity,

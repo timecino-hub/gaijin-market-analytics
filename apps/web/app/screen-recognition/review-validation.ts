@@ -11,6 +11,8 @@ export type ReviewFormState = {
   selectedItemId: number | null;
   itemKey: string;
   finalItemName: string;
+  manualItemKeyProvided: boolean;
+  manualFinalItemNameProvided: boolean;
   finalBestBid: string;
   finalBestAsk: string;
   finalTotalBidQuantity: string;
@@ -50,6 +52,10 @@ export function formFromReview(review: LocalRecognitionReview): ReviewFormState 
     selectedItemId: review.draft.selected_item_id,
     itemKey: review.draft.item_key ?? "",
     finalItemName: review.draft.final_item_name ?? "",
+    manualItemKeyProvided: isUserProvidedIdentitySource(review.draft.identity_sources.item_key),
+    manualFinalItemNameProvided: isUserProvidedIdentitySource(
+      review.draft.identity_sources.final_item_name
+    ),
     finalBestBid: review.draft.final_best_bid ?? "",
     finalBestAsk: review.draft.final_best_ask ?? "",
     finalTotalBidQuantity:
@@ -77,15 +83,47 @@ export function payloadFromForm(form: ReviewFormState): LocalRecognitionDraftPay
   } else {
     payload.selected_item_id = null;
     payload.item_key = form.itemKey.trim() || null;
+    if (!form.manualFinalItemNameProvided) {
+      delete payload.final_item_name;
+    }
   }
   return payload;
+}
+
+export function applyReviewFormUpdate(
+  current: ReviewFormState,
+  values: Partial<ReviewFormState>
+): ReviewFormState {
+  const next = { ...current, ...values };
+  if (values.identityMode === "existing" || values.selectedItemId !== undefined) {
+    next.manualItemKeyProvided = false;
+    next.manualFinalItemNameProvided = false;
+  }
+  if (values.identityMode === "manual") {
+    next.selectedItemId = null;
+  }
+  if (values.itemKey !== undefined && next.identityMode === "manual") {
+    next.manualItemKeyProvided = values.itemKey.trim().length > 0;
+  }
+  if (values.finalItemName !== undefined && next.identityMode === "manual") {
+    next.manualFinalItemNameProvided = values.finalItemName.trim().length > 0;
+  }
+  return next;
 }
 
 export function validateReviewForm(form: ReviewFormState): ClientValidationResult {
   if (form.identityMode === "existing" && !form.selectedItemId) {
     return { ok: false, code: "item_identity_required", message: "请选择已有商品。" };
   }
-  if (form.identityMode === "manual" && (!form.itemKey.trim() || !form.finalItemName.trim())) {
+  if (
+    form.identityMode === "manual" &&
+    (
+      !form.itemKey.trim() ||
+      !form.finalItemName.trim() ||
+      !form.manualItemKeyProvided ||
+      !form.manualFinalItemNameProvided
+    )
+  ) {
     return {
       ok: false,
       code: "item_identity_required",
@@ -203,4 +241,8 @@ export function fromDatetimeLocal(value: string): string | null {
     return null;
   }
   return date.toISOString();
+}
+
+function isUserProvidedIdentitySource(source: string | null): boolean {
+  return source === "user_draft" || source === "confirm_request";
 }

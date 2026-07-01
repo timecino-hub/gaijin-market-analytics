@@ -199,6 +199,7 @@ export type ReviewStatus =
   | "expired";
 
 export type ObservedAtSource = "review_created_default" | "user_edited";
+export type IdentityFieldSource = "ocr_initial" | "user_draft" | "confirm_request" | "canonical_item";
 
 export type LocalRecognitionCapabilities = {
   ocr_backend: string;
@@ -256,6 +257,11 @@ export type LocalRecognitionDraft = {
   selected_item_id: number | null;
   item_key: string | null;
   final_item_name: string | null;
+  identity_sources: {
+    selected_item_id: IdentityFieldSource | null;
+    item_key: IdentityFieldSource | null;
+    final_item_name: IdentityFieldSource | null;
+  };
   final_best_bid: string | null;
   final_best_ask: string | null;
   final_total_bid_quantity: number | null;

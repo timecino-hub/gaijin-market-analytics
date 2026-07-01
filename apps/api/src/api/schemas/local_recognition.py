@@ -34,6 +34,13 @@ class ObservedAtSource(str, Enum):
     USER_EDITED = "user_edited"
 
 
+class IdentityFieldSource(str, Enum):
+    OCR_INITIAL = "ocr_initial"
+    USER_DRAFT = "user_draft"
+    CONFIRM_REQUEST = "confirm_request"
+    CANONICAL_ITEM = "canonical_item"
+
+
 PriceString = str | None
 QuantityValue = int | None
 
@@ -74,10 +81,17 @@ class OcrCandidate(BaseModel):
         return str(value) if value is not None else None
 
 
+class IdentitySources(BaseModel):
+    selected_item_id: IdentityFieldSource | None = None
+    item_key: IdentityFieldSource | None = None
+    final_item_name: IdentityFieldSource | None = None
+
+
 class ReviewDraft(BaseModel):
     selected_item_id: int | None = None
     item_key: str | None = None
     final_item_name: str | None = None
+    identity_sources: IdentitySources = Field(default_factory=IdentitySources)
     final_best_bid: Decimal | None = None
     final_best_ask: Decimal | None = None
     final_total_bid_quantity: int | None = None
@@ -265,4 +279,3 @@ def _normalize_observed_at(value: datetime) -> datetime:
     if normalized > datetime.now(UTC) + timedelta(minutes=5):
         raise ValueError("observed_at_in_future")
     return normalized
-

@@ -487,6 +487,11 @@ function localReviewResponse() {
       selected_item_id: null,
       item_key: null,
       final_item_name: "Synthetic Alpha",
+      identity_sources: {
+        selected_item_id: null,
+        item_key: null,
+        final_item_name: "ocr_initial"
+      },
       final_best_bid: "12.34",
       final_best_ask: "13.00",
       final_total_bid_quantity: null,
