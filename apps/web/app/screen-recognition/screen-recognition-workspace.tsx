@@ -26,6 +26,7 @@ import type {
   LocalRecognitionReview,
   LocalRecognitionReviewList
 } from "../../lib/types";
+import { copyExtensionPairingPayload } from "../../lib/extension-pairing-payload";
 import { formatDateTime } from "../../lib/formatters";
 import { reviewStatusLabel } from "./review-labels";
 import {
@@ -352,10 +353,23 @@ export function ScreenRecognitionWorkspace() {
   }
 
   async function copyPairingCode() {
-    if (pairingCode) {
-      await navigator.clipboard.writeText(pairingCode.pairing_code);
-      setActionMessage("配对码已复制。");
+    if (!pairingCode) {
+      return;
     }
+    const result = await copyExtensionPairingPayload(
+      (value) => navigator.clipboard.writeText(value),
+      pairingCode
+    );
+    if (result.ok) {
+      setActionMessage("扩展配对信息已复制。请粘贴到浏览器扩展中完成配对。");
+      return;
+    }
+    if (result.reason === "expired") {
+      setPairingCode(null);
+      setActionMessage("配对码已过期，请重新生成。");
+      return;
+    }
+    setActionMessage("无法复制扩展配对信息。请确认浏览器允许此页面访问剪贴板后重试。");
   }
 
   async function revokePairing(pairingId: string) {
@@ -389,7 +403,7 @@ export function ScreenRecognitionWorkspace() {
           pairingCode={pairingCode}
           pairingCountdown={pairingCountdown}
           recentExtensionReviews={recentExtensionReviews}
-          onCopyPairingCode={copyPairingCode}
+          onCopyPairingPayload={copyPairingCode}
           onGeneratePairingCode={generatePairingCode}
           onRevokePairing={revokePairing}
         />
@@ -735,7 +749,7 @@ function ReviewPanel({
 
 function BridgePanel({
   extensionStatus,
-  onCopyPairingCode,
+  onCopyPairingPayload,
   onGeneratePairingCode,
   onRevokePairing,
   pairingCode,
@@ -743,7 +757,7 @@ function BridgePanel({
   recentExtensionReviews
 }: {
   extensionStatus: LocalExtensionStatus | null;
-  onCopyPairingCode: () => void;
+  onCopyPairingPayload: () => void;
   onGeneratePairingCode: () => void;
   onRevokePairing: (pairingId: string) => void;
   pairingCode: LocalExtensionPairingCode | null;
@@ -774,9 +788,17 @@ function BridgePanel({
             <div>
               <h3>{pairingCode.pairing_code}</h3>
               <p>剩余 {pairingCountdown}s，使用后立即失效。</p>
+              <p className="field-hint">
+                请把复制的完整配对信息粘贴到浏览器扩展中。该信息包含配对编号和一次性配对码。
+              </p>
             </div>
-            <button className="plain-button" type="button" onClick={onCopyPairingCode}>
-              复制配对码
+            <button
+              className="plain-button"
+              type="button"
+              disabled={pairingCountdown <= 0}
+              onClick={onCopyPairingPayload}
+            >
+              复制扩展配对信息
             </button>
           </div>
         </div>

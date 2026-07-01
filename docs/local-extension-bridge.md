@@ -38,8 +38,24 @@ POST /api/v1/local-recognition/pairing-codes
 
 The response includes `pairing_code_id`, `pairing_code`, `expires_at`, and
 `ttl_seconds`. The code is 12 characters from an unambiguous Crockford Base32
-alphabet and carries about 60 bits of entropy. It is grouped for display, for
-example `ABCD-EFGH-JK12`.
+alphabet and carries about 60 bits of entropy. It is grouped with hyphens for
+display.
+
+The `/screen-recognition` page copies a versioned browser-extension pairing
+payload, not the bare code alone:
+
+```json
+{
+  "version": "local_extension_pairing_v1",
+  "pairing_code_id": "<id>",
+  "pairing_code": "<one-time-code>"
+}
+```
+
+The extension parses `pairing_code_id` and `pairing_code` from that payload and
+submits both fields to the pairing API. The payload does not include API URLs,
+Web URLs, tokens, token hashes, client names, extension versions, source URLs,
+or user/device identity.
 
 The extension later submits:
 
