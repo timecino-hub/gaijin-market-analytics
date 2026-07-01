@@ -3,8 +3,12 @@ import test from "node:test";
 import {
   ApiRequestError,
   buildApiUrl,
+  confirmLocalRecognitionReview,
   getItemAnalysis,
+  getLocalRecognitionReview,
+  patchLocalRecognitionReview,
   toDisplayError,
+  uploadLocalRecognitionReview,
   uploadCsvImport
 } from "./api-client.ts";
 
@@ -299,6 +303,97 @@ test("uploadCsvImport hides sensitive server error details", async () => {
   }
 });
 
+test("uploadLocalRecognitionReview posts screenshot FormData to local review API", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured: { url: string; init?: RequestInit } | undefined;
+
+  globalThis.fetch = async (url, init) => {
+    captured = { url: String(url), init };
+    return Response.json(
+      {
+        review_id: "review_1",
+        status: "processing",
+        created_at: "2026-07-01T00:00:00Z",
+        expires_at: "2026-07-01T02:00:00Z"
+      },
+      { status: 202 }
+    );
+  };
+
+  try {
+    const result = await uploadLocalRecognitionReview(
+      new File(["png"], "current.png", { type: "image/png" })
+    );
+
+    assert.equal(result.status, "processing");
+    assert.equal(captured?.url, "http://localhost:8000/api/v1/local-recognition/reviews");
+    assert.equal(captured?.init?.method, "POST");
+    assert.ok(captured?.init?.body instanceof FormData);
+    assert.deepEqual(captured?.init?.headers, { Accept: "application/json" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("local recognition client supports review detail patch and confirm", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: Array<{ url: string; init?: RequestInit }> = [];
+
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), init });
+    return Response.json(localReviewResponse());
+  };
+
+  try {
+    await getLocalRecognitionReview("review/a");
+    await patchLocalRecognitionReview("review/a", { final_best_bid: "12.34" });
+    await confirmLocalRecognitionReview("review/a", {
+      item_key: "manual-key",
+      final_item_name: "Manual Name"
+    });
+
+    assert.equal(
+      captured[0].url,
+      "http://localhost:8000/api/v1/local-recognition/reviews/review%2Fa"
+    );
+    assert.equal(captured[1].init?.method, "PATCH");
+    assert.equal(captured[1].init?.body, JSON.stringify({ final_best_bid: "12.34" }));
+    assert.equal(captured[2].init?.method, "POST");
+    assert.match(captured[2].url, /\/confirm$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("local recognition errors map to safe user messages", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        detail: {
+          code: "item_identity_required",
+          message: "A reviewed item identity is required before confirmation."
+        }
+      },
+      { status: 400 }
+    );
+
+  try {
+    await assert.rejects(
+      confirmLocalRecognitionReview("review_1", {}),
+      (error) => {
+        assert.ok(error instanceof ApiRequestError);
+        assert.equal(error.error.code, "item_identity_required");
+        assert.match(error.error.message, /商品身份/);
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function analysisResponse({
   horizon,
   currentAsk = "12.000000",
@@ -359,5 +454,56 @@ function analysisResponse({
     risk_score: "50",
     confidence_score: "85",
     reason_codes: ["analysis_completed"]
+  };
+}
+
+function localReviewResponse() {
+  return {
+    review_id: "review_1",
+    created_at: "2026-07-01T00:00:00Z",
+    expires_at: "2026-07-01T02:00:00Z",
+    status: "pending_review",
+    suggested_observed_at: "2026-07-01T00:00:00Z",
+    image: null,
+    recognition: {
+      ocr_backend: "windows-ocr",
+      ocr_backend_version: "fake",
+      layout_name: "gaijin-market-desktop-v1",
+      layout_version: "1.2.0",
+      config_sha256: "a".repeat(64),
+      parser_version: "parser",
+      runner_version: "runner",
+      processing_duration_ms: 1
+    },
+    ocr_candidate: {
+      item_name_raw: "Synthetic Alpha",
+      item_name_normalized: "Synthetic Alpha",
+      best_bid: "12.34",
+      best_ask: "13.00",
+      total_bid_quantity: null,
+      total_ask_quantity: 7
+    },
+    draft: {
+      selected_item_id: null,
+      item_key: null,
+      final_item_name: "Synthetic Alpha",
+      final_best_bid: "12.34",
+      final_best_ask: "13.00",
+      final_total_bid_quantity: null,
+      final_total_ask_quantity: 7,
+      observed_at: "2026-07-01T00:00:00Z",
+      observed_at_source: "review_created_default",
+      reviewer_note: null
+    },
+    ocr_evidence_summary: {
+      fields: {},
+      confidence_source: "unavailable",
+      confidence_available: false
+    },
+    warnings: [],
+    errors: [],
+    candidate: null,
+    confirmed_at: null,
+    rejected_at: null
   };
 }

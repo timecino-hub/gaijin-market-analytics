@@ -16,6 +16,9 @@ export default function Home() {
           <Link className="primary-link" href="/items">
             浏览商品数据
           </Link>
+          <Link className="primary-link" href="/screen-recognition">
+            屏幕识别复核
+          </Link>
         </div>
       </section>
       <section className="notice" aria-labelledby="notice-title">

@@ -187,3 +187,152 @@ export type SnapshotQuery = {
   limit?: string;
   order?: SortOrder;
 };
+
+export type ReviewStatus =
+  | "processing"
+  | "pending_review"
+  | "confirmed"
+  | "confirmed_with_edits"
+  | "rejected"
+  | "unreadable"
+  | "failed"
+  | "expired";
+
+export type ObservedAtSource = "review_created_default" | "user_edited";
+
+export type LocalRecognitionCapabilities = {
+  ocr_backend: string;
+  ocr_backend_version: string;
+  installed_ocr_languages: string[];
+  current_layout_profile: string;
+  layout_version: string;
+  config_sha256: string;
+  max_image_bytes: number;
+  max_image_pixels: number;
+  supported_image_formats: string[];
+  store_capacity: number;
+  store_ttl_seconds: number;
+  database_written: false;
+  handles_history_images: false;
+  browser_extension_connected: false;
+  automatic_recognition_available: false;
+};
+
+export type LocalRecognitionReviewCreate = {
+  review_id: string;
+  status: ReviewStatus;
+  created_at: string;
+  expires_at: string;
+};
+
+export type LocalRecognitionImage = {
+  original_filename: string;
+  width: number;
+  height: number;
+  format: "png" | "jpeg";
+};
+
+export type LocalRecognitionMetadata = {
+  ocr_backend: string;
+  ocr_backend_version: string;
+  layout_name: string;
+  layout_version: string;
+  config_sha256: string;
+  parser_version: string;
+  runner_version: string;
+  processing_duration_ms: number | null;
+};
+
+export type LocalRecognitionOcrCandidate = {
+  item_name_raw: string | null;
+  item_name_normalized: string | null;
+  best_bid: string | null;
+  best_ask: string | null;
+  total_bid_quantity: number | null;
+  total_ask_quantity: number | null;
+};
+
+export type LocalRecognitionDraft = {
+  selected_item_id: number | null;
+  item_key: string | null;
+  final_item_name: string | null;
+  final_best_bid: string | null;
+  final_best_ask: string | null;
+  final_total_bid_quantity: number | null;
+  final_total_ask_quantity: number | null;
+  observed_at: string | null;
+  observed_at_source: ObservedAtSource;
+  reviewer_note: string | null;
+};
+
+export type LocalRecognitionCandidate = {
+  candidate_version: "screen_review_candidate_v1";
+  review_id: string;
+  observed_at: string;
+  observed_at_source: ObservedAtSource;
+  item_identity: {
+    item_id: number | null;
+    item_key: string;
+    item_name: string;
+  };
+  best_bid: string;
+  best_ask: string;
+  total_bid_quantity: number | null;
+  total_ask_quantity: number | null;
+  recognition: {
+    layout_name: string;
+    layout_version: string;
+    config_sha256: string;
+    ocr_backend: string;
+    edited_fields: string[];
+    parser_version: string;
+    runner_version: string;
+  };
+  status: "confirmed" | "confirmed_with_edits";
+  imported: false;
+  database_written: false;
+  quantity_semantics: "screenshot_display_quantity";
+  csv_quantity_mapping: "not_mapped_to_ask_count_or_bid_count";
+  market_snapshot_created: false;
+};
+
+export type LocalRecognitionReview = {
+  review_id: string;
+  created_at: string;
+  expires_at: string;
+  status: ReviewStatus;
+  suggested_observed_at: string;
+  image: LocalRecognitionImage | null;
+  recognition: LocalRecognitionMetadata;
+  ocr_candidate: LocalRecognitionOcrCandidate;
+  draft: LocalRecognitionDraft;
+  ocr_evidence_summary: {
+    fields: Record<string, unknown>;
+    confidence_source: string;
+    confidence_available: boolean;
+  };
+  warnings: string[];
+  errors: string[];
+  candidate: LocalRecognitionCandidate | null;
+  confirmed_at: string | null;
+  rejected_at: string | null;
+};
+
+export type LocalRecognitionReviewList = {
+  reviews: LocalRecognitionReview[];
+  total: number;
+  store_count: number;
+  store_capacity: number;
+};
+
+export type LocalRecognitionDraftPayload = {
+  selected_item_id?: number | null;
+  item_key?: string | null;
+  final_item_name?: string | null;
+  final_best_bid?: string | null;
+  final_best_ask?: string | null;
+  final_total_bid_quantity?: number | null;
+  final_total_ask_quantity?: number | null;
+  observed_at?: string | null;
+  reviewer_note?: string | null;
+};
