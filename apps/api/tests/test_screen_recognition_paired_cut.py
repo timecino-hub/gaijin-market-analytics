@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import socket
+import stat
 import subprocess
 import sys
 import zipfile
@@ -27,7 +29,7 @@ from api.screen_recognition.history_analysis import (
     extract_blue_volume_points,
     extract_red_price_points,
 )
-from api.screen_recognition.image_io import safe_extract_images_zip
+from api.screen_recognition.image_io import UnsafeArchiveError, safe_extract_images_zip, scan_safe_images_zip
 from api.screen_recognition.layouts import get_layout_profile
 from api.screen_recognition.ocr_backend import OcrInvocation
 from api.screen_recognition.paired_runner import PairedCutRunConfig, run_paired_cut
@@ -321,7 +323,7 @@ def test_zip_security_rejects_absolute_traversal_and_non_images(tmp_path: Path) 
 
     archive2 = tmp_path / "bad2.zip"
     with zipfile.ZipFile(archive2, "w") as zf:
-        zf.writestr("nested/001.png", b"bad")
+        zf.writestr("nested/deeper/001.png", b"bad")
     with pytest.raises(Exception):
         safe_extract_images_zip(archive2, tmp_path / "out2")
 
@@ -330,6 +332,130 @@ def test_zip_security_rejects_absolute_traversal_and_non_images(tmp_path: Path) 
         zf.writestr("001.txt", "bad")
     with pytest.raises(Exception):
         safe_extract_images_zip(archive3, tmp_path / "out3")
+
+
+def test_zip_security_accepts_root_level_cut20_images(tmp_path: Path) -> None:
+    archive = tmp_path / "root.zip"
+    _write_pair_zip(archive, wrapper=None)
+
+    scan = scan_safe_images_zip(archive)
+    extracted = safe_extract_images_zip(archive, tmp_path / "out")
+
+    assert scan.layout == "root"
+    assert scan.wrapper_dir is None
+    assert len(scan.members) == 40
+    assert extracted.image_count == 40
+    assert (tmp_path / "out" / "001.png").is_file()
+    assert (tmp_path / "out" / "020_1.png").is_file()
+
+
+def test_zip_security_accepts_single_top_level_wrapper_and_strips_it(tmp_path: Path) -> None:
+    archive = tmp_path / "wrapped.zip"
+    _write_pair_zip(archive, wrapper="pics")
+
+    scan = scan_safe_images_zip(archive)
+    extracted = safe_extract_images_zip(archive, tmp_path / "out")
+
+    assert scan.layout == "single_top_level_directory"
+    assert scan.wrapper_dir == "pics"
+    assert extracted.image_count == 40
+    assert (tmp_path / "out" / "001.png").is_file()
+    assert not (tmp_path / "out" / "pics").exists()
+
+
+@pytest.mark.parametrize(
+    ("archive_name", "member_name"),
+    [
+        ("nested.zip", "pics/other/001.png"),
+        ("top_traversal.zip", "../001.png"),
+        ("wrapped_traversal.zip", "pics/../001.png"),
+        ("windows_drive.zip", "C:/001.png"),
+        ("archive.zip", "pics/archive.zip"),
+        ("script.zip", "pics/run.exe"),
+        ("text.zip", "pics/readme.txt"),
+    ],
+)
+def test_zip_security_rejects_unsafe_member_names(tmp_path: Path, archive_name: str, member_name: str) -> None:
+    archive = tmp_path / archive_name
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(member_name, _png_bytes())
+
+    with pytest.raises(UnsafeArchiveError):
+        scan_safe_images_zip(archive)
+
+
+def test_zip_security_rejects_multiple_top_level_dirs(tmp_path: Path) -> None:
+    archive = tmp_path / "multi.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("a/001.png", _png_bytes())
+        zf.writestr("b/001_1.png", _png_bytes())
+
+    with pytest.raises(UnsafeArchiveError):
+        scan_safe_images_zip(archive)
+
+
+def test_zip_security_rejects_root_and_wrapper_mixed_images(tmp_path: Path) -> None:
+    archive = tmp_path / "mixed.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("001.png", _png_bytes())
+        zf.writestr("pics/001_1.png", _png_bytes())
+
+    with pytest.raises(UnsafeArchiveError):
+        scan_safe_images_zip(archive)
+
+
+def test_zip_security_rejects_symlink_members(tmp_path: Path) -> None:
+    archive = tmp_path / "symlink.zip"
+    link_info = zipfile.ZipInfo("pics/001.png")
+    link_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(link_info, "target.png")
+
+    with pytest.raises(UnsafeArchiveError):
+        scan_safe_images_zip(archive)
+
+
+def test_zip_security_rejects_case_insensitive_duplicate_filenames(tmp_path: Path) -> None:
+    archive = tmp_path / "dupe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("pics/001.png", _png_bytes())
+        zf.writestr("pics/001.PNG", _png_bytes())
+
+    with pytest.raises(UnsafeArchiveError):
+        scan_safe_images_zip(archive)
+
+
+def test_zip_extraction_requires_empty_output_directory(tmp_path: Path) -> None:
+    archive = tmp_path / "root.zip"
+    _write_pair_zip(archive, wrapper=None)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "existing.txt").write_text("no overwrite", encoding="utf-8")
+
+    with pytest.raises(UnsafeArchiveError):
+        safe_extract_images_zip(archive, output)
+
+
+def test_cut20_pair_scan_accepts_complete_twenty_pairs(tmp_path: Path) -> None:
+    for sample_id in range(1, 21):
+        _write_png(tmp_path / f"{sample_id:03d}.png")
+        _write_png(tmp_path / f"{sample_id:03d}_1.png")
+
+    pairs, global_errors = scan_paired_images(tmp_path)
+
+    assert global_errors == []
+    assert len(pairs) == 20
+    assert all(not pair.errors for pair in pairs)
+
+
+def test_cut20_pair_scan_reports_missing_history_image(tmp_path: Path) -> None:
+    _write_png(tmp_path / "001.png")
+
+    pairs, global_errors = scan_paired_images(tmp_path)
+
+    assert global_errors == []
+    assert pairs[0].sample_id == "001"
+    assert "pair_history_image_missing" in pairs[0].errors
 
 
 def test_no_network_during_paired_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -406,6 +532,23 @@ def _chart_image() -> tuple[Image.Image, ImageInfo, NormalizedRoi]:
 
 def _write_png(path: Path) -> None:
     Image.new("RGB", (1200, 800), "white").save(path)
+
+
+def _png_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (1200, 800), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _write_pair_zip(path: Path, *, wrapper: str | None) -> None:
+    prefix = f"{wrapper}/" if wrapper else ""
+    payload = _png_bytes()
+    with zipfile.ZipFile(path, "w") as zf:
+        if wrapper:
+            zf.writestr(f"{wrapper}/", b"")
+        for sample_id in range(1, 21):
+            zf.writestr(f"{prefix}{sample_id:03d}.png", payload)
+            zf.writestr(f"{prefix}{sample_id:03d}_1.png", payload)
 
 
 def _write_current_image(path: Path) -> None:

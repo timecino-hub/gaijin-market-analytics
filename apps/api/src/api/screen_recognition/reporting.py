@@ -21,6 +21,12 @@ def write_outputs(
     failures_dir = output_dir / "failures"
     failures_dir.mkdir(parents=True, exist_ok=True)
     dump_json_file(output_dir / "run_metadata.json", run_metadata, pretty=pretty)
+    if "current_config" in run_metadata:
+        dump_json_file(
+            output_dir / "effective_current_config.json",
+            run_metadata["current_config"],
+            pretty=pretty,
+        )
     dump_json_file(output_dir / "summary.json", summary, pretty=pretty)
     (output_dir / "results.jsonl").write_text(
         "".join(dumps_json(result.to_json(), pretty=False) + "\n" for result in results),

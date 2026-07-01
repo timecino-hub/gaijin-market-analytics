@@ -13,6 +13,7 @@ from api.screen_recognition.comparison import (
     determine_sample_status,
     summarize_results,
 )
+from api.screen_recognition.config import default_current_cut_config, git_metadata
 from api.screen_recognition.contracts import (
     CUT_RUNNER_VERSION,
     CutStatus,
@@ -68,6 +69,10 @@ def run_cut(config: CutRunConfig) -> CutRunResult:
     files_found = len(list_image_files(config.images_dir))
     profile = get_layout_profile(config.layout_profile_name)
     recognizer = get_recognizer(config.ocr_backend_name)
+    current_config = default_current_cut_config(
+        layout_profile_name=profile.name,
+        ocr_backend_name=recognizer.backend_name,
+    )
     test_scope = (
         TestScope.PARSER_ONLY.value
         if recognizer.test_scope == TestScope.PARSER_ONLY.value
@@ -88,6 +93,9 @@ def run_cut(config: CutRunConfig) -> CutRunResult:
         },
         "layout_profile": profile.to_json(),
         "parser": {"version": PARSER_VERSION},
+        "current_config": current_config.to_json(),
+        "config_sha256": current_config.sha256(),
+        "git": git_metadata(),
         "preprocessing": windows_ocr_preprocessing_metadata()
         if recognizer.backend_name == "windows-ocr"
         else {"source_image_modified": False},
