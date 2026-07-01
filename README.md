@@ -171,6 +171,18 @@ type, and selection state, then upload it with the "上传 CSV" button. The
 browser applies the same default 10 MB size limit as a user-experience
 precheck, but the API remains the trusted validator.
 
+The web app also exposes the local screen-recognition review flow at
+`http://localhost:3000/screen-recognition`. This alpha page accepts a manually
+selected current market screenshot, creates an in-memory review through
+`POST /api/v1/local-recognition/reviews`, runs local Windows OCR in a background
+task, and lets a reviewer confirm item identity, prices, quantities, and
+`observed_at` before generating a reviewed candidate JSON object. Reviews are
+kept only in the API process memory, expire after two hours, and are cleared on
+service restart. The candidate records `imported=false` and
+`database_written=false`; it is not a market snapshot, is not automatically
+imported, and does not generate CSV. See
+`docs/screen-recognition-review-workflow.md`.
+
 Import statuses shown by the web page:
 
 - `completed`: the CSV was accepted and valid rows were imported into the
@@ -352,6 +364,8 @@ Web routes:
 - `/items/{item_id}`: item metadata, latest snapshot, and historical snapshot
   table with time range filters, plus the read-only RuleBasedV1 analysis panel
   for 7, 30, 90, and 180 day windows.
+- `/screen-recognition`: local-only manual review page for uploaded current
+  screenshots and reviewed candidate JSON generation.
 
 Example item list response:
 

@@ -36,6 +36,17 @@ def test_capabilities_report_local_review_boundary(client: TestClient) -> None:
     assert body["handles_history_images"] is False
 
 
+def test_openapi_exposes_local_review_paths_without_extension_endpoint(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "/api/v1/local-recognition/reviews" in paths
+    assert "/api/v1/local-recognition/reviews/{review_id}/confirm" in paths
+    assert "/api/v1/local-recognition/reviews/{review_id}/unreadable" in paths
+    assert not any("extension" in path for path in paths)
+
+
 def test_create_review_returns_202_then_background_ocr_creates_pending_review(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -418,4 +429,3 @@ def insert_item(database_url: str) -> int:
             )
     finally:
         engine.dispose()
-
