@@ -18,9 +18,11 @@ from api.schemas.local_recognition import (
     RecognitionMetadata,
     ReviewDraft,
     ReviewResponse,
+    ReviewSourceMetadata,
     ReviewStatus,
     ReviewedCandidate,
 )
+from api.services.local_recognition_source import manual_source_metadata
 
 
 class ReviewNotFoundError(LookupError):
@@ -47,6 +49,7 @@ class ReviewRecord:
     ocr_candidate: OcrCandidate = field(default_factory=OcrCandidate)
     draft: ReviewDraft = field(default_factory=ReviewDraft)
     ocr_evidence_summary: OcrEvidenceSummary = field(default_factory=OcrEvidenceSummary)
+    source_metadata: ReviewSourceMetadata = field(default_factory=manual_source_metadata)
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     candidate: ReviewedCandidate | None = None
@@ -65,6 +68,7 @@ class ReviewRecord:
             ocr_candidate=self.ocr_candidate,
             draft=self.draft,
             ocr_evidence_summary=self.ocr_evidence_summary,
+            source_metadata=self.source_metadata,
             warnings=list(self.warnings),
             errors=list(self.errors),
             candidate=self.candidate,
@@ -87,6 +91,7 @@ class LocalReviewStore:
         created_at: datetime,
         image: ImageMetadata,
         recognition: RecognitionMetadata,
+        source_metadata: ReviewSourceMetadata | None = None,
     ) -> ReviewRecord:
         with self._lock:
             self._cleanup_locked(datetime.now(UTC), remove_expired_records=True)
@@ -100,6 +105,7 @@ class LocalReviewStore:
                 suggested_observed_at=created_at,
                 image=image,
                 recognition=recognition,
+                source_metadata=source_metadata or manual_source_metadata(),
                 draft=ReviewDraft(
                     observed_at=created_at,
                     observed_at_source=ObservedAtSource.REVIEW_CREATED_DEFAULT,

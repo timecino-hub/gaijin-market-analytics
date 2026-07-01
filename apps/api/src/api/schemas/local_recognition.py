@@ -111,6 +111,15 @@ class OcrEvidenceSummary(BaseModel):
     confidence_available: bool = False
 
 
+class ReviewSourceMetadata(BaseModel):
+    source: Literal["manual_upload", "browser_extension"]
+    extension_version: str | None = None
+    source_url_safe: str | None = None
+    source_tab_title: str | None = None
+    capture_sha256: str | None = None
+    pairing_id: str | None = None
+
+
 class ItemIdentity(BaseModel):
     item_id: int | None
     item_key: str
@@ -163,6 +172,7 @@ class ReviewResponse(BaseModel):
     ocr_candidate: OcrCandidate
     draft: ReviewDraft
     ocr_evidence_summary: OcrEvidenceSummary
+    source_metadata: ReviewSourceMetadata
     warnings: list[str]
     errors: list[str]
     candidate: ReviewedCandidate | None = None
@@ -175,6 +185,10 @@ class ReviewCreateResponse(BaseModel):
     status: ReviewStatus
     created_at: datetime
     expires_at: datetime
+
+
+class ExtensionReviewCreateResponse(ReviewCreateResponse):
+    deduplicated: bool
 
 
 class ReviewListResponse(BaseModel):
@@ -192,6 +206,7 @@ class ReviewCapabilitiesResponse(BaseModel):
     layout_version: str
     config_sha256: str
     max_image_bytes: int
+    max_multipart_body_bytes: int = 11534336
     max_image_pixels: int
     supported_image_formats: list[str]
     store_capacity: int
@@ -200,6 +215,63 @@ class ReviewCapabilitiesResponse(BaseModel):
     handles_history_images: Literal[False]
     browser_extension_connected: Literal[False]
     automatic_recognition_available: Literal[False]
+    local_extension_bridge_available: bool = False
+    pairing_code_ttl_seconds: int = 600
+    pairing_code_entropy_bits: int = 60
+    pairing_code_max_failed_attempts: int = 5
+    pair_attempts_per_client_per_minute: int = 10
+    global_pair_attempts_per_minute: int = 30
+    extension_uploads_per_minute: int = 6
+    extension_upload_burst: int = 3
+    extension_dedup_window_seconds: int = 20
+
+
+class PairingCodeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PairingCodeCreateResponse(BaseModel):
+    pairing_code_id: str
+    pairing_code: str
+    expires_at: datetime
+    ttl_seconds: int
+
+
+class PairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pairing_code_id: str
+    pairing_code: str
+    client_name: str | None = Field(default=None, max_length=80)
+    extension_version: str | None = Field(default=None, max_length=64)
+
+
+class PairResponse(BaseModel):
+    pairing_id: str
+    token: str
+    created_at: datetime
+
+
+class ExtensionPairingSummary(BaseModel):
+    pairing_id: str
+    created_at: datetime
+    last_seen_at: datetime
+    revoked_at: datetime | None
+    extension_version: str | None
+    client_name: str | None
+
+
+class ExtensionStatusResponse(BaseModel):
+    bridge_available: bool
+    restart_notice: str
+    pairings: list[ExtensionPairingSummary]
+    pairing_code_ttl_seconds: int
+    pairing_code_max_failed_attempts: int
+    pair_attempts_per_client_per_minute: int
+    global_pair_attempts_per_minute: int
+    extension_uploads_per_minute: int
+    extension_upload_burst: int
+    extension_dedup_window_seconds: int
 
 
 class ReviewPatchRequest(BaseModel):

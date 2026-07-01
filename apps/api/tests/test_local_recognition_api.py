@@ -13,12 +13,14 @@ from sqlalchemy import create_engine, text
 from api.schemas.local_recognition import ImageMetadata, RecognitionMetadata
 from api.screen_recognition.contracts import OcrFieldEvidence, OcrResult
 from api.screen_recognition.ocr_backend import OcrBackendError
+from api.services.local_extension_pairing import pairing_store
 from api.services.local_recognition_store import review_store
 
 
 @pytest.fixture(autouse=True)
 def clear_review_store() -> None:
     review_store.clear()
+    pairing_store.clear()
 
 
 def test_capabilities_report_local_review_boundary(client: TestClient) -> None:
@@ -36,7 +38,7 @@ def test_capabilities_report_local_review_boundary(client: TestClient) -> None:
     assert body["handles_history_images"] is False
 
 
-def test_openapi_exposes_local_review_paths_without_extension_endpoint(client: TestClient) -> None:
+def test_openapi_exposes_local_review_and_extension_bridge_paths(client: TestClient) -> None:
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
@@ -44,7 +46,11 @@ def test_openapi_exposes_local_review_paths_without_extension_endpoint(client: T
     assert "/api/v1/local-recognition/reviews" in paths
     assert "/api/v1/local-recognition/reviews/{review_id}/confirm" in paths
     assert "/api/v1/local-recognition/reviews/{review_id}/unreadable" in paths
-    assert not any("extension" in path for path in paths)
+    assert "/api/v1/local-recognition/pairing-codes" in paths
+    assert "/api/v1/local-recognition/pair" in paths
+    assert "/api/v1/local-recognition/extension-status" in paths
+    assert "/api/v1/local-recognition/pairings/{pairing_id}" in paths
+    assert "/api/v1/local-recognition/extension-reviews" in paths
 
 
 def test_create_review_returns_202_then_background_ocr_creates_pending_review(
@@ -74,6 +80,7 @@ def test_create_review_returns_202_then_background_ocr_creates_pending_review(
     assert body["ocr_candidate"]["best_bid"] == "12.34"
     assert body["draft"]["final_total_bid_quantity"] == 5
     assert body["draft"]["observed_at_source"] == "review_created_default"
+    assert body["source_metadata"]["source"] == "manual_upload"
     assert seen_paths and not seen_paths[0].exists()
 
 
