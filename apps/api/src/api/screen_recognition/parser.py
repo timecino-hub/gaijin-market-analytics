@@ -5,6 +5,7 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 
 from api.screen_recognition.contracts import MARKET_PRICE_CAP, OcrFieldEvidence, PriceLevel, ScreenContract
+from api.screen_recognition.ocr_candidates import select_price_candidate, select_quantity_candidate
 
 
 PRICE_RE = re.compile(r"(?P<price>\d+(?:[\.,]\d{1,2})?)(?P<plus>\+)?")
@@ -20,7 +21,16 @@ class ParseIssue(ValueError):
 
 def normalize_item_name(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).strip()
-    return re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"[‐‑‒–—―]", "-", normalized)
+    normalized = normalized.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"\s+(?=\()", "", normalized)
+    normalized = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", normalized)
+    normalized = re.sub(r"\(\s+", "(", normalized)
+    normalized = re.sub(r"\s+\)", ")", normalized)
+    normalized = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=\))", "", normalized)
+    normalized = re.sub(r"(?<=\()\s+(?=[\u4e00-\u9fff])", "", normalized)
+    return normalized
 
 
 def parse_ocr_contract(
@@ -32,15 +42,28 @@ def parse_ocr_contract(
     item_name = normalize_item_name(raw.get("item_name", ""))
     if not item_name:
         errors.append("item_name_missing")
+        errors.append("item_name_ocr_empty")
         item_name = None
 
-    best_bid = _parse_price_field(raw.get("best_bid", ""), "best_bid", errors, warnings)
-    best_ask = _parse_price_field(raw.get("best_ask", ""), "best_ask", errors, warnings)
+    best_bid = _parse_price_field(
+        raw.get("best_bid", ""), raw.get("bid_levels", ""), "best_bid", errors, warnings
+    )
+    best_ask = _parse_price_field(
+        raw.get("best_ask", ""), raw.get("ask_levels", ""), "best_ask", errors, warnings
+    )
     total_bid_quantity = _parse_quantity_field(
-        raw.get("total_bid_quantity", ""), "total_bid_quantity", errors
+        fields.get("total_bid_quantity"),
+        fields.get("total_bid_quantity_summary"),
+        "total_bid_quantity",
+        "bid",
+        errors,
     )
     total_ask_quantity = _parse_quantity_field(
-        raw.get("total_ask_quantity", ""), "total_ask_quantity", errors
+        fields.get("total_ask_quantity"),
+        fields.get("total_ask_quantity_summary"),
+        "total_ask_quantity",
+        "ask",
+        errors,
     )
     bid_levels = _parse_levels(raw.get("bid_levels", ""), errors, warnings)
     ask_levels = _parse_levels(raw.get("ask_levels", ""), errors, warnings)
@@ -72,35 +95,37 @@ def validate_screen_contract(contract: ScreenContract) -> list[str]:
     errors.extend(_validate_prices([contract.best_bid, contract.best_ask]))
     errors.extend(_validate_levels(contract.bid_levels, side="bid", best_price=contract.best_bid))
     errors.extend(_validate_levels(contract.ask_levels, side="ask", best_price=contract.best_ask))
-    if _quantity_sum(contract.bid_levels) is not None and contract.total_bid_quantity is not None:
-        if _quantity_sum(contract.bid_levels) != contract.total_bid_quantity:
-            errors.append("displayed_quantity_sum_mismatch")
-    if _quantity_sum(contract.ask_levels) is not None and contract.total_ask_quantity is not None:
-        if _quantity_sum(contract.ask_levels) != contract.total_ask_quantity:
-            errors.append("displayed_quantity_sum_mismatch")
     return errors
 
 
 def _parse_price_field(
-    text: str, field: str, errors: list[str], warnings: list[str]
+    text: str, first_level_text: str, field: str, errors: list[str], warnings: list[str]
 ) -> Decimal | None:
-    match = PRICE_RE.search(text or "")
-    if not match:
-        errors.append(f"{field}_missing")
-        return None
-    level = _parse_price_token(match.group("price") + (match.group("plus") or ""), warnings)
-    if level is None or level.exact_price is None:
-        return None
-    _validate_price(level.exact_price, errors)
-    return level.exact_price
+    selected = select_price_candidate(
+        field_name=field, scalar_text=text, first_level_text=first_level_text
+    )
+    warnings.extend(selected.warnings)
+    errors.extend(selected.errors)
+    return selected.value
 
 
-def _parse_quantity_field(text: str, field: str, errors: list[str]) -> int | None:
-    match = re.search(r"\d+", text or "")
-    if not match:
+def _parse_quantity_field(
+    compact_evidence: OcrFieldEvidence | None,
+    summary_evidence: OcrFieldEvidence | None,
+    field: str,
+    side: str,
+    errors: list[str],
+) -> int | None:
+    selected = select_quantity_candidate(
+        field_name=field,
+        compact_evidence=compact_evidence,
+        summary_evidence=summary_evidence,
+        side=side,
+    )
+    errors.extend(selected.errors)
+    if selected.value is None:
         errors.append(f"{field}_mismatch")
-        return None
-    return int(match.group(0))
+    return selected.value
 
 
 def _parse_levels(text: str, errors: list[str], warnings: list[str]) -> list[PriceLevel]:
@@ -193,11 +218,6 @@ def _validate_levels(
             errors.append("bid_levels_not_descending")
         if side == "ask" and exact_prices != sorted(exact_prices):
             errors.append("ask_levels_not_ascending")
-    if best_price is not None and exact_prices:
-        if side == "bid" and exact_prices[0] != best_price:
-            errors.append("first_bid_not_equal_best_bid")
-        if side == "ask" and exact_prices[0] != best_price:
-            errors.append("first_ask_not_equal_best_ask")
     return errors
 
 

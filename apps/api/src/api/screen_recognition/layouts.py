@@ -11,19 +11,25 @@ class LayoutUnsupportedError(ValueError):
 
 GAIJIN_MARKET_DESKTOP_V1 = LayoutProfile(
     name="gaijin-market-desktop-v1",
-    version="1.0.0",
+    version="1.2.0",
     min_width=900,
     min_height=600,
     min_aspect_ratio=Decimal("1.20"),
     max_aspect_ratio=Decimal("2.40"),
     rois={
-        "item_name": NormalizedRoi(Decimal("0.02"), Decimal("0.02"), Decimal("0.58"), Decimal("0.10")),
-        "best_bid": NormalizedRoi(Decimal("0.04"), Decimal("0.15"), Decimal("0.20"), Decimal("0.11")),
-        "best_ask": NormalizedRoi(Decimal("0.25"), Decimal("0.15"), Decimal("0.20"), Decimal("0.11")),
-        "total_bid_quantity": NormalizedRoi(Decimal("0.04"), Decimal("0.27"), Decimal("0.20"), Decimal("0.09")),
-        "total_ask_quantity": NormalizedRoi(Decimal("0.25"), Decimal("0.27"), Decimal("0.20"), Decimal("0.09")),
-        "bid_levels": NormalizedRoi(Decimal("0.02"), Decimal("0.36"), Decimal("0.46"), Decimal("0.56")),
-        "ask_levels": NormalizedRoi(Decimal("0.52"), Decimal("0.36"), Decimal("0.46"), Decimal("0.56")),
+        "item_name": NormalizedRoi(Decimal("0.13"), Decimal("0.015"), Decimal("0.42"), Decimal("0.085")),
+        "best_bid": NormalizedRoi(Decimal("0.225"), Decimal("0.735"), Decimal("0.145"), Decimal("0.065")),
+        "best_ask": NormalizedRoi(Decimal("0.745"), Decimal("0.735"), Decimal("0.145"), Decimal("0.065")),
+        "total_bid_quantity": NormalizedRoi(Decimal("0.18"), Decimal("0.64"), Decimal("0.09"), Decimal("0.075")),
+        "total_ask_quantity": NormalizedRoi(Decimal("0.68"), Decimal("0.64"), Decimal("0.09"), Decimal("0.075")),
+        "total_bid_quantity_summary": NormalizedRoi(
+            Decimal("0.10"), Decimal("0.585"), Decimal("0.25"), Decimal("0.14")
+        ),
+        "total_ask_quantity_summary": NormalizedRoi(
+            Decimal("0.60"), Decimal("0.585"), Decimal("0.25"), Decimal("0.14")
+        ),
+        "bid_levels": NormalizedRoi(Decimal("0.155"), Decimal("0.72"), Decimal("0.25"), Decimal("0.23")),
+        "ask_levels": NormalizedRoi(Decimal("0.695"), Decimal("0.72"), Decimal("0.25"), Decimal("0.23")),
     },
 )
 

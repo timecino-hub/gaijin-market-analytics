@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from api.screen_recognition.comparison import compare_contracts, summarize_results
+from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
 from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi
 from api.screen_recognition.ground_truth import GroundTruthInvalidError, load_ground_truth
 from api.screen_recognition.image_io import (
@@ -32,7 +33,15 @@ from api.screen_recognition.ocr_backend import (
     OcrInvocation,
     WindowsOcrRecognizer,
 )
-from api.screen_recognition.parser import parse_ocr_contract
+from api.screen_recognition.ocr_candidates import (
+    FIELD_OCR_PIPELINES,
+    PRICE_SELECTION_ORDER,
+    normalize_numeric_ocr_token,
+    parse_quantity_candidate,
+    select_price_candidate,
+    select_quantity_candidate,
+)
+from api.screen_recognition.parser import normalize_item_name, parse_ocr_contract
 from api.screen_recognition.runner import CutRunConfig, run_cut
 
 
@@ -133,6 +142,50 @@ def test_layout_profile_and_normalized_roi_conversion() -> None:
         validate_layout_match(profile, read_image_info_from_dimensions("tiny.png", 300, 200))
 
 
+def test_current_layout_rois_match_real_screenshot_dimensions() -> None:
+    profile = get_layout_profile("gaijin-market-desktop-v1")
+    dimensions = [(1743, 1024), (1318, 740), (1294, 763), (1302, 756)]
+    for width, height in dimensions:
+        info = read_image_info_from_dimensions("sample.png", width, height)
+        validate_layout_match(profile, info)
+        pixels = {name: roi_to_pixels(roi, info) for name, roi in profile.rois.items()}
+
+        for x, y, roi_width, roi_height in pixels.values():
+            assert x >= 0
+            assert y >= 0
+            assert x + roi_width <= width
+            assert y + roi_height <= height
+
+        item_x, item_y, _item_width, item_height = pixels["item_name"]
+        bid_x, bid_y, _bid_width, _bid_height = pixels["best_bid"]
+        ask_x, ask_y, _ask_width, _ask_height = pixels["best_ask"]
+        bid_qty_x, bid_qty_y, _bid_qty_width, _bid_qty_height = pixels["total_bid_quantity"]
+        ask_qty_x, ask_qty_y, _ask_qty_width, _ask_qty_height = pixels["total_ask_quantity"]
+        bid_summary_x, bid_summary_y, bid_summary_width, bid_summary_height = pixels[
+            "total_bid_quantity_summary"
+        ]
+        ask_summary_x, ask_summary_y, ask_summary_width, ask_summary_height = pixels[
+            "total_ask_quantity_summary"
+        ]
+
+        assert item_x > int(width * Decimal("0.10"))
+        assert item_y < int(height * Decimal("0.05"))
+        assert item_y + item_height < bid_qty_y
+        assert bid_y > int(height * Decimal("0.70"))
+        assert ask_y > int(height * Decimal("0.70"))
+        assert bid_x < int(width * Decimal("0.40"))
+        assert ask_x > int(width * Decimal("0.65"))
+        assert bid_qty_y < bid_y
+        assert ask_qty_y < ask_y
+        assert bid_summary_y < bid_y
+        assert ask_summary_y < ask_y
+        assert bid_summary_x < int(width * Decimal("0.40"))
+        assert ask_summary_x > int(width * Decimal("0.55"))
+        assert bid_summary_x + bid_summary_width < ask_summary_x
+        assert bid_summary_y + bid_summary_height <= bid_y
+        assert ask_summary_y + ask_summary_height <= ask_y
+
+
 def read_image_info_from_dimensions(filename: str, width: int, height: int):
     from api.screen_recognition.contracts import ImageInfo
 
@@ -200,10 +253,349 @@ def test_parser_distinguishes_aggregate_price_and_validates_market_cap() -> None
     assert "price_above_market_cap" in errors
 
 
+def test_parser_keeps_missing_quantities_null() -> None:
+    contract, _warnings, errors = parse_ocr_contract(
+        {
+            "item_name": evidence("Synthetic Alpha"),
+            "best_bid": evidence("12.34"),
+            "best_ask": evidence("13.00"),
+            "total_bid_quantity": evidence(""),
+            "total_ask_quantity": evidence(""),
+        },
+        item_key="admin-alpha",
+    )
+
+    assert contract.total_bid_quantity is None
+    assert contract.total_ask_quantity is None
+    assert "total_bid_quantity_mismatch" in errors
+    assert "total_ask_quantity_mismatch" in errors
+
+
+def test_field_specific_ocr_pipeline_contract_is_explicit_and_stable() -> None:
+    assert FIELD_OCR_PIPELINES["item_name"] != FIELD_OCR_PIPELINES["price"]
+    assert FIELD_OCR_PIPELINES["quantity"] != FIELD_OCR_PIPELINES["price"]
+    assert PRICE_SELECTION_ORDER == (
+        "independent_roi_agreement",
+        "repeated_candidate_agreement",
+        "single_explicit_decimal",
+        "single_integer_price",
+    )
+
+
+def test_current_config_sha_is_stable_and_order_independent() -> None:
+    config = CurrentCutConfig()
+    payload = config.to_json()
+    reordered = dict(reversed(list(payload.items())))
+    reordered["layout_profile"]["rois"] = dict(
+        reversed(list(reordered["layout_profile"]["rois"].items()))
+    )
+
+    assert config.sha256() == CurrentCutConfig().sha256()
+    assert stable_config_sha256(reordered) == config.sha256()
+    assert payload["layout_profile"]["name"] == "gaijin-market-desktop-v1"
+    assert payload["layout_profile"]["version"] == "1.2.0"
+
+
+def test_current_config_sha_changes_for_roi_and_pipeline_changes() -> None:
+    config = CurrentCutConfig()
+    original = config.sha256()
+    changed_roi = json.loads(json.dumps(config.to_json()))
+    changed_roi["layout_profile"]["rois"]["best_bid"]["x"] = "0.226"
+    changed_pipeline = json.loads(json.dumps(config.to_json()))
+    changed_pipeline["price_pipeline"].append("experimental_variant")
+
+    assert stable_config_sha256(changed_roi) != original
+    assert stable_config_sha256(changed_pipeline) != original
+
+
+def test_current_config_sha_excludes_run_metadata_and_private_inputs() -> None:
+    payload = CurrentCutConfig().to_json()
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    assert "run_id" not in canonical
+    assert "started_at" not in canonical
+    assert "sample_id" not in canonical
+    assert "ground_truth" not in canonical
+    assert "C:\\" not in canonical
+    assert ".png" not in canonical
+
+
+def test_price_candidate_selection_agreement_conflict_and_decimal_rules() -> None:
+    selected = select_price_candidate(
+        field_name="best_bid", scalar_text="903 ， 01", first_level_text="价格 (GJN) 903 、 01"
+    )
+    assert selected.value == Decimal("903.01")
+    assert selected.selection_reason == "independent_roi_agreement"
+
+    conflict = select_price_candidate(
+        field_name="best_bid", scalar_text="903.01", first_level_text="价格 (GJN) 904.01"
+    )
+    assert conflict.value is None
+    assert "ocr_candidate_ambiguous" in conflict.errors
+
+    single_decimal = select_price_candidate(field_name="best_ask", scalar_text="130.00")
+    assert single_decimal.value == Decimal("130.00")
+    assert single_decimal.selection_reason == "single_explicit_decimal"
+
+    integer_price = select_price_candidate(field_name="best_bid", scalar_text="50")
+    assert integer_price.value == Decimal("50")
+    assert integer_price.selection_reason == "single_integer_price"
+
+    unconfirmed = select_price_candidate(field_name="best_ask", scalar_text="13000")
+    assert unconfirmed.value is None
+    assert {"price_ocr_invalid", "best_ask_missing"}.issubset(set(unconfirmed.errors))
+
+    table = select_price_candidate(
+        field_name="best_bid",
+        scalar_text="50 、 00",
+        first_level_text="数量 1 1 1 2 价格 (GJN) 50 、 00 44 、 67 44 、 60",
+    )
+    assert table.value == Decimal("50.00")
+    assert table.selection_reason == "independent_roi_agreement"
+
+
+def test_numeric_ocr_repairs_only_in_numeric_context() -> None:
+    token, corrections, _explicit = normalize_numeric_ocr_token("I2O，5O")
+    assert token == "120.50"
+    assert "numeric_confusable_repaired" in corrections
+
+    text_token, text_corrections, _explicit = normalize_numeric_ocr_token("SOLD OUT")
+    assert text_token == "SOLDOUT"
+    assert "numeric_confusable_repaired" not in text_corrections
+
+
+def test_quantity_candidate_uses_single_summary_integer_only() -> None:
+    assert parse_quantity_candidate("172")[0] == 172
+    value, errors = parse_quantity_candidate("数量 1 1 1 价格 51.99")
+    assert value is None
+    assert "quantity_ocr_invalid" in errors
+
+
+def test_quantity_candidate_uses_left_and_right_label_anchors() -> None:
+    bid = select_quantity_candidate(
+        field_name="total_bid_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_bid_quantity_summary",
+            line(
+                "正在购买 121",
+                box=(0, 0, 180, 30),
+                words=[word("正在购买", 0, 0, 90, 30), word("121", 110, 0, 50, 30)],
+            ),
+        ),
+        side="bid",
+    )
+    ask = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line(
+                "正在出售 172",
+                box=(0, 0, 180, 30),
+                words=[word("正在出售", 0, 0, 90, 30), word("172", 120, 0, 50, 30)],
+            ),
+        ),
+        side="ask",
+    )
+
+    assert bid.value == 121
+    assert bid.selection_reason == "single_label_anchored_quantity"
+    assert ask.value == 172
+    assert ask.selection_reason == "single_label_anchored_quantity"
+
+
+def test_quantity_candidate_allows_number_below_label() -> None:
+    selected = select_quantity_candidate(
+        field_name="total_bid_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_bid_quantity_summary",
+            line("正在购买", order=0, box=(0, 0, 90, 30), words=[word("正在购买", 0, 0, 90, 30)]),
+            line("251", order=1, box=(20, 38, 55, 30), words=[word("251", 20, 38, 55, 30)]),
+        ),
+        side="bid",
+    )
+
+    assert selected.value == 251
+
+
+def test_quantity_candidate_rejects_table_prices_and_level_quantities() -> None:
+    price_like = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line(
+                "正在出售 51.99 GJN",
+                words=[word("正在出售", 0, 0, 90, 30), word("51", 100, 0, 30, 30)],
+            ),
+        ),
+        side="ask",
+    )
+    assert price_like.value is None
+    assert "quantity_candidate_looks_like_price" in price_like.errors
+
+    table_level = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line("价格 (GJN) 51.99", order=0, words=[word("51", 90, 0, 30, 30)]),
+            line("1", order=1, words=[word("1", 20, 40, 10, 30)]),
+        ),
+        side="ask",
+    )
+    assert table_level.value is None
+    assert "quantity_label_not_detected" in table_level.errors
+
+
+def test_quantity_sources_agree_conflict_and_compact_artifact_handling() -> None:
+    agreed = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence("172"),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line("正在出售 172", words=[word("正在出售", 0, 0, 90, 30), word("172", 100, 0, 50, 30)]),
+        ),
+        side="ask",
+    )
+    assert agreed.value == 172
+    assert agreed.selection_reason == "independent_quantity_source_agreement"
+
+    conflict = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence("172"),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line("正在出售 173", words=[word("正在出售", 0, 0, 90, 30), word("173", 100, 0, 50, 30)]),
+        ),
+        side="ask",
+    )
+    assert conflict.value is None
+    assert "quantity_candidate_ambiguous" in conflict.errors
+
+    artifact = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence("172 力 5"),
+        summary_evidence=None,
+        side="ask",
+    )
+    assert artifact.value == 172
+
+
+def test_quantity_summary_price_tail_does_not_override_compact_quantity() -> None:
+    selected = select_quantity_candidate(
+        field_name="total_ask_quantity",
+        compact_evidence=evidence("52"),
+        summary_evidence=quantity_evidence(
+            "total_ask_quantity_summary",
+            line("正在出售", order=0, words=[word("正在出售", 0, 0, 90, 30)]),
+            line("力 135 O 0", order=1, words=[word("力", 0, 40, 20, 30), word("135", 70, 40, 60, 30)]),
+        ),
+        side="ask",
+    )
+
+    assert selected.value == 52
+
+
+def test_quantity_candidate_missing_label_and_ocr_failure_do_not_return_zero() -> None:
+    selected = select_quantity_candidate(
+        field_name="total_bid_quantity",
+        compact_evidence=evidence(""),
+        summary_evidence=quantity_evidence(
+            "total_bid_quantity_summary",
+            line("没有要出售", words=[word("没有", 0, 0, 40, 30)]),
+        ),
+        side="bid",
+    )
+
+    assert selected.value is None
+    assert "quantity_label_not_detected" in selected.errors
+
+
+def test_parser_ocr_zero_stays_at_ocr_layer_but_manual_zero_domain_rule_remains() -> None:
+    contract, _warnings, errors = parse_ocr_contract(
+        {
+            "item_name": evidence("Synthetic Alpha"),
+            "best_bid": evidence("价格 (GJN) 0 ℃ 0"),
+            "best_ask": evidence("13.00"),
+            "total_bid_quantity": evidence("1"),
+            "total_ask_quantity": evidence("1"),
+        },
+        item_key="admin-alpha",
+    )
+    assert contract.best_bid is None
+    assert "price_ocr_invalid" in errors
+    assert "non_positive_price" not in errors
+
+    contract, _warnings, errors = parse_ocr_contract(
+        {
+            "item_name": evidence("Synthetic Alpha"),
+            "best_bid": evidence("0"),
+            "best_ask": evidence("13.00"),
+        },
+        item_key="admin-alpha",
+    )
+    assert contract.best_bid == Decimal("0")
+    assert "non_positive_price" in errors
+
+
+def test_item_name_safe_normalization_and_no_edit_distance_match() -> None:
+    assert normalize_item_name("测 试 Mk.3D （ 甲 国 ）") == "测试 Mk.3D(甲国)"
+    expected = valid_row(item_name="Synthetic-10A（甲国）")
+    recognized = normalize_item_name("Synthetic-IOA（甲国）")
+    assert normalize_item_name(expected["item_name"]) != recognized
+
+
 def evidence(text: str):
     from api.screen_recognition.contracts import OcrFieldEvidence
 
     return OcrFieldEvidence(field_name="field", raw_text=text, confidence=None)
+
+
+def quantity_evidence(field_name: str, *lines: object):
+    from api.screen_recognition.contracts import OcrFieldEvidence
+
+    return OcrFieldEvidence(
+        field_name=field_name,
+        raw_text=" ".join(getattr(line, "text", "") for line in lines),
+        confidence=None,
+        lines=tuple(lines),
+    )
+
+
+def line(
+    text: str,
+    order: int = 0,
+    box: tuple[int, int, int, int] = (0, 0, 200, 40),
+    words: list[object] | None = None,
+):
+    from api.screen_recognition.contracts import OcrLineEvidence
+
+    return OcrLineEvidence(
+        text=text,
+        order=order,
+        bounding_box=ocr_box(*box),
+        words=tuple(words or []),
+    )
+
+
+def word(text: str, x: int, y: int, width: int, height: int):
+    from api.screen_recognition.contracts import OcrWordEvidence
+
+    return OcrWordEvidence(text=text, order=0, bounding_box=ocr_box(x, y, width, height))
+
+
+def ocr_box(x: int, y: int, width: int, height: int):
+    from api.screen_recognition.contracts import OcrBoundingBox
+
+    return OcrBoundingBox(
+        x=Decimal(x),
+        y=Decimal(y),
+        width=Decimal(width),
+        height=Decimal(height),
+    )
 
 
 def test_sidecar_runner_generates_parser_only_outputs_without_database_or_csv(tmp_path: Path) -> None:
@@ -230,7 +622,16 @@ def test_sidecar_runner_generates_parser_only_outputs_without_database_or_csv(tm
     assert result.run_metadata["database_access"] is False
     assert result.run_metadata["network_access"] is False
     assert result.run_metadata["candidate_csv_supported"] is False
+    assert result.run_metadata["config_sha256"] == stable_config_sha256(
+        result.run_metadata["current_config"]
+    )
+    assert result.run_metadata["current_config"]["layout_profile"]["version"] == "1.2.0"
+    assert len(result.run_metadata["config_sha256"]) == 64
     assert not (output / "candidate_import.csv").exists()
+    effective_config = json.loads(
+        (output / "effective_current_config.json").read_text(encoding="utf-8")
+    )
+    assert effective_config == result.run_metadata["current_config"]
     assert (output / "summary.json").is_file()
     assert (output / "report.md").is_file()
     assert result.summary["passed"] == 1
