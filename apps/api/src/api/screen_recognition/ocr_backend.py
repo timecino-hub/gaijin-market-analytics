@@ -30,6 +30,10 @@ class OcrBackendNotConfiguredError(OcrBackendError):
     pass
 
 
+class OcrBackendTimeoutError(OcrBackendError):
+    pass
+
+
 @dataclass(frozen=True)
 class OcrInvocation:
     image_path: Path
@@ -113,24 +117,20 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
             input_path = Path(temp_dir) / "input.json"
             output_path = Path(temp_dir) / "output.json"
             dump_json_file(input_path, input_payload)
-            completed = subprocess.run(
-                [
-                    "powershell.exe",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script_path),
-                    "-InputJson",
-                    str(input_path),
-                    "-OutputJson",
-                    str(output_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_seconds,
-            )
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+                "-InputJson",
+                str(input_path),
+                "-OutputJson",
+                str(output_path),
+            ]
+            completed = _run_windows_helper(command, timeout_seconds=self._timeout_seconds)
             if completed.returncode != 0:
                 stderr = (completed.stderr or "").strip().splitlines()
                 reason = stderr[-1] if stderr else "windows-ocr failed"
@@ -162,14 +162,54 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         )
 
 
-def get_recognizer(name: str) -> ScreenshotRecognizer:
+def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecognizer:
     if name == "windows-ocr":
-        return WindowsOcrRecognizer()
+        return WindowsOcrRecognizer(timeout_seconds=timeout_seconds)
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
         return NotConfiguredRecognizer()
     raise OcrBackendNotConfiguredError(f"Unknown OCR backend: {name}")
+
+
+def _run_windows_helper(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+        raise OcrBackendTimeoutError(f"windows-ocr timed out after {timeout_seconds} seconds.") from exc
+    except KeyboardInterrupt:
+        _terminate_process_tree(process)
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        return
+    process.kill()
 
 
 def windows_ocr_preprocessing_metadata() -> dict[str, Any]:

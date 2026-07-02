@@ -8,6 +8,7 @@ import subprocess
 import sys
 import zlib
 import zipfile
+from io import StringIO
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from PIL import Image
 
 from api.screen_recognition.comparison import compare_contracts, summarize_results
 from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
-from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi
+from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi, OcrResult
 from api.screen_recognition.evaluate import PRIVATE_FIXTURE_MESSAGE, evaluate_private_fixtures
 from api.screen_recognition.ground_truth import GroundTruthInvalidError, load_ground_truth
 from api.screen_recognition.image_io import (
@@ -32,8 +33,10 @@ from api.screen_recognition.layouts import (
 )
 from api.screen_recognition.ocr_backend import (
     OcrBackendError,
+    OcrBackendTimeoutError,
     OcrInvocation,
     WindowsOcrRecognizer,
+    _run_windows_helper,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -949,6 +952,210 @@ def test_private_evaluation_reports_empty_fixture_directory_without_private_path
     assert report["private_paths_recorded"] is False
     assert report["database_access"] is False
     assert "Authorization" not in report_path.read_text(encoding="utf-8")
+
+
+def write_private_fixture(root: Path, name: str = "sample-a", *, browser: str = "edge", zoom: str = "0.8") -> Path:
+    fixture_dir = root / browser / zoom
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    image = fixture_dir / f"{name}.png"
+    write_png(image)
+    image.with_suffix(".json").write_text(
+        json.dumps({"browser": browser, "browser_zoom": zoom, "sample_label": name}),
+        encoding="utf-8",
+    )
+    return image
+
+
+def test_private_evaluation_help_does_not_initialize_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "get_recognizer",
+        lambda *_args, **_kwargs: pytest.fail("help should not initialize OCR"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        evaluate_module.main(["--help"])
+
+    assert exc.value.code == 0
+
+
+def test_private_evaluation_dry_run_skips_ocr_and_ignores_report_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir)
+    (input_dir / "report.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        evaluate_module,
+        "get_recognizer",
+        lambda *_args, **_kwargs: pytest.fail("dry-run should not initialize OCR"),
+    )
+
+    report = evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="windows-ocr",
+        dry_run=True,
+        verbose=True,
+        progress_stream=StringIO(),
+    )
+
+    assert report["dry_run"] is True
+    assert report["summary"]["fixture_count"] == 1
+    assert report["summary"]["metadata_count"] == 1
+    assert report["summary"]["processed_count"] == 1
+    assert report["results"][0]["status"] == "dry_run"
+    assert report["results"][0]["ocr_skipped"] is True
+    assert report["results"][0]["requires_review"] is False
+    assert "filename" not in report["results"][0]
+    assert "item_name_raw" not in report["results"][0]
+    assert not (input_dir / "report.json.tmp").exists()
+
+
+def test_private_evaluation_limit_and_filters_process_one_fixture(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a", browser="edge", zoom="0.8")
+    write_private_fixture(input_dir, "sample-b", browser="chrome", zoom="1.0")
+
+    report = evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        limit=1,
+        only_browser="edge",
+        only_zoom="0.8",
+        only_sample="sample-a",
+        progress_stream=StringIO(),
+    )
+
+    assert report["summary"]["fixture_count"] == 1
+    assert report["summary"]["processed_count"] == 1
+    assert report["results"][0]["browser"] == "edge"
+    assert report["results"][0]["declared_zoom"] == "0.8"
+    assert report["results"][0]["sample_label"] == "sample-a"
+
+
+def test_private_evaluation_progress_prints_flush(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    calls: list[dict[str, object]] = []
+
+    def fake_print(*_args: object, **kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(evaluate_module, "print", fake_print, raising=False)
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir)
+
+    evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        quiet=False,
+        verbose=True,
+        progress_stream=StringIO(),
+    )
+
+    assert calls
+    assert all(call.get("flush") is True for call in calls)
+
+
+def test_private_evaluation_ocr_timeout_continues_and_fail_fast(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class TimeoutThenSuccessRecognizer:
+        backend_name = "fake"
+        calls = 0
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise OcrBackendTimeoutError("timeout")
+            return OcrResult(backend_name="fake", backend_version="1", fields={}, warnings=())
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    write_private_fixture(input_dir, "sample-b")
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: TimeoutThenSuccessRecognizer())
+
+    report = evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        progress_stream=StringIO(),
+    )
+
+    assert report["summary"]["processed_count"] == 2
+    assert report["results"][0]["error_code"] == "ocr_timeout"
+    assert report["results"][0]["requires_review"] is True
+
+    fail_fast_report = evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report-fast.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        fail_fast=True,
+        progress_stream=StringIO(),
+    )
+
+    assert fail_fast_report["summary"]["processed_count"] == 1
+    assert fail_fast_report["results"][0]["error_code"] == "ocr_timeout"
+
+
+def test_private_evaluation_ctrl_c_writes_partial_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class InterruptedRecognizer:
+        backend_name = "fake"
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            raise KeyboardInterrupt
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    write_private_fixture(input_dir, "sample-b")
+    output_path = input_dir / "report.json"
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: InterruptedRecognizer())
+
+    with pytest.raises(evaluate_module.EvaluationInterrupted):
+        evaluate_module.evaluate_private_fixtures(
+            input_dir=input_dir,
+            output_path=output_path,
+            layout_profile_name="gaijin-market-desktop-v1",
+            ocr_backend_name="fake",
+            progress_stream=StringIO(),
+        )
+
+    partial = json.loads((input_dir / "report.partial.json").read_text(encoding="utf-8"))
+    assert partial["complete"] is False
+    assert partial["interrupted"] is True
+    assert partial["summary"]["processed_count"] == 0
+    assert not output_path.exists()
+
+
+def test_windows_helper_timeout_raises_and_process_exits() -> None:
+    with pytest.raises(OcrBackendTimeoutError):
+        _run_windows_helper(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            timeout_seconds=1,
+        )
 
 
 def test_private_artifacts_are_gitignored() -> None:
