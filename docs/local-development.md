@@ -4,8 +4,8 @@
 
 - Python 3.12
 - uv
-- Node.js 22 LTS
-- pnpm
+- Node.js 24.18.0
+- pnpm 11.7.0
 - Docker with Docker Compose
 
 ## Environment
