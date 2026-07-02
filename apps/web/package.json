@@ -2,8 +2,9 @@
   "name": "@gaijin-market-analytics/web",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
-    "node": "22.x",
+    "node": "24.x",
     "pnpm": ">=11"
   },
   "scripts": {
