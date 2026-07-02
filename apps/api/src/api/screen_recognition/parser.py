@@ -202,7 +202,7 @@ def _validate_prices(values: list[Decimal | None]) -> list[str]:
 def _validate_price(value: Decimal | None, errors: list[str]) -> None:
     if value is None:
         return
-    if value <= 0:
+    if value < Decimal("0.01"):
         errors.append("non_positive_price")
     if value > MARKET_PRICE_CAP:
         errors.append("price_above_market_cap")

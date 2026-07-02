@@ -19,6 +19,7 @@ from api.screen_recognition.contracts import (
     OcrWordEvidence,
 )
 from api.screen_recognition.json_util import dump_json_file
+from api.screen_recognition.preprocessing import preprocessing_metadata
 
 
 class OcrBackendError(RuntimeError):
@@ -172,16 +173,9 @@ def get_recognizer(name: str) -> ScreenshotRecognizer:
 
 
 def windows_ocr_preprocessing_metadata() -> dict[str, Any]:
-    return {
-        "crop_rois": True,
-        "scale_factor": 3,
-        "grayscale": False,
-        "contrast_enhancement": False,
-        "binarization": False,
-        "sharpen": False,
-        "source_image_modified": False,
-        "runtime_model_download": False,
-    }
+    metadata = preprocessing_metadata()
+    metadata["selection_rule"] = "field_format_then_non_empty_without_confidence"
+    return metadata
 
 
 def _parse_sidecar_text(content: str) -> dict[str, str]:

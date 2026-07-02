@@ -95,6 +95,126 @@ function RecognizeImage($Path) {
   }
 }
 
+function GetPreprocessingVariants($Payload) {
+  $variants = @()
+  if ($Payload.preprocessing -and $Payload.preprocessing.variants) {
+    foreach ($variant in $Payload.preprocessing.variants) {
+      $variants += $variant
+    }
+  }
+  if ($variants.Count -eq 0) {
+    $variants += [pscustomobject]@{
+      name = "gray_3x"
+      scale_factor = 3
+      grayscale = $true
+      autocontrast = $false
+      sharpen = $false
+      binary_threshold = $null
+      invert = $false
+    }
+  }
+  return @($variants | Select-Object -First 5)
+}
+
+function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+  $scale = [int]$Variant.scale_factor
+  if ($scale -lt 1) { $scale = 1 }
+  $targetWidth = [Math]::Max(1, $Width * $scale)
+  $targetHeight = [Math]::Max(1, $Height * $scale)
+  $maxPixels = 2000000
+  if ($targetWidth * $targetHeight -gt $maxPixels) {
+    $ratio = [Math]::Sqrt($maxPixels / ($targetWidth * $targetHeight))
+    $targetWidth = [Math]::Max(1, [int][Math]::Floor($targetWidth * $ratio))
+    $targetHeight = [Math]::Max(1, [int][Math]::Floor($targetHeight * $ratio))
+  }
+  $crop = New-Object System.Drawing.Bitmap $targetWidth, $targetHeight
+  $graphics = [System.Drawing.Graphics]::FromImage($crop)
+  $graphics.Clear([System.Drawing.Color]::White)
+  $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+  $destRect = New-Object System.Drawing.Rectangle 0, 0, $targetWidth, $targetHeight
+  $srcRect = New-Object System.Drawing.Rectangle $X, $Y, $Width, $Height
+  $graphics.DrawImage($Source, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+  $graphics.Dispose()
+  ApplyPixelPreprocessing $crop $Variant
+  return $crop
+}
+
+function ApplyPixelPreprocessing($Bitmap, $Variant) {
+  $needsPixels = [bool]$Variant.autocontrast -or $null -ne $Variant.binary_threshold -or [bool]$Variant.invert
+  if (-not $needsPixels) {
+    return
+  }
+  $threshold = $null
+  if ($null -ne $Variant.binary_threshold) {
+    $threshold = [int]$Variant.binary_threshold
+  }
+  $minGray = 255
+  $maxGray = 0
+  if ([bool]$Variant.autocontrast) {
+    for ($py = 0; $py -lt $Bitmap.Height; $py++) {
+      for ($px = 0; $px -lt $Bitmap.Width; $px++) {
+        $color = $Bitmap.GetPixel($px, $py)
+        $gray = [int](($color.R * 0.299) + ($color.G * 0.587) + ($color.B * 0.114))
+        if ($gray -lt $minGray) { $minGray = $gray }
+        if ($gray -gt $maxGray) { $maxGray = $gray }
+      }
+    }
+  }
+  for ($py = 0; $py -lt $Bitmap.Height; $py++) {
+    for ($px = 0; $px -lt $Bitmap.Width; $px++) {
+      $color = $Bitmap.GetPixel($px, $py)
+      $gray = [int](($color.R * 0.299) + ($color.G * 0.587) + ($color.B * 0.114))
+      if ([bool]$Variant.autocontrast -and $maxGray -gt $minGray) {
+        $gray = [int][Math]::Round((($gray - $minGray) * 255.0) / ($maxGray - $minGray))
+      }
+      if ($null -ne $threshold) {
+        if ($gray -ge $threshold) { $gray = 255 } else { $gray = 0 }
+      }
+      if ([bool]$Variant.invert) {
+        $gray = 255 - $gray
+      }
+      $Bitmap.SetPixel($px, $py, [System.Drawing.Color]::FromArgb($gray, $gray, $gray))
+    }
+  }
+}
+
+function RegionHasInk($Bitmap, [int]$X, [int]$Y, [int]$Width, [int]$Height) {
+  $stepX = [Math]::Max(1, [int][Math]::Floor($Width / 32))
+  $stepY = [Math]::Max(1, [int][Math]::Floor($Height / 32))
+  $right = [Math]::Min($Bitmap.Width, $X + $Width)
+  $bottom = [Math]::Min($Bitmap.Height, $Y + $Height)
+  for ($py = $Y; $py -lt $bottom; $py += $stepY) {
+    for ($px = $X; $px -lt $right; $px += $stepX) {
+      $color = $Bitmap.GetPixel($px, $py)
+      if ($color.R -lt 245 -or $color.G -lt 245 -or $color.B -lt 245) {
+        return $true
+      }
+    }
+  }
+  return $false
+}
+
+function ScoreRecognizedText([string]$FieldName, [string]$Text) {
+  $clean = if ($Text) { $Text.Trim() } else { "" }
+  if ($clean.Length -eq 0) {
+    return 0
+  }
+  $score = 10
+  if ($FieldName -match "bid|ask|price|levels") {
+    if ($clean -match "\d+[\.,]\d{1,2}") { $score += 40 }
+    elseif ($clean -match "\d+") { $score += 20 }
+    if ($clean -match "[A-Za-z\u4e00-\u9fff]") { $score -= 5 }
+  } elseif ($FieldName -match "quantity") {
+    if ($clean -match "\b\d+\b") { $score += 30 }
+    if ($clean -match "\d+[\.,]\d+") { $score -= 15 }
+  } elseif ($clean.Length -gt 2) {
+    $score += 20
+  }
+  return $score
+}
+
 $inputPayload = Get-Content -Raw -Encoding UTF8 $InputJson | ConvertFrom-Json
 $imagePath = [string]$inputPayload.image_path
 $debugDir = $inputPayload.debug_artifacts_dir
@@ -103,6 +223,7 @@ $fields = @{}
 $warnings = New-Object System.Collections.Generic.List[string]
 $warnings.Add("ocr_confidence_unavailable")
 $tempFiles = New-Object System.Collections.Generic.List[string]
+$preprocessingVariants = GetPreprocessingVariants $inputPayload
 
 try {
   foreach ($property in $inputPayload.rois.PSObject.Properties) {
@@ -115,40 +236,67 @@ try {
     if ($x + $w -gt $source.Width) { $w = $source.Width - $x }
     if ($y + $h -gt $source.Height) { $h = $source.Height - $y }
 
-    $scale = 3
-    $crop = New-Object System.Drawing.Bitmap ($w * $scale), ($h * $scale)
-    $graphics = [System.Drawing.Graphics]::FromImage($crop)
-    $graphics.Clear([System.Drawing.Color]::White)
-    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $destRect = New-Object System.Drawing.Rectangle 0, 0, ($w * $scale), ($h * $scale)
-    $srcRect = New-Object System.Drawing.Rectangle $x, $y, $w, $h
-    $graphics.DrawImage($source, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
-    $graphics.Dispose()
-
-    if ($debugDir) {
-      [System.IO.Directory]::CreateDirectory([string]$debugDir) | Out-Null
-      $cropPath = Join-Path ([string]$debugDir) ($fieldName + ".png")
-    } else {
-      $cropPath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString("N") + ".png")
-      $tempFiles.Add($cropPath)
+    if (-not (RegionHasInk $source $x $y $w $h)) {
+      $fields[$fieldName] = @{
+        raw_text = ""
+        confidence = $null
+        confidence_source = "unavailable"
+        bounding_box = @{
+          x = "0"
+          y = "0"
+          width = [string][decimal]$w
+          height = [string][decimal]$h
+        }
+        lines = @()
+        warnings = @("ocr_confidence_unavailable", "preprocessing_pipeline:blank_roi_fast_path")
+      }
+      continue
     }
-    $crop.Save($cropPath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $crop.Dispose()
-    $recognized = RecognizeImage $cropPath
+
+    $best = $null
+    $bestScore = -9999
+    foreach ($variant in $preprocessingVariants) {
+      $crop = NewCropBitmap $source $x $y $w $h $variant
+      $variantName = [string]$variant.name
+      if ([string]::IsNullOrWhiteSpace($variantName)) { $variantName = "unnamed" }
+      if ($debugDir) {
+        [System.IO.Directory]::CreateDirectory([string]$debugDir) | Out-Null
+        $cropPath = Join-Path ([string]$debugDir) ($fieldName + "." + $variantName + ".png")
+      } else {
+        $cropPath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString("N") + ".png")
+        $tempFiles.Add($cropPath)
+      }
+      $crop.Save($cropPath, [System.Drawing.Imaging.ImageFormat]::Png)
+      $cropWidth = $crop.Width
+      $cropHeight = $crop.Height
+      $crop.Dispose()
+      $recognized = RecognizeImage $cropPath
+      $score = ScoreRecognizedText $fieldName $recognized.text
+      if ($score -gt $bestScore) {
+        $bestScore = $score
+        $best = @{
+          recognized = $recognized
+          pipeline_name = $variantName
+          width = $cropWidth
+          height = $cropHeight
+        }
+      }
+    }
+    if ($null -eq $best) {
+      throw "No OCR preprocessing pipeline produced a result."
+    }
     $fields[$fieldName] = @{
-      raw_text = $recognized.text
+      raw_text = $best.recognized.text
       confidence = $null
       confidence_source = "unavailable"
       bounding_box = @{
         x = "0"
         y = "0"
-        width = [string][decimal]($w * $scale)
-        height = [string][decimal]($h * $scale)
+        width = [string][decimal]($best.width)
+        height = [string][decimal]($best.height)
       }
-      lines = @($recognized.lines)
-      warnings = @("ocr_confidence_unavailable")
+      lines = @($best.recognized.lines)
+      warnings = @("ocr_confidence_unavailable", ("preprocessing_pipeline:" + $best.pipeline_name))
     }
   }
 }

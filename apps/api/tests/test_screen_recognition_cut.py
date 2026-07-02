@@ -12,10 +12,12 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from api.screen_recognition.comparison import compare_contracts, summarize_results
 from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
 from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi
+from api.screen_recognition.evaluate import PRIVATE_FIXTURE_MESSAGE, evaluate_private_fixtures
 from api.screen_recognition.ground_truth import GroundTruthInvalidError, load_ground_truth
 from api.screen_recognition.image_io import (
     ImageReadError,
@@ -42,6 +44,12 @@ from api.screen_recognition.ocr_candidates import (
     select_quantity_candidate,
 )
 from api.screen_recognition.parser import normalize_item_name, parse_ocr_contract
+from api.screen_recognition.preprocessing import (
+    DEFAULT_OCR_PREPROCESSING_VARIANTS,
+    MAX_NORMALIZED_ROI_PIXELS,
+    build_ocr_preprocessing_variants,
+)
+from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 from api.screen_recognition.runner import CutRunConfig, run_cut
 
 
@@ -184,6 +192,51 @@ def test_current_layout_rois_match_real_screenshot_dimensions() -> None:
         assert bid_summary_x + bid_summary_width < ask_summary_x
         assert bid_summary_y + bid_summary_height <= bid_y
         assert ask_summary_y + ask_summary_height <= ask_y
+
+
+def test_roi_validation_clamps_bounds_and_rejects_bad_regions() -> None:
+    info = read_image_info_from_dimensions("sample.png", 1200, 800)
+    clamped = resolve_roi_pixels(
+        NormalizedRoi(Decimal("0.9"), Decimal("0.9"), Decimal("0.2"), Decimal("0.2")),
+        info,
+    )
+    assert clamped.as_tuple() == (1080, 720, 120, 80)
+    assert clamped.warnings == ("roi_out_of_bounds_clamped",)
+
+    with pytest.raises(RoiValidationError) as tiny:
+        resolve_roi_pixels(
+            NormalizedRoi(Decimal("0.1"), Decimal("0.1"), Decimal("0.001"), Decimal("0.001")),
+            info,
+        )
+    assert tiny.value.code == "roi_too_small"
+
+    with pytest.raises(RoiValidationError) as extreme:
+        resolve_roi_pixels(
+            NormalizedRoi(Decimal("0.1"), Decimal("0.1"), Decimal("0.001"), Decimal("0.8")),
+            info,
+            min_width=1,
+            min_height=1,
+        )
+    assert extreme.value.code == "roi_aspect_ratio_invalid"
+
+
+def test_ocr_preprocessing_variants_are_bounded_across_synthetic_scales() -> None:
+    base = Image.new("RGB", (160, 48), "white")
+    scales = (Decimal("0.80"), Decimal("0.90"), Decimal("1.00"), Decimal("1.10"), Decimal("1.25"))
+    for scale in scales:
+        scaled = base.resize(
+            (
+                int((Decimal(base.width) * scale).to_integral_value()),
+                int((Decimal(base.height) * scale).to_integral_value()),
+            )
+        )
+        variants = build_ocr_preprocessing_variants(scaled)
+        assert tuple(variants) == tuple(variant.name for variant in DEFAULT_OCR_PREPROCESSING_VARIANTS)
+        assert len(variants) <= 5
+        for image in variants.values():
+            assert image.width > 0
+            assert image.height > 0
+            assert image.width * image.height <= MAX_NORMALIZED_ROI_PIXELS
 
 
 def read_image_info_from_dimensions(filename: str, width: int, height: int):
@@ -343,7 +396,18 @@ def test_price_candidate_selection_agreement_conflict_and_decimal_rules() -> Non
 
     unconfirmed = select_price_candidate(field_name="best_ask", scalar_text="13000")
     assert unconfirmed.value is None
-    assert {"price_ocr_invalid", "best_ask_missing"}.issubset(set(unconfirmed.errors))
+    assert {"price_decimal_unconfirmed", "price_ocr_invalid", "best_ask_missing"}.issubset(set(unconfirmed.errors))
+    assert unconfirmed.candidates[0].suggested_decimal_value == Decimal("130.00")
+    assert unconfirmed.candidates[0].suggestion_reason == "possible_missing_decimal_point"
+
+    missing_decimal = select_price_candidate(field_name="best_bid", scalar_text="1810")
+    assert missing_decimal.value is None
+    assert "price_decimal_unconfirmed" in missing_decimal.errors
+    assert missing_decimal.candidates[0].suggested_decimal_value == Decimal("18.10")
+
+    too_many_decimals = select_price_candidate(field_name="best_bid", scalar_text="12.345")
+    assert too_many_decimals.value is None
+    assert "price_ocr_invalid" in too_many_decimals.errors
 
     table = select_price_candidate(
         field_name="best_bid",
@@ -868,6 +932,28 @@ def test_no_network_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
         )
     )
     assert result.run_metadata["network_access"] is False
+
+
+def test_private_evaluation_reports_empty_fixture_directory_without_private_paths(tmp_path: Path) -> None:
+    report_path = tmp_path / "artifacts" / "private" / "screen-recognition-evaluation" / "report.json"
+    report = evaluate_private_fixtures(
+        input_dir=tmp_path / "artifacts" / "private" / "screen-recognition-evaluation",
+        output_path=report_path,
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        pretty=True,
+    )
+
+    assert report["message"] == PRIVATE_FIXTURE_MESSAGE
+    assert report["summary"]["fixture_count"] == 0
+    assert report["private_paths_recorded"] is False
+    assert report["database_access"] is False
+    assert "Authorization" not in report_path.read_text(encoding="utf-8")
+
+
+def test_private_artifacts_are_gitignored() -> None:
+    root = Path(__file__).resolve().parents[3]
+    assert "artifacts/private/" in (root / ".gitignore").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="windows-ocr requires Windows")

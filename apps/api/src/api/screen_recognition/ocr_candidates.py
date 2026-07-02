@@ -58,6 +58,9 @@ class OcrPriceCandidate:
     selected: bool = False
     correction_codes: tuple[str, ...] = ()
     rejection_reason: str | None = None
+    suggested_decimal_value: Decimal | None = None
+    suggestion_reason: str | None = None
+    suggestion_confidence: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,8 @@ def select_price_candidate(
     valid = [candidate for candidate in candidates if candidate.decimal_value is not None]
     if not valid:
         errors = [f"{field_name}_missing"]
+        if any(candidate.rejection_reason == "price_decimal_unconfirmed" for candidate in candidates):
+            errors.append("price_decimal_unconfirmed")
         if any(candidate.rejection_reason for candidate in candidates):
             errors.append("price_ocr_invalid")
         return SelectedPriceCandidate(value=None, candidates=candidates, errors=tuple(errors))
@@ -265,6 +270,9 @@ def _selected(
             selected=candidate.decimal_value == value,
             correction_codes=candidate.correction_codes,
             rejection_reason=candidate.rejection_reason,
+            suggested_decimal_value=candidate.suggested_decimal_value,
+            suggestion_reason=candidate.suggestion_reason,
+            suggestion_confidence=candidate.suggestion_confidence,
         )
         for candidate in candidates
     )
@@ -632,6 +640,19 @@ def _candidates_from_text(
         if match:
             search_text = search_text[match.end() :]
     normalized, corrections, contains_decimal = normalize_numeric_ocr_token(search_text)
+    if re.fullmatch(r"\d+\.\d{3,}", normalized) or re.fullmatch(r"\d+\.\d+\.", normalized):
+        return [
+            OcrPriceCandidate(
+                pipeline_id=pipeline_id,
+                source=source,
+                raw_text=raw_text,
+                normalized_token=None,
+                decimal_value=None,
+                contains_explicit_decimal=True,
+                correction_codes=corrections,
+                rejection_reason="price_ocr_invalid",
+            )
+        ]
     tokens = _PRICE_TOKEN_RE.findall(normalized)
     if not tokens:
         return [
@@ -651,8 +672,18 @@ def _candidates_from_text(
         token_has_decimal = "." in token
         parsed = _parse_candidate_decimal(token.rstrip("+"))
         rejection = None
+        suggested_decimal = None
+        suggestion_reason = None
+        suggestion_confidence = None
         if parsed is None:
             rejection = "price_ocr_invalid"
+        elif not token_has_decimal and parsed >= Decimal("1000"):
+            suggested_decimal = (parsed / Decimal("100")).quantize(Decimal("0.01"))
+            if Decimal("0.01") <= suggested_decimal <= MARKET_PRICE_CAP:
+                rejection = "price_decimal_unconfirmed"
+                suggestion_reason = "possible_missing_decimal_point"
+                suggestion_confidence = Decimal("0.50")
+                parsed = None
         elif parsed == 0 and len(tokens) == 1 and normalized == token:
             rejection = None
         elif parsed <= 0 or parsed > MARKET_PRICE_CAP:
@@ -660,6 +691,11 @@ def _candidates_from_text(
                 rejection = "price_ocr_invalid"
             else:
                 rejection = "price_decimal_unconfirmed"
+                suggested_decimal = (parsed / Decimal("100")).quantize(Decimal("0.01"))
+                if suggested_decimal > MARKET_PRICE_CAP:
+                    suggested_decimal = None
+                suggestion_reason = "possible_missing_decimal_point" if suggested_decimal is not None else None
+                suggestion_confidence = Decimal("0.50") if suggested_decimal is not None else None
             parsed = None
         candidates.append(
             OcrPriceCandidate(
@@ -671,6 +707,9 @@ def _candidates_from_text(
                 contains_explicit_decimal=contains_decimal or token_has_decimal,
                 correction_codes=corrections,
                 rejection_reason=rejection,
+                suggested_decimal_value=suggested_decimal,
+                suggestion_reason=suggestion_reason,
+                suggestion_confidence=suggestion_confidence,
             )
         )
     if prefer_after_price_label:
@@ -688,5 +727,7 @@ def _parse_candidate_decimal(token: str) -> Decimal | None:
     except InvalidOperation:
         return None
     if not parsed.is_finite():
+        return None
+    if parsed.as_tuple().exponent < -2:
         return None
     return parsed
