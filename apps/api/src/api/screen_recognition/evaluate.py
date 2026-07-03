@@ -962,6 +962,13 @@ def _build_profile_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
             "ocr_invocation_count",
             "pipeline_count_attempted",
             "pipeline_count_completed",
+            "logical_pipeline_request_count",
+            "unique_prepared_image_count",
+            "deduplicated_ocr_request_count",
+            "prepared_image_write_count",
+            "prepared_image_read_count",
+            "ocr_engine_initialization_count",
+            "python_preprocessing_total_ms",
             "total_ocr_duration_ms",
         ):
             value = profile.get(key)
@@ -1004,8 +1011,19 @@ def _profile_from_ocr_result(
         "total_ocr_duration_ms": int(diagnostics.get("total_ocr_duration_ms") or 0),
         "total_fixture_duration_ms": timings.get("total_ms"),
         "powershell_process_startup_overhead_ms": diagnostics.get("powershell_process_startup_overhead_ms"),
-        "ocr_engine_initialization_total_ms": _sum_pipeline_metric(diagnostics, "engine_initialization_ms"),
+        "ocr_engine_initialization_total_ms": int(
+            diagnostics.get("ocr_engine_initialization_total_ms")
+            or _sum_pipeline_metric(diagnostics, "engine_initialization_ms")
+        ),
         "ocr_execution_total_ms": _sum_pipeline_metric(diagnostics, "ocr_execution_ms"),
+        "logical_pipeline_request_count": int(diagnostics.get("logical_pipeline_request_count") or 0),
+        "unique_prepared_image_count": int(diagnostics.get("unique_prepared_image_count") or 0),
+        "deduplicated_ocr_request_count": int(diagnostics.get("deduplicated_ocr_request_count") or 0),
+        "prepared_image_write_count": int(diagnostics.get("prepared_image_write_count") or 0),
+        "prepared_image_read_count": int(diagnostics.get("prepared_image_read_count") or 0),
+        "ocr_engine_initialization_count": int(diagnostics.get("ocr_engine_initialization_count") or 0),
+        "python_preprocessing_total_ms": int(diagnostics.get("python_preprocessing_total_ms") or 0),
+        "python_batch_timings_ms": diagnostics.get("python_batch_timings_ms") or {},
     }
     return summary if include_profile else {
         key: summary[key]
@@ -1016,6 +1034,10 @@ def _profile_from_ocr_result(
             "pipeline_count_completed",
             "early_exit_used",
             "total_ocr_duration_ms",
+            "logical_pipeline_request_count",
+            "unique_prepared_image_count",
+            "deduplicated_ocr_request_count",
+            "ocr_engine_initialization_count",
         )
     }
 

@@ -377,6 +377,33 @@ def _helper_timing_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         helper_total = _int_or_none(diagnostics.get("helper_total_duration_ms"))
         if helper_total is not None:
             totals["powershell_helper_total_ms"] += helper_total
+        for source_key in (
+            "logical_pipeline_request_count",
+            "unique_prepared_image_count",
+            "deduplicated_ocr_request_count",
+            "prepared_image_write_count",
+            "prepared_image_read_count",
+            "ocr_engine_initialization_count",
+            "python_preprocessing_total_ms",
+            "ocr_invocation_count",
+            "pipeline_count_attempted",
+        ):
+            value = _int_or_none(profile.get(source_key))
+            if value is not None:
+                totals[source_key] += value
+        batch_timings = profile.get("python_batch_timings_ms") or {}
+        if isinstance(batch_timings, dict):
+            for source_key, total_key in (
+                ("image_decode_ms", "batch_image_decode_ms"),
+                ("layout_ms", "batch_layout_ms"),
+                ("roi_crop_ms", "batch_roi_crop_ms"),
+                ("shared_preprocessing_ms", "batch_shared_preprocessing_ms"),
+                ("image_encode_ms", "batch_image_encode_ms"),
+                ("batch_manifest_ms", "batch_manifest_ms"),
+            ):
+                value = _int_or_none(batch_timings.get(source_key))
+                if value is not None:
+                    totals[total_key] += value
         per_pipeline_total = sum(
             _int_or_none(item.get("duration_ms")) or 0
             for item in profile.get("per_pipeline_duration_ms") or []

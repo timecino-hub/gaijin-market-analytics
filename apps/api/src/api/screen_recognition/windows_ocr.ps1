@@ -107,6 +107,82 @@ function RecognizeImage($Path) {
   }
 }
 
+function NewOcrEngine() {
+  $engineStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  $engineStopwatch.Stop()
+  if ($null -eq $engine) {
+    throw "Windows OCR engine is unavailable for the current user profile languages."
+  }
+  return @{
+    engine = $engine
+    timing = [int]$engineStopwatch.ElapsedMilliseconds
+  }
+}
+
+function RecognizePreparedImage($Path, $Engine) {
+  $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $imageOpenStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $file = AwaitOperation ([Windows.Storage.StorageFile]::GetFileFromPathAsync($Path)) ([Windows.Storage.StorageFile])
+  $stream = AwaitOperation ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+  $imageOpenStopwatch.Stop()
+
+  $bitmapDecodeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $decoder = AwaitOperation ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+  $bitmap = AwaitOperation ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+  $bitmapDecodeStopwatch.Stop()
+
+  $ocrStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $result = AwaitOperation ($Engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+  $ocrStopwatch.Stop()
+
+  $serializationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $lines = New-Object System.Collections.Generic.List[object]
+  $lineOrder = 0
+  foreach ($line in $result.Lines) {
+    $words = New-Object System.Collections.Generic.List[object]
+    $wordBoxes = New-Object System.Collections.Generic.List[object]
+    $wordOrder = 0
+    foreach ($word in $line.Words) {
+      $wordBox = BoxToHash $word.BoundingRect
+      $wordBoxes.Add($word.BoundingRect)
+      $words.Add(@{
+        text = [string]$word.Text
+        order = $wordOrder
+        bounding_box = $wordBox
+      })
+      $wordOrder += 1
+    }
+    $lines.Add(@{
+      text = [string]$line.Text
+      order = $lineOrder
+      bounding_box = UnionBoxes -Boxes $wordBoxes.ToArray()
+      words = @($words.ToArray())
+    })
+    $lineOrder += 1
+  }
+  $serializationStopwatch.Stop()
+
+  $disposeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  if ($null -ne $bitmap -and $bitmap -is [System.IDisposable]) { $bitmap.Dispose() }
+  if ($null -ne $stream -and $stream -is [System.IDisposable]) { $stream.Dispose() }
+  $disposeStopwatch.Stop()
+  $totalStopwatch.Stop()
+
+  return @{
+    text = [string]$result.Text
+    lines = @($lines.ToArray())
+    timing = @{
+      total_ms = [int]$totalStopwatch.ElapsedMilliseconds
+      image_open_ms = [int]$imageOpenStopwatch.ElapsedMilliseconds
+      bitmap_decode_ms = [int]$bitmapDecodeStopwatch.ElapsedMilliseconds
+      recognize_ms = [int]$ocrStopwatch.ElapsedMilliseconds
+      serialization_ms = [int]$serializationStopwatch.ElapsedMilliseconds
+      dispose_ms = [int]$disposeStopwatch.ElapsedMilliseconds
+    }
+  }
+}
+
 function GetPreprocessingVariants($Payload) {
   $variants = @()
   if ($Payload.preprocessing -and $Payload.preprocessing.variants) {
@@ -228,6 +304,76 @@ function ScoreRecognizedText([string]$FieldName, [string]$Text) {
 }
 
 $inputPayload = Get-Content -Raw -Encoding UTF8 $InputJson | ConvertFrom-Json
+
+if ([string]$inputPayload.schema_version -eq "windows-ocr-batch-v1") {
+  $batchDiagnostics = @{
+    mode = "batch_v1"
+    powershell_process_count = 1
+    ocr_invocation_count = 0
+    actual_ocr_invocation_count = 0
+    ocr_engine_initialization_count = 0
+    ocr_engine_initialization_total_ms = 0
+    total_ocr_duration_ms = 0
+    helper_total_duration_ms = 0
+    request_error_count = 0
+  }
+  $batchWarnings = New-Object System.Collections.Generic.List[string]
+  $batchWarnings.Add("ocr_confidence_unavailable")
+  $batchResults = New-Object System.Collections.Generic.List[object]
+  try {
+    $engineInfo = NewOcrEngine
+    $engine = $engineInfo.engine
+    $batchDiagnostics.ocr_engine_initialization_count = 1
+    $batchDiagnostics.ocr_engine_initialization_total_ms = [int]$engineInfo.timing
+    foreach ($request in $inputPayload.requests) {
+      $requestId = [string]$request.request_id
+      try {
+        $recognized = RecognizePreparedImage ([string]$request.image_path) $engine
+        $batchDiagnostics.ocr_invocation_count += 1
+        $batchDiagnostics.actual_ocr_invocation_count += 1
+        $batchDiagnostics.total_ocr_duration_ms += [int]$recognized.timing.total_ms
+        $batchResults.Add(@{
+          request_id = $requestId
+          raw_text = [string]$recognized.text
+          lines = @($recognized.lines)
+          timing = $recognized.timing
+          error_code = $null
+        })
+      }
+      catch {
+        $batchDiagnostics.request_error_count += 1
+        $batchResults.Add(@{
+          request_id = $requestId
+          raw_text = ""
+          lines = @()
+          timing = @{
+            total_ms = 0
+            image_open_ms = 0
+            bitmap_decode_ms = 0
+            recognize_ms = 0
+            serialization_ms = 0
+            dispose_ms = 0
+          }
+          error_code = "ocr_request_failed"
+          error_message = ([string]$_.Exception.Message)
+        })
+      }
+    }
+  }
+  finally {
+    $helperStopwatch.Stop()
+    $batchDiagnostics.helper_total_duration_ms = [int]$helperStopwatch.ElapsedMilliseconds
+  }
+  $batchOutput = @{
+    schema_version = "windows-ocr-batch-v1"
+    results = @($batchResults.ToArray())
+    warnings = @($batchWarnings | Select-Object -Unique)
+    diagnostics = $batchDiagnostics
+  }
+  $batchOutput | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $OutputJson
+  exit 0
+}
+
 $imagePath = [string]$inputPayload.image_path
 $debugDir = $inputPayload.debug_artifacts_dir
 $source = [System.Drawing.Bitmap]::FromFile($imagePath)

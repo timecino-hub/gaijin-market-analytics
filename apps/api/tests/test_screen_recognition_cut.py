@@ -59,6 +59,7 @@ from api.screen_recognition.preprocessing import (
     MAX_NORMALIZED_ROI_PIXELS,
     build_ocr_preprocessing_variants,
 )
+from api.screen_recognition.ocr_batch import BATCH_SCHEMA_VERSION, prepare_windows_ocr_batch
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 from api.screen_recognition.runner import CutRunConfig, run_cut
@@ -248,6 +249,128 @@ def test_ocr_preprocessing_variants_are_bounded_across_synthetic_scales() -> Non
             assert image.width > 0
             assert image.height > 0
             assert image.width * image.height <= MAX_NORMALIZED_ROI_PIXELS
+
+
+def test_python_batch_preprocessing_reuses_roi_and_shared_steps(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = Image.new("RGB", (120, 60), "white")
+    for x in range(10, 40):
+        for y in range(10, 30):
+            source.putpixel((x, y), (0, 0, 0))
+    for x in range(70, 100):
+        for y in range(20, 45):
+            source.putpixel((x, y), (0, 0, 0))
+    source.save(image)
+    profile = LayoutProfile(
+        name="two-fields",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={
+            "best_bid": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("0.5"), Decimal("1")),
+            "best_ask": NormalizedRoi(Decimal("0.5"), Decimal("0"), Decimal("0.5"), Decimal("1")),
+        },
+    )
+
+    batch = prepare_windows_ocr_batch(image_path=image, layout_profile=profile, temp_dir=tmp_path / "prepared")
+    diagnostics = batch.diagnostics
+
+    assert batch.manifest["schema_version"] == BATCH_SCHEMA_VERSION
+    assert diagnostics["recognition_image_decode_count"] == 1
+    assert diagnostics["recognition_roi_resolve_count"] == 2
+    assert diagnostics["roi_crop_count"] == 2
+    assert diagnostics["resize_count"] == 4
+    assert diagnostics["grayscale_count"] == 2
+    assert diagnostics["autocontrast_count"] == 2
+    assert diagnostics["threshold_count"] == 2
+    assert diagnostics["invert_count"] == 2
+    assert diagnostics["logical_pipeline_request_count"] == 8
+    assert diagnostics["unique_prepared_image_count"] == 8
+    assert diagnostics["prepared_image_write_count"] == 8
+
+
+def test_windows_ocr_batch_contract_maps_results_by_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.ocr_backend as backend_module
+
+    image = tmp_path / "source.png"
+    source = Image.new("RGB", (80, 40), "white")
+    for x in range(5, 45):
+        for y in range(5, 25):
+            source.putpixel((x, y), (0, 0, 0))
+    source.save(image)
+    profile = LayoutProfile(
+        name="one-field",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={"best_bid": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1"))},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+        input_path = Path(command[command.index("-InputJson") + 1])
+        output_path = Path(command[command.index("-OutputJson") + 1])
+        manifest = json.loads(input_path.read_text(encoding="utf-8"))
+        captured["manifest"] = manifest
+        requests = list(reversed(manifest["requests"]))
+        output_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": BATCH_SCHEMA_VERSION,
+                    "warnings": ["ocr_confidence_unavailable"],
+                    "diagnostics": {
+                        "mode": "batch_v1",
+                        "helper_total_duration_ms": 10,
+                        "ocr_invocation_count": len(manifest["requests"]),
+                        "actual_ocr_invocation_count": len(manifest["requests"]),
+                        "ocr_engine_initialization_count": 1,
+                        "ocr_engine_initialization_total_ms": 3,
+                        "total_ocr_duration_ms": 7,
+                    },
+                    "results": [
+                        {
+                            "request_id": request["request_id"],
+                            "raw_text": "12.34" if index == 0 else "",
+                            "lines": [],
+                            "timing": {
+                                "total_ms": 1,
+                                "image_open_ms": 0,
+                                "bitmap_decode_ms": 0,
+                                "recognize_ms": 1,
+                                "serialization_ms": 0,
+                                "dispose_ms": 0,
+                            },
+                            "error_code": None,
+                        }
+                        for index, request in enumerate(requests)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(backend_module, "_run_windows_helper", fake_run)
+
+    result = WindowsOcrRecognizer(timeout_seconds=20).recognize(
+        OcrInvocation(image_path=image, layout_profile=profile, debug_artifacts_dir=None)
+    )
+
+    assert captured["manifest"]["schema_version"] == BATCH_SCHEMA_VERSION
+    assert len(captured["manifest"]["requests"]) == 4
+    assert result.fields["best_bid"].raw_text == "12.34"
+    assert result.diagnostics["powershell_process_count"] == 1
+    assert result.diagnostics["ocr_engine_initialization_count"] == 1
+    assert result.diagnostics["ocr_engine_initialization_total_ms"] == 3
+    assert result.diagnostics["pipeline_count_attempted"] == 4
+    assert result.diagnostics["ocr_invocation_count"] == 4
 
 
 def read_image_info_from_dimensions(filename: str, width: int, height: int):
