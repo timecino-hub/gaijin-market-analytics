@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from api.screen_recognition.comparison import compare_contracts, summarize_results
 from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
@@ -59,7 +59,11 @@ from api.screen_recognition.preprocessing import (
     MAX_NORMALIZED_ROI_PIXELS,
     build_ocr_preprocessing_variants,
 )
-from api.screen_recognition.ocr_batch import BATCH_SCHEMA_VERSION, prepare_windows_ocr_batch
+from api.screen_recognition.ocr_batch import (
+    BATCH_SCHEMA_VERSION,
+    _resolve_roi_tuple,
+    prepare_windows_ocr_batch,
+)
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 from api.screen_recognition.runner import CutRunConfig, run_cut
@@ -291,6 +295,127 @@ def test_python_batch_preprocessing_reuses_roi_and_shared_steps(tmp_path: Path) 
     assert diagnostics["prepared_image_write_count"] == 8
 
 
+def test_batch_roi_crop_boundaries_and_alpha_flatten_match_legacy_shape(tmp_path: Path) -> None:
+    image = tmp_path / "alpha-source.png"
+    source = Image.new("RGBA", (11, 7), (255, 255, 255, 255))
+    source.putpixel((9, 5), (0, 0, 0, 255))
+    source.putpixel((10, 6), (0, 0, 0, 255))
+    source.putpixel((3, 2), (0, 0, 0, 128))
+    source.save(image)
+    profile = LayoutProfile(
+        name="edge-roi",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={"best_ask": NormalizedRoi(Decimal("0.27"), Decimal("0.28"), Decimal("0.68"), Decimal("0.58"))},
+    )
+
+    box = _resolve_roi_tuple(profile.rois["best_ask"].to_json(), 11, 7)
+    batch = prepare_windows_ocr_batch(
+        image_path=image,
+        layout_profile=profile,
+        temp_dir=tmp_path / "prepared",
+        variants=(DEFAULT_OCR_PREPROCESSING_VARIANTS[0],),
+    )
+    request = batch.logical_requests[0]
+    prepared = Image.open(request.image_path)
+
+    assert box == (2, 1, 7, 4)
+    assert request.width == 21
+    assert request.height == 12
+    assert prepared.mode == "RGB"
+    assert prepared.getextrema()[0][0] >= 0
+    assert _flatten_alpha_on_white(source.crop((3, 2, 4, 3))).getpixel((0, 0)) == (127, 127, 127)
+
+
+def test_legacy_grayscale_autocontrast_threshold_and_invert_math() -> None:
+    image = Image.new("RGBA", (6, 1))
+    pixels = [
+        (0, 0, 0, 255),
+        (255, 255, 255, 255),
+        (255, 0, 0, 255),
+        (0, 255, 0, 255),
+        (0, 0, 255, 255),
+        (0, 0, 0, 128),
+    ]
+    image.putdata(pixels)
+
+    grayscale = _legacy_grayscale(image)
+    assert list(grayscale.getdata()) == [0, 255, 76, 150, 29, 127]
+
+    contrast_source = Image.new("L", (5, 1))
+    contrast_source.putdata([10, 20, 95, 169, 170])
+    contrasted = _legacy_autocontrast(contrast_source)
+    assert list(contrasted.getdata()) == [0, 16, 135, 253, 255]
+
+    thresholded = contrasted.point([255 if value >= 170 else 0 for value in range(256)], "L")
+    inverted = ImageChops.invert(thresholded)
+    assert list(thresholded.getdata()) == [0, 0, 0, 255, 255]
+    assert list(inverted.getdata()) == [255, 255, 255, 0, 0]
+
+
+def test_batch_prepared_pixels_document_lanczos_and_bicubic_delta(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = _synthetic_pixel_equivalence_image()
+    source.save(image)
+    profile = _pixel_equivalence_profile(source.width, source.height)
+    variant = DEFAULT_OCR_PREPROCESSING_VARIANTS[0]
+
+    batch = prepare_windows_ocr_batch(
+        image_path=image,
+        layout_profile=profile,
+        temp_dir=tmp_path / "prepared",
+        variants=(variant,),
+    )
+    prepared = Image.open(batch.logical_requests[0].image_path).convert("RGB")
+    x, y, width, height = _resolve_roi_tuple(profile.rois["best_ask"].to_json(), source.width, source.height)
+    crop = source.convert("RGB").crop((x, y, x + width, y + height))
+    target = (width * variant.scale_factor, height * variant.scale_factor)
+    lanczos = crop.resize(target, Image.Resampling.LANCZOS).convert("RGB")
+    bicubic = crop.resize(target, Image.Resampling.BICUBIC).convert("RGB")
+
+    assert _pixel_delta_stats(prepared, lanczos)["different_pixel_count"] == 0
+    assert _pixel_delta_stats(prepared, bicubic)["different_pixel_count"] > 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="System.Drawing pixel reference requires Windows")
+def test_batch_prepared_pixels_are_close_to_system_drawing_reference(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = _synthetic_pixel_equivalence_image()
+    source.save(image)
+    profile = _pixel_equivalence_profile(source.width, source.height)
+    variant = DEFAULT_OCR_PREPROCESSING_VARIANTS[2]
+    x, y, width, height = _resolve_roi_tuple(profile.rois["best_ask"].to_json(), source.width, source.height)
+    reference = tmp_path / "legacy-reference.png"
+    _write_system_drawing_reference(
+        source_path=image,
+        output_path=reference,
+        box=(x, y, width, height),
+        variant=variant,
+    )
+
+    batch = prepare_windows_ocr_batch(
+        image_path=image,
+        layout_profile=profile,
+        temp_dir=tmp_path / "prepared",
+        variants=(variant,),
+    )
+    prepared = Image.open(batch.logical_requests[0].image_path)
+    legacy = Image.open(reference)
+    stats = _pixel_delta_stats(legacy, prepared, decimal_region=(width * 4 - 18, 6, 18, 18))
+
+    assert stats["width"] == width * variant.scale_factor
+    assert stats["height"] == height * variant.scale_factor
+    assert stats["actual_mode"] == "L"
+    assert stats["reference_mode"] in {"RGB", "RGBA"}
+    assert stats["different_pixel_count"] <= 350
+    assert stats["max_channel_difference"] <= 255
+    assert stats["mean_absolute_difference"] <= 3
+    assert stats["decimal_point_region_different_pixel_count"] <= 10
+
+
 def test_windows_ocr_batch_contract_maps_results_by_request_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -377,6 +502,237 @@ def read_image_info_from_dimensions(filename: str, width: int, height: int):
     from api.screen_recognition.contracts import ImageInfo
 
     return ImageInfo(filename=filename, width=width, height=height, format="png")
+
+
+def _synthetic_pixel_equivalence_image() -> Image.Image:
+    scale = 4
+    width, height = 73, 41
+    image = Image.new("RGBA", (width * scale, height * scale), (22, 26, 34, 255))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rectangle((36 * scale, 0, width * scale - 1, height * scale - 1), fill=(238, 241, 244, 255))
+    draw.rounded_rectangle((5 * scale, 7 * scale, 67 * scale, 29 * scale), radius=2 * scale, fill=(35, 38, 45, 255))
+    draw.line((9 * scale, 11 * scale, 9 * scale, 25 * scale), fill=(245, 246, 248, 255), width=1 * scale)
+    draw.line((17 * scale, 11 * scale, 27 * scale, 11 * scale), fill=(246, 246, 246, 255), width=1 * scale)
+    draw.line((27 * scale, 11 * scale, 27 * scale, 18 * scale), fill=(246, 246, 246, 255), width=1 * scale)
+    draw.line((17 * scale, 18 * scale, 27 * scale, 18 * scale), fill=(246, 246, 246, 255), width=1 * scale)
+    draw.line((17 * scale, 18 * scale, 17 * scale, 25 * scale), fill=(246, 246, 246, 255), width=1 * scale)
+    draw.line((17 * scale, 25 * scale, 27 * scale, 25 * scale), fill=(246, 246, 246, 255), width=1 * scale)
+    draw.ellipse((32 * scale, 24 * scale, 34 * scale, 26 * scale), fill=(250, 250, 250, 255))
+    draw.line((39 * scale, 11 * scale, 48 * scale, 25 * scale), fill=(15, 18, 22, 255), width=1 * scale)
+    draw.line((48 * scale, 11 * scale, 39 * scale, 25 * scale), fill=(15, 18, 22, 255), width=1 * scale)
+    draw.ellipse((66 * scale, 25 * scale, 68 * scale, 27 * scale), fill=(255, 255, 255, 255))
+    draw.rectangle((52 * scale, 31 * scale, 55 * scale, 35 * scale), fill=(169, 169, 169, 255))
+    draw.rectangle((56 * scale, 31 * scale, 59 * scale, 35 * scale), fill=(170, 170, 170, 255))
+    draw.rectangle((60 * scale, 31 * scale, 63 * scale, 35 * scale), fill=(171, 171, 171, 255))
+    draw.rectangle((2 * scale, 32 * scale, 15 * scale, 38 * scale), fill=(255, 255, 255, 96))
+    return image.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _pixel_equivalence_profile(width: int, height: int) -> LayoutProfile:
+    return LayoutProfile(
+        name="pixel-equivalence",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={
+            "best_ask": NormalizedRoi(
+                Decimal(3) / Decimal(width),
+                Decimal(5) / Decimal(height),
+                Decimal(67) / Decimal(width),
+                Decimal(31) / Decimal(height),
+            )
+        },
+    )
+
+
+def _has_alpha(image: Image.Image) -> bool:
+    return image.mode in {"RGBA", "LA"} or (
+        image.mode == "P" and "transparency" in image.info
+    )
+
+
+def _flatten_alpha_on_white(image: Image.Image) -> Image.Image:
+    if not _has_alpha(image):
+        return image.convert("RGB")
+    rgba = image.convert("RGBA")
+    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    background.alpha_composite(rgba)
+    return background.convert("RGB")
+
+
+def _legacy_grayscale(image: Image.Image) -> Image.Image:
+    return _flatten_alpha_on_white(image).convert("L", matrix=(0.299, 0.587, 0.114, 0))
+
+
+def _legacy_autocontrast(image: Image.Image) -> Image.Image:
+    grayscale = image if image.mode == "L" else _legacy_grayscale(image)
+    min_gray, max_gray = grayscale.getextrema()
+    if max_gray <= min_gray:
+        return grayscale
+    scale = 255.0 / (max_gray - min_gray)
+    return grayscale.point(
+        [max(0, min(255, round((value - min_gray) * scale))) for value in range(256)],
+        "L",
+    )
+
+
+def _pixel_delta_stats(
+    reference: Image.Image,
+    actual: Image.Image,
+    *,
+    decimal_region: tuple[int, int, int, int] | None = None,
+) -> dict[str, object]:
+    reference_rgb = reference.convert("RGB")
+    actual_rgb = actual.convert("RGB")
+    assert reference_rgb.size == actual_rgb.size
+    diff = ImageChops.difference(reference_rgb, actual_rgb)
+    stat = ImageStat.Stat(diff)
+    channel_count = len(stat.sum)
+    pixel_count = reference_rgb.width * reference_rgb.height
+    different = sum(1 for pixel in diff.getdata() if pixel != (0, 0, 0))
+    max_diff = max(channel_max for channel in diff.getextrema() for channel_max in channel)
+    mean_abs = sum(stat.sum) / max(1, pixel_count * channel_count)
+    reference_l = reference_rgb.convert("L")
+    actual_l = actual_rgb.convert("L")
+    decimal_different = 0
+    if decimal_region is not None:
+        x, y, width, height = decimal_region
+        decimal_diff = ImageChops.difference(
+            reference_rgb.crop((x, y, x + width, y + height)),
+            actual_rgb.crop((x, y, x + width, y + height)),
+        )
+        decimal_different = sum(1 for pixel in decimal_diff.getdata() if pixel != (0, 0, 0))
+    actual_values = list(actual_l.getdata())
+    return {
+        "width": actual.width,
+        "height": actual.height,
+        "reference_mode": reference.mode,
+        "actual_mode": actual.mode,
+        "different_pixel_count": different,
+        "max_channel_difference": max_diff,
+        "mean_absolute_difference": mean_abs,
+        "black_pixel_ratio": actual_values.count(0) / max(1, len(actual_values)),
+        "white_pixel_ratio": actual_values.count(255) / max(1, len(actual_values)),
+        "alpha_behavior": "opaque_rgb" if actual.mode == "RGB" else actual.mode,
+        "decimal_point_region_different_pixel_count": decimal_different,
+    }
+
+
+def _write_system_drawing_reference(
+    *,
+    source_path: Path,
+    output_path: Path,
+    box: tuple[int, int, int, int],
+    variant,
+) -> None:
+    x, y, width, height = box
+    script_path = output_path.with_suffix(".ps1")
+    script_path.write_text(
+        r'''
+param(
+  [Parameter(Mandatory=$true)][string]$SourcePath,
+  [Parameter(Mandatory=$true)][string]$OutputPath,
+  [Parameter(Mandatory=$true)][int]$X,
+  [Parameter(Mandatory=$true)][int]$Y,
+  [Parameter(Mandatory=$true)][int]$Width,
+  [Parameter(Mandatory=$true)][int]$Height,
+  [Parameter(Mandatory=$true)][int]$ScaleFactor,
+  [Parameter(Mandatory=$true)][int]$AutocontrastValue,
+  [Parameter(Mandatory=$true)][int]$BinaryThreshold,
+  [Parameter(Mandatory=$true)][int]$InvertValue
+)
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Drawing
+$Autocontrast = $AutocontrastValue -ne 0
+$Invert = $InvertValue -ne 0
+function ApplyPixelPreprocessing($Bitmap) {
+  $needsPixels = $Autocontrast -or $BinaryThreshold -ge 0 -or $Invert
+  if (-not $needsPixels) { return }
+  $threshold = $null
+  if ($BinaryThreshold -ge 0) { $threshold = $BinaryThreshold }
+  $minGray = 255
+  $maxGray = 0
+  if ($Autocontrast) {
+    for ($py = 0; $py -lt $Bitmap.Height; $py++) {
+      for ($px = 0; $px -lt $Bitmap.Width; $px++) {
+        $color = $Bitmap.GetPixel($px, $py)
+        $gray = [int](($color.R * 0.299) + ($color.G * 0.587) + ($color.B * 0.114))
+        if ($gray -lt $minGray) { $minGray = $gray }
+        if ($gray -gt $maxGray) { $maxGray = $gray }
+      }
+    }
+  }
+  for ($py = 0; $py -lt $Bitmap.Height; $py++) {
+    for ($px = 0; $px -lt $Bitmap.Width; $px++) {
+      $color = $Bitmap.GetPixel($px, $py)
+      $gray = [int](($color.R * 0.299) + ($color.G * 0.587) + ($color.B * 0.114))
+      if ($Autocontrast -and $maxGray -gt $minGray) {
+        $gray = [int][Math]::Round((($gray - $minGray) * 255.0) / ($maxGray - $minGray))
+      }
+      if ($null -ne $threshold) {
+        if ($gray -ge $threshold) { $gray = 255 } else { $gray = 0 }
+      }
+      if ($Invert) { $gray = 255 - $gray }
+      $Bitmap.SetPixel($px, $py, [System.Drawing.Color]::FromArgb($gray, $gray, $gray))
+    }
+  }
+}
+$source = [System.Drawing.Bitmap]::FromFile($SourcePath)
+$targetWidth = [Math]::Max(1, $Width * $ScaleFactor)
+$targetHeight = [Math]::Max(1, $Height * $ScaleFactor)
+$crop = New-Object System.Drawing.Bitmap $targetWidth, $targetHeight
+$graphics = [System.Drawing.Graphics]::FromImage($crop)
+$graphics.Clear([System.Drawing.Color]::White)
+$graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+$graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+$destRect = New-Object System.Drawing.Rectangle 0, 0, $targetWidth, $targetHeight
+$srcRect = New-Object System.Drawing.Rectangle $X, $Y, $Width, $Height
+$graphics.DrawImage($source, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+$graphics.Dispose()
+ApplyPixelPreprocessing $crop
+$crop.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$crop.Dispose()
+$source.Dispose()
+''',
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script_path),
+            "-SourcePath",
+            str(source_path),
+            "-OutputPath",
+            str(output_path),
+            "-X",
+            str(x),
+            "-Y",
+            str(y),
+            "-Width",
+            str(width),
+            "-Height",
+            str(height),
+            "-ScaleFactor",
+            str(variant.scale_factor),
+            "-AutocontrastValue",
+            "1" if variant.autocontrast else "0",
+            "-BinaryThreshold",
+            str(-1 if variant.binary_threshold is None else variant.binary_threshold),
+            "-InvertValue",
+            "1" if variant.invert else "0",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_image_format_whitelist_and_zip_safety(tmp_path: Path) -> None:
