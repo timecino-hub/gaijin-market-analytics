@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import socket
 import struct
@@ -20,6 +21,16 @@ from api.screen_recognition.comparison import compare_contracts, summarize_resul
 from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
 from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi, OcrResult
 from api.screen_recognition.contracts import ScreenContract
+from api.screen_recognition.cross_helper import (
+    PREPARED_ONLY_SCHEMA_VERSION,
+    _compare_consumer_payloads,
+    _prepared_export_from_path,
+    _safe_png_bmp_result,
+    _validate_private_output_dir,
+    audit_batch_response_mapping,
+    export_pillow_prepared_images,
+    recognize_prepared_images,
+)
 from api.screen_recognition.evaluate import (
     PRIVATE_FIXTURE_MESSAGE,
     create_private_ground_truth_template,
@@ -496,6 +507,230 @@ def test_windows_ocr_batch_contract_maps_results_by_request_id(
     assert result.diagnostics["ocr_engine_initialization_total_ms"] == 3
     assert result.diagnostics["pipeline_count_attempted"] == 4
     assert result.diagnostics["ocr_invocation_count"] == 4
+
+
+def test_cross_helper_prepared_only_consumers_use_same_physical_file_and_hash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.cross_helper as cross_helper
+
+    image = tmp_path / "prepared.png"
+    Image.new("L", (16, 10), 255).save(image)
+    export = _prepared_export_from_path(
+        fixture_id="fixture-safe",
+        prepared_source="legacy",
+        request_id="fixture-safe:best_ask:gray_3x",
+        field_name="best_ask",
+        pipeline_name="gray_3x",
+        image_path=image,
+    )
+    captured: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+        input_path = Path(command[command.index("-InputJson") + 1])
+        output_path = Path(command[command.index("-OutputJson") + 1])
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        captured.append(payload)
+        assert payload["schema_version"] == PREPARED_ONLY_SCHEMA_VERSION
+        assert payload["requests"][0]["image_path"] == str(image)
+        assert payload["requests"][0]["sha256"] == export.encoded_sha256
+        output_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": PREPARED_ONLY_SCHEMA_VERSION,
+                    "consumer_mode": payload["consumer_mode"],
+                    "warnings": ["ocr_confidence_unavailable"],
+                    "diagnostics": {
+                        "mode": f"prepared_only_{payload['consumer_mode']}",
+                        "ocr_language_source": "user_profile_languages",
+                    },
+                    "results": [
+                        {
+                            "request_id": export.request_id,
+                            "raw_text": "12.34",
+                            "lines": [{"text": "12.34", "words": [{"text": "12.34"}]}],
+                            "timing": {"total_ms": 1},
+                            "decoder": {"bitmap_pixel_format": "Gray8", "bitmap_alpha_mode": "Ignore"},
+                            "error_code": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cross_helper, "_run_windows_helper", fake_run)
+
+    legacy = recognize_prepared_images((export,), consumer="legacy", temp_root=tmp_path, timeout_seconds=10)
+    batch = recognize_prepared_images((export,), consumer="batch", temp_root=tmp_path, timeout_seconds=10)
+
+    assert [payload["consumer_mode"] for payload in captured] == ["legacy", "batch"]
+    assert legacy["results"][0]["raw_text"] == batch["results"][0]["raw_text"]
+
+
+def test_cross_helper_pillow_export_does_not_mutate_prepared_input_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    image = Image.new("RGB", (40, 20), "white")
+    for x in range(5, 20):
+        for y in range(4, 12):
+            image.putpixel((x, y), (0, 0, 0))
+    image.save(source)
+    original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    profile = LayoutProfile(
+        name="one-field",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={"best_ask": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1"))},
+    )
+
+    exports = export_pillow_prepared_images(
+        image_path=source,
+        layout_profile=profile,
+        fixture_id="fixture-safe",
+        output_dir=tmp_path / "pillow",
+        variants=(DEFAULT_OCR_PREPROCESSING_VARIANTS[0],),
+    )
+
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
+    assert len(exports) == 1
+    assert exports[0].encoded_sha256 == hashlib.sha256(exports[0].image_path.read_bytes()).hexdigest()
+
+
+def test_cross_helper_safe_report_omits_raw_ocr_text_paths_and_prices(tmp_path: Path) -> None:
+    image = tmp_path / "prepared.png"
+    Image.new("L", (16, 10), 255).save(image)
+    export = _prepared_export_from_path(
+        fixture_id="fixture-safe",
+        prepared_source="legacy",
+        request_id="fixture-safe:best_ask:gray_3x",
+        field_name="best_ask",
+        pipeline_name="gray_3x",
+        image_path=image,
+    )
+    payload = {
+        "diagnostics": {"ocr_language_source": "user_profile_languages"},
+        "results": [
+            {
+                "request_id": export.request_id,
+                "raw_text": "12.34",
+                "lines": [{"text": "12.34", "words": [{"text": "12.34"}]}],
+                "timing": {"total_ms": 1},
+                "decoder": {"bitmap_pixel_format": "Gray8"},
+                "error_code": None,
+            }
+        ],
+    }
+
+    safe, private = _compare_consumer_payloads(
+        fixture_id="fixture-safe",
+        field_name="best_ask",
+        prepared_source="legacy",
+        exports=(export,),
+        legacy_payload=payload,
+        batch_payload=payload,
+    )
+
+    safe_text = json.dumps(safe, sort_keys=True)
+    assert "12.34" not in safe_text
+    assert str(image) not in safe_text
+    assert "raw_text" not in safe_text
+    assert private[0]["legacy_raw"]["raw_text"] == "12.34"
+
+
+def test_cross_helper_png_bmp_safe_metadata_distinguishes_pixel_and_encoded_hash(
+    tmp_path: Path,
+) -> None:
+    image = Image.new("RGB", (10, 8), "white")
+    image.putpixel((3, 4), (0, 0, 0))
+    png = tmp_path / "control.png"
+    bmp = tmp_path / "control.bmp"
+    image.save(png, format="PNG")
+    image.save(bmp, format="BMP")
+
+    png_export = _prepared_export_from_path(
+        fixture_id="fixture-safe",
+        prepared_source="legacy-png-control",
+        request_id="r:png",
+        field_name="best_ask",
+        pipeline_name="gray_3x",
+        image_path=png,
+    )
+    bmp_export = _prepared_export_from_path(
+        fixture_id="fixture-safe",
+        prepared_source="legacy-bmp-control",
+        request_id="r:bmp",
+        field_name="best_ask",
+        pipeline_name="gray_3x",
+        image_path=bmp,
+    )
+
+    assert png_export.pixel_sha256 == bmp_export.pixel_sha256
+    assert png_export.encoded_sha256 != bmp_export.encoded_sha256
+    safe = _safe_png_bmp_result(
+        {
+            "fixture_id": "fixture-safe",
+            "prepared_source": "legacy",
+            "field_name": "best_ask",
+            "pipeline_name": "gray_3x",
+            "pixel_hash_same": True,
+            "png": {
+                "path": str(png),
+                "request_id": png_export.request_id,
+                "width": png_export.width,
+                "height": png_export.height,
+                "mode": png_export.mode,
+                "format": png_export.encoded_format,
+                "encoded_sha256": png_export.encoded_sha256,
+                "pixel_sha256": png_export.pixel_sha256,
+                "alpha": png_export.alpha,
+                "dpi": list(png_export.dpi),
+            },
+            "bmp": {
+                "path": str(bmp),
+                "request_id": bmp_export.request_id,
+                "width": bmp_export.width,
+                "height": bmp_export.height,
+                "mode": bmp_export.mode,
+                "format": bmp_export.encoded_format,
+                "encoded_sha256": bmp_export.encoded_sha256,
+                "pixel_sha256": bmp_export.pixel_sha256,
+                "alpha": bmp_export.alpha,
+                "dpi": list(bmp_export.dpi),
+            },
+            "ocr_status_same": True,
+            "ocr_structure_same": True,
+        }
+    )
+    assert "path" not in safe["png"]
+    assert safe["pixel_hash_same"] is True
+
+
+def test_cross_helper_request_mapping_audit_detects_order_duplicates_missing_and_unknown() -> None:
+    audit = audit_batch_response_mapping(
+        [{"request_id": "r2"}, {"request_id": "r1"}, {"request_id": "r1"}],
+        [{"request_id": "r2"}, {"request_id": "r3"}, {"request_id": "r3"}],
+    )
+
+    assert audit["mapping_key"] == "request_id"
+    assert audit["duplicate_request_ids"] == ["r1"]
+    assert audit["duplicate_response_ids"] == ["r3"]
+    assert audit["missing_response_ids"] == ["r1"]
+    assert audit["unknown_response_ids"] == ["r3"]
+    assert audit["valid"] is False
+
+
+def test_cross_helper_private_output_must_stay_under_ignored_private_artifacts(tmp_path: Path) -> None:
+    _validate_private_output_dir(Path("artifacts/private/screen-recognition-evaluation/cross-helper"))
+    with pytest.raises(ValueError):
+        _validate_private_output_dir(tmp_path)
+
+    ignore_text = Path(__file__).parents[3].joinpath(".gitignore").read_text(encoding="utf-8")
+    assert "artifacts/private/" in ignore_text
 
 
 def read_image_info_from_dimensions(filename: str, width: int, height: int):
