@@ -249,6 +249,7 @@ class OcrResult:
     backend_version: str
     fields: dict[str, OcrFieldEvidence]
     warnings: tuple[str, ...] = ()
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -258,6 +259,7 @@ class OcrResult:
                 name: evidence.to_json() for name, evidence in sorted(self.fields.items())
             },
             "warnings": list(self.warnings),
+            "diagnostics": self.diagnostics,
         }
 
 

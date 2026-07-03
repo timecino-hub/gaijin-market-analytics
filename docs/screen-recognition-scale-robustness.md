@@ -142,6 +142,125 @@ no private evaluation fixtures found
 
 It does not pretend that real Edge or Chrome zoom was tested.
 
+### Private Ground Truth
+
+Generate the local CSV template before judging accuracy:
+
+```sh
+uv run python -m api.screen_recognition.evaluate \
+  --input ../../artifacts/private/screen-recognition-evaluation \
+  --create-ground-truth-template
+```
+
+The template is written to:
+
+```text
+artifacts/private/screen-recognition-evaluation/ground-truth.csv
+```
+
+This file is ignored private data. It must not be committed. Fixture discovery
+only accepts paired files where `sample.png` has a same-name `sample.json`
+metadata file. Report files, private report files, diagnostics files, ROI crops,
+or historical debug JSON are not metadata and are not fixtures.
+
+Each row uses an anonymous `fixture_id`; the template does not store full local
+paths, URLs, slugs, item names, account data, tokens, screenshot content, or OCR
+output. Existing rows are preserved as-is. Re-running the command only appends
+new fixture rows and leaves already reviewed human values untouched.
+
+The user fills at least:
+
+```text
+expected_best_bid
+expected_best_ask
+reviewed
+```
+
+Prices must be Decimal strings exactly as displayed, for example `18.20`,
+`18.10`, `0.01`, or `2000.00`. Valid prices are finite, use at most two decimal
+places, and stay within `0.01 <= price <= 2000.00`. If a side is truly not
+visible in the screenshot, use `not_visible` or `not_applicable`; do not use `0`
+for missing values.
+
+Optional fields can record visible row counts and top bid/ask values in display
+order:
+
+```text
+expected_bid_count
+expected_ask_count
+expected_top_bid_values
+expected_top_ask_values
+```
+
+Use semicolon-separated Decimal values for top value lists. Rows with
+`reviewed=false` are validated but are excluded from accuracy statistics.
+
+### Accuracy Reports
+
+After ground truth is reviewed, run:
+
+```sh
+uv run python -u -m api.screen_recognition.evaluate \
+  --input ../../artifacts/private/screen-recognition-evaluation \
+  --output ../../artifacts/private/screen-recognition-evaluation/report.json \
+  --ground-truth ../../artifacts/private/screen-recognition-evaluation/ground-truth.csv \
+  --pretty
+```
+
+The safe `report.json` contains anonymous fixture IDs, browser, zoom, status,
+error code, stage reason, selected preprocessing pipeline, timings, and
+aggregate accuracy. It intentionally omits expected prices, recognized prices,
+raw OCR text, screenshots, full paths, URLs, item names, slugs, tokens, and
+base64 content.
+
+The private `report.private.json` and `diagnostics.html` are written in the
+ignored private directory. They may include expected/recognized price
+comparisons, local screenshot previews, ROI crop previews, and raw OCR debug
+details for local diagnosis only.
+
+Accuracy is grouped by:
+
+```text
+overall
+browser
+zoom
+sample_label
+layout_profile
+preprocessing_pipeline
+```
+
+Reported metrics include exact bid/ask matches, both-side exact match, missing
+outputs, wrong values, and false-confident errors. A false-confident error means
+the OCR produced a wrong value while `requires_review=false`; this is the highest
+risk local evaluation metric.
+
+### Profiling
+
+Use `--profile` for stage timing and OCR invocation counts:
+
+```sh
+uv run python -u -m api.screen_recognition.evaluate \
+  --input ../../artifacts/private/screen-recognition-evaluation \
+  --output ../../artifacts/private/screen-recognition-evaluation/report.json \
+  --only-browser chrome \
+  --limit 1 \
+  --verbose \
+  --profile \
+  --ocr-timeout-seconds 90
+```
+
+Profile output includes PowerShell process count, OCR invocation count,
+preprocessing pipelines attempted and completed, whether an early exit was used,
+per-pipeline duration, OCR engine initialization time, OCR execution time, total
+OCR duration, and total fixture duration. Verbose terminal output remains
+anonymous and must not print screenshot content or raw OCR text.
+
+Specific bid/ask missing reasons are recorded separately from the public
+compatible error codes. Examples include `bid_roi_empty`, `bid_ocr_empty`,
+`bid_price_parse_failed`, `bid_candidates_rejected`, `bid_selection_failed`,
+`ask_roi_empty`, `ask_ocr_empty`, `ask_price_parse_failed`,
+`ask_candidates_rejected`, and `ask_selection_failed`.
+
 ## Synthetic Scaling
 
 Synthetic scaling is useful for checking ROI normalization and preprocessing

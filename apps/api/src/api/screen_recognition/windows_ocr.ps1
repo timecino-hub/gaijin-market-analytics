@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$helperStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -56,15 +57,20 @@ function UnionBoxes($Boxes) {
 }
 
 function RecognizeImage($Path) {
+  $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $file = AwaitOperation ([Windows.Storage.StorageFile]::GetFileFromPathAsync($Path)) ([Windows.Storage.StorageFile])
   $stream = AwaitOperation ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
   $decoder = AwaitOperation ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
   $bitmap = AwaitOperation ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+  $engineStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  $engineStopwatch.Stop()
   if ($null -eq $engine) {
     throw "Windows OCR engine is unavailable for the current user profile languages."
   }
+  $ocrStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $result = AwaitOperation ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+  $ocrStopwatch.Stop()
   $lines = New-Object System.Collections.Generic.List[object]
   $lineOrder = 0
   foreach ($line in $result.Lines) {
@@ -89,9 +95,15 @@ function RecognizeImage($Path) {
     })
     $lineOrder += 1
   }
+  $totalStopwatch.Stop()
   return @{
     text = [string]$result.Text
     lines = @($lines.ToArray())
+    timing = @{
+      total_ms = [int]$totalStopwatch.ElapsedMilliseconds
+      engine_initialization_ms = [int]$engineStopwatch.ElapsedMilliseconds
+      ocr_execution_ms = [int]$ocrStopwatch.ElapsedMilliseconds
+    }
   }
 }
 
@@ -224,11 +236,30 @@ $warnings = New-Object System.Collections.Generic.List[string]
 $warnings.Add("ocr_confidence_unavailable")
 $tempFiles = New-Object System.Collections.Generic.List[string]
 $preprocessingVariants = GetPreprocessingVariants $inputPayload
+$diagnostics = @{
+  powershell_process_count = 1
+  ocr_invocation_count = 0
+  pipeline_count_attempted = 0
+  pipeline_count_completed = 0
+  early_exit_used = $false
+  blank_roi_count = 0
+  per_pipeline_duration_ms = @()
+  fields = @{}
+  total_ocr_duration_ms = 0
+}
 
 try {
   foreach ($property in $inputPayload.rois.PSObject.Properties) {
+    $fieldStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $fieldName = $property.Name
     $roi = $property.Value
+    $diagnostics.fields[$fieldName] = @{
+      blank_roi_fast_path = $false
+      pipeline_count_attempted = 0
+      pipeline_count_completed = 0
+      selected_pipeline = $null
+      duration_ms = 0
+    }
     $x = [Math]::Floor([decimal]$roi.x * $source.Width)
     $y = [Math]::Floor([decimal]$roi.y * $source.Height)
     $w = [Math]::Max(1, [Math]::Floor([decimal]$roi.width * $source.Width))
@@ -237,6 +268,10 @@ try {
     if ($y + $h -gt $source.Height) { $h = $source.Height - $y }
 
     if (-not (RegionHasInk $source $x $y $w $h)) {
+      $fieldStopwatch.Stop()
+      $diagnostics.blank_roi_count += 1
+      $diagnostics.fields[$fieldName].blank_roi_fast_path = $true
+      $diagnostics.fields[$fieldName].duration_ms = [int]$fieldStopwatch.ElapsedMilliseconds
       $fields[$fieldName] = @{
         raw_text = ""
         confidence = $null
@@ -256,6 +291,9 @@ try {
     $best = $null
     $bestScore = -9999
     foreach ($variant in $preprocessingVariants) {
+      $pipelineStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+      $diagnostics.pipeline_count_attempted += 1
+      $diagnostics.fields[$fieldName].pipeline_count_attempted += 1
       $crop = NewCropBitmap $source $x $y $w $h $variant
       $variantName = [string]$variant.name
       if ([string]::IsNullOrWhiteSpace($variantName)) { $variantName = "unnamed" }
@@ -271,7 +309,22 @@ try {
       $cropHeight = $crop.Height
       $crop.Dispose()
       $recognized = RecognizeImage $cropPath
+      $diagnostics.ocr_invocation_count += 1
+      $diagnostics.total_ocr_duration_ms += [int]$recognized.timing.total_ms
       $score = ScoreRecognizedText $fieldName $recognized.text
+      $pipelineStopwatch.Stop()
+      $diagnostics.pipeline_count_completed += 1
+      $diagnostics.fields[$fieldName].pipeline_count_completed += 1
+      $diagnostics.per_pipeline_duration_ms += @{
+        field_name = $fieldName
+        pipeline_name = $variantName
+        duration_ms = [int]$pipelineStopwatch.ElapsedMilliseconds
+        ocr_total_ms = [int]$recognized.timing.total_ms
+        engine_initialization_ms = [int]$recognized.timing.engine_initialization_ms
+        ocr_execution_ms = [int]$recognized.timing.ocr_execution_ms
+        produced_text = -not [string]::IsNullOrWhiteSpace([string]$recognized.text)
+        selected = $false
+      }
       if ($score -gt $bestScore) {
         $bestScore = $score
         $best = @{
@@ -285,6 +338,14 @@ try {
     if ($null -eq $best) {
       throw "No OCR preprocessing pipeline produced a result."
     }
+    foreach ($pipelineTiming in $diagnostics.per_pipeline_duration_ms) {
+      if ($pipelineTiming.field_name -eq $fieldName -and $pipelineTiming.pipeline_name -eq $best.pipeline_name) {
+        $pipelineTiming.selected = $true
+      }
+    }
+    $fieldStopwatch.Stop()
+    $diagnostics.fields[$fieldName].selected_pipeline = $best.pipeline_name
+    $diagnostics.fields[$fieldName].duration_ms = [int]$fieldStopwatch.ElapsedMilliseconds
     $fields[$fieldName] = @{
       raw_text = $best.recognized.text
       confidence = $null
@@ -309,8 +370,11 @@ finally {
   }
 }
 
+$helperStopwatch.Stop()
+$diagnostics.helper_total_duration_ms = [int]$helperStopwatch.ElapsedMilliseconds
 $output = @{
   fields = $fields
   warnings = @($warnings | Select-Object -Unique)
+  diagnostics = $diagnostics
 }
 $output | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $OutputJson

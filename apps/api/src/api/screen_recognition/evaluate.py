@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import html
 import json
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, TextIO
 
-from api.screen_recognition.contracts import ImageInfo
+from api.screen_recognition.contracts import ImageInfo, OcrResult, ScreenContract
 from api.screen_recognition.image_io import ImageReadError, read_image_info
 from api.screen_recognition.layouts import LayoutUnsupportedError, get_layout_profile, validate_layout_match
 from api.screen_recognition.ocr_backend import (
@@ -26,8 +30,43 @@ from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 
 
 PRIVATE_FIXTURE_MESSAGE = "no private evaluation fixtures found"
-SCHEMA_VERSION = "screen-recognition-private-evaluation/1.1.0"
+SCHEMA_VERSION = "screen-recognition-private-evaluation/1.2.0"
+GROUND_TRUTH_SCHEMA_VERSION = "screen-recognition-private-ground-truth/1.0.0"
 DEFAULT_OCR_TIMEOUT_SECONDS = 60
+GROUND_TRUTH_FILENAME = "ground-truth.csv"
+PRIVATE_REPORT_FILENAME = "report.private.json"
+DIAGNOSTICS_FILENAME = "diagnostics.html"
+GROUND_TRUTH_FIELDS = [
+    "schema_version",
+    "fixture_id",
+    "browser",
+    "declared_zoom",
+    "sample_label",
+    "expected_best_bid",
+    "expected_best_ask",
+    "expected_bid_count",
+    "expected_ask_count",
+    "expected_top_bid_values",
+    "expected_top_ask_values",
+    "notes",
+    "reviewed",
+]
+PRICE_STATUS_VALUES = {"not_visible", "not_applicable"}
+ACCURACY_METRICS = (
+    "ground_truth_not_reviewed",
+    "reviewed_count",
+    "best_bid_exact_match",
+    "best_ask_exact_match",
+    "both_exact_match",
+    "bid_missing",
+    "ask_missing",
+    "bid_wrong_value",
+    "ask_wrong_value",
+    "false_confident_bid",
+    "false_confident_ask",
+    "requires_review_true_positive",
+    "requires_review_false_negative",
+)
 
 
 @dataclass(frozen=True)
@@ -51,16 +90,66 @@ class EvaluationOptions:
     quiet: bool = False
     verbose: bool = False
     dry_run: bool = False
+    profile: bool = False
     limit: int | None = None
     only_browser: str | None = None
     only_zoom: str | None = None
     only_sample: str | None = None
     fail_fast: bool = False
     ocr_timeout_seconds: int = DEFAULT_OCR_TIMEOUT_SECONDS
+    ground_truth_path: Path | None = None
+    private_report_path: Path | None = None
+    diagnostics_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class TemplateResult:
+    path: Path
+    discovered_fixture_count: int
+    existing_row_count: int
+    appended_row_count: int
+    stale_row_count: int
+
+
+@dataclass(frozen=True)
+class GroundTruthValue:
+    decimal: Decimal | None
+    status: str | None = None
+
+
+@dataclass(frozen=True)
+class GroundTruthRow:
+    fixture_id: str
+    browser: str | None
+    declared_zoom: str | None
+    sample_label: str | None
+    expected_best_bid: GroundTruthValue
+    expected_best_ask: GroundTruthValue
+    expected_bid_count: int | None
+    expected_ask_count: int | None
+    expected_top_bid_values: tuple[GroundTruthValue, ...]
+    expected_top_ask_values: tuple[GroundTruthValue, ...]
+    notes: str
+    reviewed: bool
+
+
+@dataclass(frozen=True)
+class GroundTruthLoadResult:
+    rows: dict[str, GroundTruthRow]
+    warnings: tuple[str, ...]
+    errors: tuple[str, ...]
+    reviewed_count: int
+    not_reviewed_count: int
 
 
 class EvaluationInterrupted(KeyboardInterrupt):
     pass
+
+
+class GroundTruthCsvError(ValueError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = message.split(":", 1)[0]
 
 
 class Progress:
@@ -84,13 +173,18 @@ class Progress:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Evaluate local private screen-recognition fixtures.")
     parser.add_argument("--input", required=True, help="Ignored private fixture directory.")
-    parser.add_argument("--output", required=True, help="Ignored private report JSON path.")
+    parser.add_argument("--output", help="Ignored safe report JSON path.")
     parser.add_argument("--layout-profile", default="gaijin-market-desktop-v1")
     parser.add_argument("--ocr-backend", default="windows-ocr")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--create-ground-truth-template", action="store_true")
+    parser.add_argument("--ground-truth", help="Ignored private ground-truth CSV path.")
+    parser.add_argument("--private-report", help="Ignored private detailed report JSON path.")
+    parser.add_argument("--diagnostics", help="Ignored private diagnostics HTML path.")
     parser.add_argument("--limit", type=_positive_int)
     parser.add_argument("--only-browser", choices=("edge", "chrome"))
     parser.add_argument("--only-zoom")
@@ -100,22 +194,42 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.quiet and args.verbose:
         parser.error("--quiet and --verbose cannot be used together")
+    input_dir = Path(args.input)
+    ground_truth_path = Path(args.ground_truth) if args.ground_truth else input_dir / GROUND_TRUTH_FILENAME
 
+    if args.create_ground_truth_template:
+        progress = Progress(quiet=args.quiet, verbose=args.verbose, stream=sys.stderr)
+        result = create_private_ground_truth_template(input_dir=input_dir, output_path=ground_truth_path)
+        progress.summary(
+            "ground-truth template ready: "
+            f"fixtures={result.discovered_fixture_count} "
+            f"existing={result.existing_row_count} appended={result.appended_row_count} stale={result.stale_row_count}"
+        )
+        return
+
+    if not args.output:
+        parser.error("--output is required unless --create-ground-truth-template is used")
+
+    output_path = Path(args.output)
     options = EvaluationOptions(
-        input_dir=Path(args.input),
-        output_path=Path(args.output),
+        input_dir=input_dir,
+        output_path=output_path,
         layout_profile_name=args.layout_profile,
         ocr_backend_name=args.ocr_backend,
         pretty=args.pretty,
         quiet=args.quiet,
         verbose=args.verbose,
         dry_run=args.dry_run,
+        profile=args.profile,
         limit=args.limit,
         only_browser=args.only_browser,
         only_zoom=args.only_zoom,
         only_sample=args.only_sample,
         fail_fast=args.fail_fast,
         ocr_timeout_seconds=args.ocr_timeout_seconds,
+        ground_truth_path=ground_truth_path,
+        private_report_path=Path(args.private_report) if args.private_report else output_path.with_name(PRIVATE_REPORT_FILENAME),
+        diagnostics_path=Path(args.diagnostics) if args.diagnostics else input_dir / DIAGNOSTICS_FILENAME,
     )
     try:
         report = evaluate_private_fixtures_from_options(options)
@@ -141,12 +255,16 @@ def evaluate_private_fixtures(
     quiet: bool = True,
     verbose: bool = False,
     dry_run: bool = False,
+    profile: bool = False,
     limit: int | None = None,
     only_browser: str | None = None,
     only_zoom: str | None = None,
     only_sample: str | None = None,
     fail_fast: bool = False,
     ocr_timeout_seconds: int = DEFAULT_OCR_TIMEOUT_SECONDS,
+    ground_truth_path: Path | None = None,
+    private_report_path: Path | None = None,
+    diagnostics_path: Path | None = None,
     progress_stream: TextIO | None = None,
 ) -> dict[str, Any]:
     return evaluate_private_fixtures_from_options(
@@ -159,12 +277,16 @@ def evaluate_private_fixtures(
             quiet=quiet,
             verbose=verbose,
             dry_run=dry_run,
+            profile=profile,
             limit=limit,
             only_browser=only_browser,
             only_zoom=only_zoom,
             only_sample=only_sample,
             fail_fast=fail_fast,
             ocr_timeout_seconds=ocr_timeout_seconds,
+            ground_truth_path=ground_truth_path,
+            private_report_path=private_report_path,
+            diagnostics_path=diagnostics_path,
         ),
         progress_stream=progress_stream,
     )
@@ -182,53 +304,89 @@ def evaluate_private_fixtures_from_options(
         stream=progress_stream or sys.stderr,
     )
     progress.info(f"Evaluation input: {_redacted_path(options.input_dir)}")
-    progress.detail("directory discovery: running")
+    progress.detail("fixture discovery: running")
 
+    discovery_started = time.perf_counter()
     files = _discover_files(options.input_dir)
+    discovery_ms = int((time.perf_counter() - discovery_started) * 1000)
     png_count = len(files)
-    metadata_count = _count_metadata_files(options.input_dir)
+    json_counts = _classify_json_files(options.input_dir)
+    metadata_count = json_counts["paired_metadata_count"]
     progress.info(f"Discovered {png_count} PNG fixtures")
-    progress.info(f"Discovered {metadata_count} metadata files")
+    progress.info(
+        "Classified JSON files: "
+        f"paired_metadata={metadata_count} non_fixture={json_counts['non_fixture_json_count']}"
+    )
 
     files = _apply_filters(files, options)
     if options.limit is not None:
         files = files[: options.limit]
     progress.detail(f"metadata parsing: matched {len(files)} selected fixtures")
 
-    report = _new_report(options, fixture_count=len(files), discovered_png_count=png_count, metadata_count=metadata_count)
+    fixture_ids = {_fixture_id(item, options.input_dir) for item in files}
+    ground_truth_path = options.ground_truth_path or options.input_dir / GROUND_TRUTH_FILENAME
+    ground_truth = _load_private_ground_truth_if_present(ground_truth_path, fixture_ids)
+
+    report = _new_report(
+        options,
+        fixture_count=len(files),
+        discovered_png_count=png_count,
+        metadata_count=metadata_count,
+        json_counts=json_counts,
+    )
+    report["summary"]["stage_timings_ms"]["fixture_discovery"] = discovery_ms
+    report["ground_truth"] = _ground_truth_report_summary(ground_truth_path, ground_truth)
+
+    private_report = _new_private_report(options, report, ground_truth_path)
     if not files:
         report["message"] = PRIVATE_FIXTURE_MESSAGE
         report["summary"]["total_duration_ms"] = int((time.perf_counter() - started) * 1000)
         _write_report_atomic(options.output_path, report, pretty=options.pretty)
+        _write_optional_private_outputs(options, private_report, [], None, pretty=options.pretty)
         progress.summary(
             "screen recognition evaluation complete: fixtures=0 processed=0 requires_review=0"
         )
         return report
 
-    progress.detail("layout profile: loading")
+    progress.detail("layout selection: loading")
+    layout_started = time.perf_counter()
     profile = get_layout_profile(options.layout_profile_name)
+    report["summary"]["stage_timings_ms"]["layout_selection"] = int((time.perf_counter() - layout_started) * 1000)
     recognizer = None
     if not options.dry_run:
         progress.detail("ocr backend: configuring")
         recognizer = get_recognizer(options.ocr_backend_name, timeout_seconds=options.ocr_timeout_seconds)
 
     processed = 0
+    private_results: list[dict[str, Any]] = []
     try:
         for index, item in enumerate(files, start=1):
             progress.info(f"Processing {index}/{len(files)}: {_display_name(item)}")
-            result = _evaluate_file(
+            result, private_result = _evaluate_file(
                 item,
                 input_dir=options.input_dir,
                 profile=profile,
                 recognizer=recognizer,
                 dry_run=options.dry_run,
+                include_profile=options.profile,
                 progress=progress,
             )
             processed += 1
+            _apply_ground_truth(result, private_result, ground_truth.rows.get(result["fixture_id"]))
             report["results"].append(result)
+            private_results.append(private_result)
+            _accumulate_stage_timings(report, result)
             if result["requires_review"]:
                 report["summary"]["requires_review_count"] += 1
             error_label = result["error_code"] or "none"
+            if options.profile:
+                profile_summary = result.get("profile") or {}
+                progress.detail(
+                    "profile: "
+                    f"powershell_process_count={profile_summary.get('powershell_process_count', 0)} "
+                    f"ocr_invocation_count={profile_summary.get('ocr_invocation_count', 0)} "
+                    f"pipeline_count_attempted={profile_summary.get('pipeline_count_attempted', 0)}"
+                )
             progress.info(
                 f"Processed {index}/{len(files)}: {_display_name(item)} "
                 f"status={result['status']} error={error_label} duration_ms={result['timings']['total_ms']}"
@@ -241,17 +399,72 @@ def evaluate_private_fixtures_from_options(
         report["interrupted"] = True
         report["summary"]["processed_count"] = processed
         report["summary"]["total_duration_ms"] = int((time.perf_counter() - started) * 1000)
+        private_report["complete"] = False
+        private_report["interrupted"] = True
+        private_report["results"] = private_results
         _write_report_atomic(_partial_report_path(options.output_path), report, pretty=options.pretty)
+        if options.private_report_path is not None:
+            _write_report_atomic(_partial_report_path(options.private_report_path), private_report, pretty=options.pretty)
         progress.summary("Evaluation interrupted by user")
         progress.summary(f"Processed {processed}/{len(files)} fixtures")
         raise EvaluationInterrupted() from exc
 
     report["summary"]["processed_count"] = processed
     report["summary"]["total_duration_ms"] = int((time.perf_counter() - started) * 1000)
+    report["accuracy"] = _build_accuracy_summary(report["results"])
+    report["missing_stage_distribution"] = _missing_stage_distribution(report["results"])
+    report["profile_summary"] = _build_profile_summary(report["results"])
     if options.dry_run:
         report["message"] = f"dry-run complete: {processed} fixtures would be processed"
+
+    private_report["results"] = private_results
+    private_report["accuracy_private"] = _build_private_accuracy_details(private_results)
+    private_report["profile_summary"] = report["profile_summary"]
+    private_report["missing_stage_distribution"] = report["missing_stage_distribution"]
     _write_report_atomic(options.output_path, report, pretty=options.pretty)
+    _write_optional_private_outputs(options, private_report, files[:processed], profile, pretty=options.pretty)
     return report
+
+
+def create_private_ground_truth_template(*, input_dir: Path, output_path: Path) -> TemplateResult:
+    files = _discover_files(input_dir)
+    fixture_ids = {_fixture_id(item, input_dir) for item in files}
+    rows_to_append = [_template_row(item, input_dir) for item in files]
+    existing_ids: set[str] = set()
+    existing_count = 0
+    stale_count = 0
+    if output_path.exists():
+        with output_path.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames or []
+            missing = [field for field in GROUND_TRUTH_FIELDS if field not in fieldnames]
+            if missing:
+                raise GroundTruthCsvError(f"ground_truth_invalid: missing columns {', '.join(missing)}")
+            for row in reader:
+                existing_count += 1
+                fixture_id = (row.get("fixture_id") or "").strip()
+                if fixture_id:
+                    existing_ids.add(fixture_id)
+                    if fixture_id not in fixture_ids:
+                        stale_count += 1
+            append_rows = [row for row in rows_to_append if row["fixture_id"] not in existing_ids]
+            if append_rows:
+                with output_path.open("a", newline="", encoding="utf-8") as append_handle:
+                    writer = csv.DictWriter(append_handle, fieldnames=fieldnames, extrasaction="ignore")
+                    for row in append_rows:
+                        writer.writerow(row)
+            return TemplateResult(output_path, len(files), existing_count, len(append_rows), stale_count)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_name(f"{output_path.name}.tmp")
+    with temp_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GROUND_TRUTH_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows_to_append)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temp_path.replace(output_path)
+    return TemplateResult(output_path, len(files), 0, len(rows_to_append), 0)
 
 
 def _evaluate_file(
@@ -261,14 +474,19 @@ def _evaluate_file(
     profile: Any,
     recognizer: Any,
     dry_run: bool,
+    include_profile: bool,
     progress: Progress,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     started = time.perf_counter()
     timings: dict[str, int] = {}
     warnings: list[str] = []
     errors: list[str] = []
     error_stage: str | None = None
     image_info: ImageInfo | None = None
+    contract = ScreenContract()
+    ocr_result: OcrResult | None = None
+    stage_reasons: dict[str, str | None] = {"best_bid": None, "best_ask": None}
+    roi_pixels: dict[str, tuple[int, int, int, int]] = {}
 
     if item.metadata_error:
         errors.append(item.metadata_error)
@@ -279,23 +497,25 @@ def _evaluate_file(
         error_stage = error_stage or "metadata"
 
     try:
-        progress.detail("decode: running")
+        progress.detail("image decode: running")
         decode_started = time.perf_counter()
         image_info = read_image_info(item.path)
-        timings["decode_ms"] = int((time.perf_counter() - decode_started) * 1000)
-        progress.detail(f"decode: done {timings['decode_ms']}ms")
+        timings["image_decode_ms"] = int((time.perf_counter() - decode_started) * 1000)
+        progress.detail(f"image decode: done {timings['image_decode_ms']}ms")
 
-        progress.detail("roi: running")
+        progress.detail("ROI resolution: running")
         roi_started = time.perf_counter()
         validate_layout_match(profile, image_info)
-        for roi in profile.rois.values():
+        for name, roi in profile.rois.items():
             resolved = resolve_roi_pixels(roi, image_info)
+            roi_pixels[name] = resolved.as_tuple()
             warnings.extend(resolved.warnings)
-        timings["roi_ms"] = int((time.perf_counter() - roi_started) * 1000)
-        progress.detail(f"roi: done {timings['roi_ms']}ms")
+        timings["roi_resolution_ms"] = int((time.perf_counter() - roi_started) * 1000)
+        progress.detail(f"ROI resolution: done {timings['roi_resolution_ms']}ms")
 
         variant_count = len(windows_ocr_preprocessing_metadata().get("variants") or [])
-        progress.detail(f"preprocess: {variant_count} pipelines")
+        timings["preprocessing_pipeline_count"] = variant_count
+        progress.detail(f"preprocessing pipelines configured: {variant_count}")
         if dry_run:
             progress.detail("ocr: skipped for dry-run")
         else:
@@ -305,60 +525,85 @@ def _evaluate_file(
             timings["ocr_ms"] = int((time.perf_counter() - ocr_started) * 1000)
             progress.detail(f"ocr: done {timings['ocr_ms']}ms")
 
-            progress.detail("result parsing: running")
+            progress.detail("OCR output parsing: running")
             parse_started = time.perf_counter()
-            _contract, parse_warnings, parse_errors = parse_ocr_contract(ocr_result.fields, item_key=None)
-            timings["parse_ms"] = int((time.perf_counter() - parse_started) * 1000)
+            contract, parse_warnings, parse_errors = parse_ocr_contract(ocr_result.fields, item_key=None)
+            timings["ocr_output_parsing_ms"] = int((time.perf_counter() - parse_started) * 1000)
             warnings.extend(ocr_result.warnings)
             warnings.extend(parse_warnings)
             errors.extend(parse_errors)
-            progress.detail(f"result parsing: done {timings['parse_ms']}ms")
+            stage_reasons["best_bid"] = _price_missing_stage_reason(
+                "best_bid", "bid_levels", contract.best_bid, ocr_result, parse_errors
+            )
+            stage_reasons["best_ask"] = _price_missing_stage_reason(
+                "best_ask", "ask_levels", contract.best_ask, ocr_result, parse_errors
+            )
+            progress.detail(f"OCR output parsing: done {timings['ocr_output_parsing_ms']}ms")
     except ImageReadError:
         errors.append("image_decode_failed")
-        error_stage = error_stage or "decode"
+        error_stage = error_stage or "image_decode"
     except LayoutUnsupportedError:
         errors.append("layout_not_supported")
-        error_stage = error_stage or "roi"
+        error_stage = error_stage or "roi_resolution"
     except RoiValidationError as exc:
         errors.append(exc.code)
-        error_stage = error_stage or "roi"
+        error_stage = error_stage or "roi_resolution"
     except OcrBackendTimeoutError:
         errors.append("ocr_timeout")
-        error_stage = error_stage or "ocr"
+        error_stage = error_stage or "ocr_execution"
     except OcrBackendNotConfiguredError:
         errors.append("image_recognizer_not_configured")
-        error_stage = error_stage or "ocr"
+        error_stage = error_stage or "ocr_execution"
     except OcrBackendError:
         errors.append("ocr_process_failed")
-        error_stage = error_stage or "ocr"
+        error_stage = error_stage or "ocr_execution"
     except (json.JSONDecodeError, ValueError, TypeError):
         errors.append("ocr_output_invalid")
-        error_stage = error_stage or "result_parse"
+        error_stage = error_stage or "ocr_output_parsing"
 
     timings["total_ms"] = int((time.perf_counter() - started) * 1000)
-    unique_errors = sorted(set(errors))
-    unique_warnings = sorted(set(warnings))
+    unique_errors = tuple(sorted(set(errors)))
+    unique_warnings = tuple(sorted(set(warnings)))
     status = "dry_run" if dry_run and not unique_errors else "ok"
     if unique_errors:
         status = "failed"
     elif unique_warnings:
         status = "requires_review"
-    return {
-        "fixture_id": _fixture_id(item, input_dir),
+
+    profile_summary = _profile_from_ocr_result(ocr_result, timings, include_profile=include_profile)
+    fixture_id = _fixture_id(item, input_dir)
+    pipeline = _selected_pipeline_label(ocr_result)
+    result = {
+        "fixture_id": fixture_id,
         "browser": item.browser,
         "declared_zoom": item.declared_zoom,
         "sample_label": item.sample_label,
         "status": status,
         "error_code": unique_errors[0] if unique_errors else None,
         "error_stage": error_stage,
+        "stage_reasons": {key: value for key, value in stage_reasons.items() if value is not None},
         "requires_review": bool(unique_errors or unique_warnings),
         "ocr_skipped": dry_run,
-        "warnings": unique_warnings,
-        "errors": unique_errors,
+        "warnings": list(unique_warnings),
+        "errors": list(unique_errors),
         "image_format": None if image_info is None else image_info.format,
         "layout_profile": profile.name,
+        "preprocessing_pipeline": pipeline,
         "timings": timings,
+        "profile": profile_summary if include_profile else None,
+        "ground_truth_status": "not_loaded",
+        "accuracy": None,
     }
+    private_result = {
+        **result,
+        "image_path": str(item.path.resolve()),
+        "metadata_path": str(item.metadata_path.resolve()),
+        "image_info": None if image_info is None else image_info.to_json(),
+        "roi_pixels": {name: list(value) for name, value in sorted(roi_pixels.items())},
+        "recognized": contract.to_json(),
+        "raw_ocr": {} if ocr_result is None else ocr_result.to_json(),
+    }
+    return result, private_result
 
 
 def _discover_files(input_dir: Path) -> list[EvaluationFile]:
@@ -369,12 +614,14 @@ def _discover_files(input_dir: Path) -> list[EvaluationFile]:
         if not path.is_file():
             continue
         metadata_path = path.with_suffix(".json")
+        if not metadata_path.is_file():
+            continue
         metadata, metadata_error = _read_metadata(metadata_path)
         relative_parts = path.relative_to(input_dir).parts
         path_browser = relative_parts[0] if len(relative_parts) >= 3 else None
         path_zoom = relative_parts[1] if len(relative_parts) >= 3 else None
-        browser = _safe_metadata_text(metadata, ("browser", "browser_name")) or path_browser
-        zoom = _safe_metadata_text(metadata, ("zoom", "browser_zoom", "declared_zoom")) or path_zoom
+        browser = _safe_metadata_text(metadata, ("browser", "browser_name")) or _safe_path_label(path_browser)
+        zoom = _safe_metadata_text(metadata, ("zoom", "browser_zoom", "declared_zoom")) or _safe_path_label(path_zoom)
         sample_label = (
             _safe_metadata_text(metadata, ("sample_label", "sample_id", "fixture_label", "fixture_id", "capture_label"))
             or f"sample-{index:03d}"
@@ -405,10 +652,22 @@ def _read_metadata(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def _count_metadata_files(input_dir: Path) -> int:
+def _classify_json_files(input_dir: Path) -> dict[str, int]:
     if not input_dir.is_dir():
-        return 0
-    return sum(1 for path in input_dir.rglob("*.json") if path.is_file() and path.with_suffix(".png").is_file())
+        return {"json_file_count": 0, "paired_metadata_count": 0, "non_fixture_json_count": 0}
+    total = 0
+    paired = 0
+    for path in input_dir.rglob("*.json"):
+        if not path.is_file():
+            continue
+        total += 1
+        if path.with_suffix(".png").is_file():
+            paired += 1
+    return {
+        "json_file_count": total,
+        "paired_metadata_count": paired,
+        "non_fixture_json_count": total - paired,
+    }
 
 
 def _apply_filters(files: list[EvaluationFile], options: EvaluationOptions) -> list[EvaluationFile]:
@@ -422,6 +681,431 @@ def _apply_filters(files: list[EvaluationFile], options: EvaluationOptions) -> l
     return selected
 
 
+def _load_private_ground_truth_if_present(path: Path, known_fixture_ids: set[str]) -> GroundTruthLoadResult:
+    if not path.is_file():
+        return GroundTruthLoadResult({}, (), ("ground_truth_missing",), 0, 0)
+    try:
+        return _load_private_ground_truth(path, known_fixture_ids)
+    except GroundTruthCsvError as exc:
+        return GroundTruthLoadResult({}, (), (exc.code,), 0, 0)
+
+
+def _load_private_ground_truth(path: Path, known_fixture_ids: set[str]) -> GroundTruthLoadResult:
+    rows: dict[str, GroundTruthRow] = {}
+    warnings: list[str] = []
+    reviewed_count = 0
+    not_reviewed_count = 0
+    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        missing = [field for field in GROUND_TRUTH_FIELDS if field not in fieldnames]
+        if missing:
+            raise GroundTruthCsvError("ground_truth_invalid")
+        for line_number, raw in enumerate(reader, start=2):
+            fixture_id = (raw.get("fixture_id") or "").strip()
+            if not fixture_id:
+                raise GroundTruthCsvError("ground_truth_invalid")
+            if fixture_id in rows:
+                raise GroundTruthCsvError("ground_truth_duplicate")
+            if fixture_id not in known_fixture_ids:
+                warnings.append("ground_truth_fixture_unknown")
+            reviewed = _parse_bool(raw.get("reviewed"), line_number)
+            row = GroundTruthRow(
+                fixture_id=fixture_id,
+                browser=_blank_to_none(raw.get("browser")),
+                declared_zoom=_blank_to_none(raw.get("declared_zoom")),
+                sample_label=_blank_to_none(raw.get("sample_label")),
+                expected_best_bid=_parse_ground_truth_price(raw.get("expected_best_bid"), line_number),
+                expected_best_ask=_parse_ground_truth_price(raw.get("expected_best_ask"), line_number),
+                expected_bid_count=_parse_optional_int(raw.get("expected_bid_count"), line_number),
+                expected_ask_count=_parse_optional_int(raw.get("expected_ask_count"), line_number),
+                expected_top_bid_values=_parse_price_list(raw.get("expected_top_bid_values"), line_number),
+                expected_top_ask_values=_parse_price_list(raw.get("expected_top_ask_values"), line_number),
+                notes=raw.get("notes") or "",
+                reviewed=reviewed,
+            )
+            if reviewed:
+                reviewed_count += 1
+            else:
+                not_reviewed_count += 1
+            rows[fixture_id] = row
+    return GroundTruthLoadResult(
+        rows=rows,
+        warnings=tuple(sorted(set(warnings))),
+        errors=(),
+        reviewed_count=reviewed_count,
+        not_reviewed_count=not_reviewed_count,
+    )
+
+
+def _apply_ground_truth(
+    result: dict[str, Any],
+    private_result: dict[str, Any],
+    row: GroundTruthRow | None,
+) -> None:
+    if row is None:
+        result["ground_truth_status"] = "missing"
+        private_result["ground_truth_status"] = "missing"
+        return
+    private_result["expected"] = _ground_truth_row_to_private_json(row)
+    if not row.reviewed:
+        result["ground_truth_status"] = "not_reviewed"
+        private_result["ground_truth_status"] = "not_reviewed"
+        return
+    recognized = private_result.get("recognized") or {}
+    actual_bid = _decimal_or_none(recognized.get("best_bid"))
+    actual_ask = _decimal_or_none(recognized.get("best_ask"))
+    bid = _compare_price(row.expected_best_bid, actual_bid)
+    ask = _compare_price(row.expected_best_ask, actual_ask)
+    any_error = bid["error"] or ask["error"]
+    requires_review = bool(result["requires_review"])
+    accuracy = {
+        "best_bid_exact_match": bid["exact_match"],
+        "best_ask_exact_match": ask["exact_match"],
+        "both_exact_match": bid["exact_match"] is True and ask["exact_match"] is True,
+        "bid_missing": bid["missing"],
+        "ask_missing": ask["missing"],
+        "bid_wrong_value": bid["wrong_value"],
+        "ask_wrong_value": ask["wrong_value"],
+        "false_confident_bid": bid["wrong_value"] and not requires_review,
+        "false_confident_ask": ask["wrong_value"] and not requires_review,
+        "requires_review_true_positive": any_error and requires_review,
+        "requires_review_false_negative": any_error and not requires_review,
+    }
+    result["ground_truth_status"] = "reviewed"
+    result["accuracy"] = accuracy
+    private_result["ground_truth_status"] = "reviewed"
+    private_result["accuracy"] = {
+        **accuracy,
+        "actual_best_bid": None if actual_bid is None else str(actual_bid),
+        "actual_best_ask": None if actual_ask is None else str(actual_ask),
+    }
+
+
+def _compare_price(expected: GroundTruthValue, actual: Decimal | None) -> dict[str, bool | None]:
+    if expected.decimal is None:
+        return {
+            "exact_match": None,
+            "missing": False,
+            "wrong_value": actual is not None and expected.status in PRICE_STATUS_VALUES,
+            "error": actual is not None and expected.status in PRICE_STATUS_VALUES,
+        }
+    if actual is None:
+        return {"exact_match": False, "missing": True, "wrong_value": False, "error": True}
+    exact = actual == expected.decimal
+    return {"exact_match": exact, "missing": False, "wrong_value": not exact, "error": not exact}
+
+
+def _build_accuracy_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Counter[str]]] = {
+        "overall": {"all": Counter()},
+        "browser": {},
+        "zoom": {},
+        "sample_label": {},
+        "layout_profile": {},
+        "preprocessing_pipeline": {},
+    }
+    for result in results:
+        accuracy = result.get("accuracy")
+        if result.get("ground_truth_status") != "reviewed" or not isinstance(accuracy, dict):
+            if result.get("ground_truth_status") == "not_reviewed":
+                grouped["overall"]["all"]["ground_truth_not_reviewed"] += 1
+            continue
+        labels = {
+            "overall": "all",
+            "browser": str(result.get("browser") or "unknown"),
+            "zoom": str(result.get("declared_zoom") or "unknown"),
+            "sample_label": str(result.get("sample_label") or "unknown"),
+            "layout_profile": str(result.get("layout_profile") or "unknown"),
+            "preprocessing_pipeline": str(result.get("preprocessing_pipeline") or "none"),
+        }
+        for dimension, label in labels.items():
+            counter = grouped[dimension].setdefault(label, Counter())
+            counter["reviewed_count"] += 1
+            for metric in ACCURACY_METRICS:
+                if metric == "reviewed_count":
+                    continue
+                if accuracy.get(metric):
+                    counter[metric] += 1
+    return {
+        dimension: {
+            label: _complete_metric_counter(counter)
+            for label, counter in sorted(values.items())
+        }
+        for dimension, values in grouped.items()
+    }
+
+
+def _complete_metric_counter(counter: Counter[str]) -> dict[str, int]:
+    return {metric: int(counter.get(metric, 0)) for metric in ACCURACY_METRICS}
+
+
+def _build_private_accuracy_details(private_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    details = []
+    for result in private_results:
+        if result.get("ground_truth_status") != "reviewed":
+            continue
+        details.append(
+            {
+                "fixture_id": result["fixture_id"],
+                "expected": result.get("expected"),
+                "recognized": {
+                    "best_bid": (result.get("recognized") or {}).get("best_bid"),
+                    "best_ask": (result.get("recognized") or {}).get("best_ask"),
+                },
+                "accuracy": result.get("accuracy"),
+            }
+        )
+    return details
+
+
+def _missing_stage_distribution(results: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    counters = {"best_bid": Counter(), "best_ask": Counter()}
+    for result in results:
+        reasons = result.get("stage_reasons") or {}
+        for field in ("best_bid", "best_ask"):
+            reason = reasons.get(field)
+            if reason:
+                counters[field][reason] += 1
+    return {field: dict(sorted(counter.items())) for field, counter in counters.items()}
+
+
+def _build_profile_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = Counter()
+    per_fixture = []
+    durations = []
+    for result in results:
+        timings = result.get("timings") or {}
+        if isinstance(timings.get("total_ms"), int):
+            durations.append(timings["total_ms"])
+        profile = result.get("profile") or {}
+        for key in (
+            "powershell_process_count",
+            "ocr_invocation_count",
+            "pipeline_count_attempted",
+            "pipeline_count_completed",
+            "total_ocr_duration_ms",
+        ):
+            value = profile.get(key)
+            if isinstance(value, int):
+                totals[key] += value
+        per_fixture.append(
+            {
+                "fixture_id": result["fixture_id"],
+                "powershell_process_count": int(profile.get("powershell_process_count") or 0),
+                "ocr_invocation_count": int(profile.get("ocr_invocation_count") or 0),
+                "pipeline_count_attempted": int(profile.get("pipeline_count_attempted") or 0),
+                "pipeline_count_completed": int(profile.get("pipeline_count_completed") or 0),
+                "early_exit_used": bool(profile.get("early_exit_used") or False),
+                "total_fixture_duration_ms": timings.get("total_ms"),
+            }
+        )
+    durations_sorted = sorted(durations)
+    return {
+        "totals": dict(totals),
+        "median_fixture_duration_ms": _percentile(durations_sorted, 50),
+        "p95_fixture_duration_ms": _percentile(durations_sorted, 95),
+        "per_fixture": per_fixture,
+    }
+
+
+def _profile_from_ocr_result(
+    ocr_result: OcrResult | None,
+    timings: dict[str, int],
+    *,
+    include_profile: bool,
+) -> dict[str, Any]:
+    diagnostics = {} if ocr_result is None else dict(ocr_result.diagnostics)
+    summary = {
+        "powershell_process_count": int(diagnostics.get("powershell_process_count") or 0),
+        "ocr_invocation_count": int(diagnostics.get("ocr_invocation_count") or 0),
+        "pipeline_count_attempted": int(diagnostics.get("pipeline_count_attempted") or 0),
+        "pipeline_count_completed": int(diagnostics.get("pipeline_count_completed") or 0),
+        "early_exit_used": bool(diagnostics.get("early_exit_used") or False),
+        "per_pipeline_duration_ms": diagnostics.get("per_pipeline_duration_ms") or [],
+        "total_ocr_duration_ms": int(diagnostics.get("total_ocr_duration_ms") or 0),
+        "total_fixture_duration_ms": timings.get("total_ms"),
+        "powershell_process_startup_overhead_ms": diagnostics.get("powershell_process_startup_overhead_ms"),
+        "ocr_engine_initialization_total_ms": _sum_pipeline_metric(diagnostics, "engine_initialization_ms"),
+        "ocr_execution_total_ms": _sum_pipeline_metric(diagnostics, "ocr_execution_ms"),
+    }
+    return summary if include_profile else {
+        key: summary[key]
+        for key in (
+            "powershell_process_count",
+            "ocr_invocation_count",
+            "pipeline_count_attempted",
+            "pipeline_count_completed",
+            "early_exit_used",
+            "total_ocr_duration_ms",
+        )
+    }
+
+
+def _sum_pipeline_metric(diagnostics: dict[str, Any], key: str) -> int:
+    total = 0
+    for item in diagnostics.get("per_pipeline_duration_ms") or []:
+        if isinstance(item, dict) and isinstance(item.get(key), int):
+            total += item[key]
+    return total
+
+
+def _price_missing_stage_reason(
+    field_name: str,
+    levels_field: str,
+    value: Decimal | None,
+    ocr_result: OcrResult,
+    parse_errors: list[str],
+) -> str | None:
+    if value is not None:
+        return None
+    prefix = "bid" if field_name == "best_bid" else "ask"
+    evidence = ocr_result.fields.get(field_name)
+    level_evidence = ocr_result.fields.get(levels_field)
+    field_errors = set(parse_errors)
+    field_warnings = set(evidence.warnings if evidence is not None else ())
+    if any("blank_roi_fast_path" in warning for warning in field_warnings):
+        return f"{prefix}_roi_empty"
+    raw = "" if evidence is None else evidence.raw_text.strip()
+    level_raw = "" if level_evidence is None else level_evidence.raw_text.strip()
+    if not raw and not level_raw:
+        return f"{prefix}_ocr_empty"
+    if "price_decimal_unconfirmed" in field_errors or "price_ocr_invalid" in field_errors:
+        return f"{prefix}_price_parse_failed"
+    if "ocr_candidate_ambiguous" in field_errors:
+        return f"{prefix}_candidates_rejected"
+    if f"{field_name}_missing" in field_errors:
+        return f"{prefix}_selection_failed"
+    return f"{prefix}_schema_discarded"
+
+
+def _selected_pipeline_label(ocr_result: OcrResult | None) -> str | None:
+    if ocr_result is None:
+        return None
+    labels = []
+    for evidence in ocr_result.fields.values():
+        for warning in evidence.warnings:
+            if warning.startswith("preprocessing_pipeline:"):
+                labels.append(warning.split(":", 1)[1])
+    if not labels:
+        return None
+    return "+".join(sorted(set(labels)))
+
+
+def _write_optional_private_outputs(
+    options: EvaluationOptions,
+    private_report: dict[str, Any],
+    files: list[EvaluationFile],
+    profile: Any,
+    *,
+    pretty: bool,
+) -> None:
+    private_report_path = options.private_report_path or options.output_path.with_name(PRIVATE_REPORT_FILENAME)
+    diagnostics_path = options.diagnostics_path or options.input_dir / DIAGNOSTICS_FILENAME
+    _write_report_atomic(private_report_path, private_report, pretty=pretty)
+    if profile is not None:
+        _write_diagnostics_html(
+            path=diagnostics_path,
+            input_dir=options.input_dir,
+            files=files,
+            profile=profile,
+            private_results=private_report.get("results") or [],
+        )
+
+
+def _write_diagnostics_html(
+    *,
+    path: Path,
+    input_dir: Path,
+    files: list[EvaluationFile],
+    profile: Any,
+    private_results: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    crops_dir = path.parent / "diagnostics-crops"
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    result_by_id = {result["fixture_id"]: result for result in private_results}
+    rows = []
+    for item in files:
+        fixture_id = _fixture_id(item, input_dir)
+        result = result_by_id.get(fixture_id, {})
+        crop_links = _write_roi_crops(item, input_dir, profile, crops_dir)
+        rows.append(
+            "<section>"
+            f"<h2>{html.escape(fixture_id)}</h2>"
+            f"<p>browser={html.escape(str(item.browser or ''))} "
+            f"zoom={html.escape(str(item.declared_zoom or ''))} "
+            f"ground_truth={html.escape(str(result.get('ground_truth_status', 'unknown')))}</p>"
+            f"<p><img class=\"screenshot\" src=\"{html.escape(str(item.path.resolve()))}\" alt=\"fixture screenshot\"></p>"
+            f"<p>bid ROI: {_html_link(crop_links.get('best_bid'))} "
+            f"ask ROI: {_html_link(crop_links.get('best_ask'))}</p>"
+            f"<pre>{html.escape(json.dumps(_diagnostic_result_summary(result), ensure_ascii=False, indent=2))}</pre>"
+            "</section>"
+        )
+    document = (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<title>Private Screen Recognition Diagnostics</title>"
+        "<style>body{font-family:Arial,sans-serif;margin:24px;}"
+        "section{border-top:1px solid #ccc;padding:16px 0;}"
+        ".screenshot{max-width:960px;width:100%;height:auto;}"
+        "pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;}</style>"
+        "</head><body><h1>Private Screen Recognition Diagnostics</h1>"
+        "<p>This ignored local report may contain private screenshot previews and OCR debug details.</p>"
+        + "".join(rows)
+        + "</body></html>"
+    )
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_text(document, encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _write_roi_crops(
+    item: EvaluationFile,
+    input_dir: Path,
+    profile: Any,
+    crops_dir: Path,
+) -> dict[str, Path]:
+    from PIL import Image
+
+    fixture_id = _fixture_id(item, input_dir)
+    links: dict[str, Path] = {}
+    try:
+        info = read_image_info(item.path)
+        with Image.open(item.path) as image:
+            for field in ("best_bid", "best_ask"):
+                roi = profile.rois.get(field)
+                if roi is None:
+                    continue
+                resolved = resolve_roi_pixels(roi, info)
+                x, y, width, height = resolved.as_tuple()
+                crop_path = crops_dir / f"{fixture_id}-{field}.png"
+                image.crop((x, y, x + width, y + height)).save(crop_path)
+                links[field] = crop_path
+    except Exception:
+        return links
+    return links
+
+
+def _diagnostic_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result.get("status"),
+        "error_code": result.get("error_code"),
+        "stage_reasons": result.get("stage_reasons"),
+        "requires_review": result.get("requires_review"),
+        "timings": result.get("timings"),
+        "profile": result.get("profile"),
+        "accuracy": result.get("accuracy"),
+        "raw_ocr": result.get("raw_ocr"),
+    }
+
+
+def _html_link(path: Path | None) -> str:
+    if path is None:
+        return "unavailable"
+    escaped = html.escape(str(path.resolve()))
+    return f"<a href=\"{escaped}\">{html.escape(path.name)}</a>"
+
+
 def _safe_metadata_text(metadata: dict[str, Any] | None, keys: tuple[str, ...]) -> str | None:
     if metadata is None:
         return None
@@ -433,6 +1117,12 @@ def _safe_metadata_text(metadata: dict[str, Any] | None, keys: tuple[str, ...]) 
         if _is_safe_label(text):
             return text[:64]
     return None
+
+
+def _safe_path_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value if _is_safe_label(value) else None
 
 
 def _is_safe_label(text: str) -> bool:
@@ -457,12 +1147,31 @@ def _fixture_id(item: EvaluationFile, input_dir: Path) -> str:
     return f"fixture-{hashlib.sha256(relative.encode('utf-8')).hexdigest()[:12]}"
 
 
+def _template_row(item: EvaluationFile, input_dir: Path) -> dict[str, str]:
+    return {
+        "schema_version": GROUND_TRUTH_SCHEMA_VERSION,
+        "fixture_id": _fixture_id(item, input_dir),
+        "browser": item.browser or "",
+        "declared_zoom": item.declared_zoom or "",
+        "sample_label": item.sample_label,
+        "expected_best_bid": "",
+        "expected_best_ask": "",
+        "expected_bid_count": "",
+        "expected_ask_count": "",
+        "expected_top_bid_values": "",
+        "expected_top_ask_values": "",
+        "notes": "",
+        "reviewed": "false",
+    }
+
+
 def _new_report(
     options: EvaluationOptions,
     *,
     fixture_count: int,
     discovered_png_count: int,
     metadata_count: int,
+    json_counts: dict[str, int],
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -475,6 +1184,7 @@ def _new_report(
         "layout_profile": options.layout_profile_name,
         "ocr_backend": options.ocr_backend_name,
         "dry_run": options.dry_run,
+        "profile_enabled": options.profile,
         "ocr_timeout_seconds": options.ocr_timeout_seconds,
         "filters": {
             "limit": options.limit,
@@ -486,19 +1196,86 @@ def _new_report(
         "results": [],
         "summary": {
             "discovered_png_count": discovered_png_count,
+            "json_file_count": json_counts["json_file_count"],
             "metadata_count": metadata_count,
+            "non_fixture_json_count": json_counts["non_fixture_json_count"],
             "fixture_count": fixture_count,
             "processed_count": 0,
             "requires_review_count": 0,
+            "stage_timings_ms": {
+                "fixture_discovery": 0,
+                "metadata_parsing": 0,
+                "image_decode": 0,
+                "layout_selection": 0,
+                "roi_resolution": 0,
+                "ocr_execution": 0,
+                "ocr_output_parsing": 0,
+                "candidate_validation": 0,
+                "report_serialization": 0,
+            },
             "total_duration_ms": None,
         },
     }
 
 
+def _new_private_report(
+    options: EvaluationOptions,
+    safe_report: dict[str, Any],
+    ground_truth_path: Path,
+) -> dict[str, Any]:
+    return {
+        "schema_version": f"{SCHEMA_VERSION}.private",
+        "complete": safe_report["complete"],
+        "interrupted": False,
+        "private_paths_recorded": True,
+        "database_access": False,
+        "network_access": False,
+        "input_dir": str(options.input_dir.resolve()),
+        "ground_truth_path": str(ground_truth_path.resolve()),
+        "safe_report_path": str(options.output_path.resolve()),
+        "summary": safe_report["summary"],
+        "ground_truth": safe_report["ground_truth"],
+        "results": [],
+    }
+
+
+def _ground_truth_report_summary(path: Path, ground_truth: GroundTruthLoadResult) -> dict[str, Any]:
+    if "ground_truth_missing" in ground_truth.errors:
+        status = "missing"
+    elif ground_truth.errors:
+        status = "invalid"
+    else:
+        status = "loaded"
+    return {
+        "path_recorded": False,
+        "filename": path.name,
+        "status": status,
+        "reviewed_count": ground_truth.reviewed_count,
+        "not_reviewed_count": ground_truth.not_reviewed_count,
+        "warnings": list(ground_truth.warnings),
+        "errors": list(ground_truth.errors),
+    }
+
+
+def _accumulate_stage_timings(report: dict[str, Any], result: dict[str, Any]) -> None:
+    stage_timings = report["summary"]["stage_timings_ms"]
+    timings = result.get("timings") or {}
+    stage_timings["image_decode"] += int(timings.get("image_decode_ms") or 0)
+    stage_timings["roi_resolution"] += int(timings.get("roi_resolution_ms") or 0)
+    stage_timings["ocr_execution"] += int(timings.get("ocr_ms") or 0)
+    stage_timings["ocr_output_parsing"] += int(timings.get("ocr_output_parsing_ms") or 0)
+
+
 def _write_report_atomic(output_path: Path, report: dict[str, Any], *, pretty: bool) -> None:
+    serialization_started = time.perf_counter()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_name(f"{output_path.name}.tmp")
     payload = json.dumps(report, ensure_ascii=False, indent=2 if pretty else None, sort_keys=True) + "\n"
+    if isinstance(report.get("summary"), dict) and isinstance(report["summary"].get("stage_timings_ms"), dict):
+        report["summary"]["stage_timings_ms"]["report_serialization"] = int(
+            (time.perf_counter() - serialization_started) * 1000
+        )
+        payload = json.dumps(report, ensure_ascii=False, indent=2 if pretty else None, sort_keys=True) + "\n"
     try:
         with temp_path.open("w", encoding="utf-8") as handle:
             handle.write(payload)
@@ -526,6 +1303,107 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
     return parsed
+
+
+def _parse_bool(value: str | None, line_number: int) -> bool:
+    normalized = (value or "").strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: reviewed must be true or false")
+
+
+def _parse_ground_truth_price(value: str | None, line_number: int) -> GroundTruthValue:
+    text = (value or "").strip()
+    if not text:
+        return GroundTruthValue(None)
+    if text in PRICE_STATUS_VALUES:
+        return GroundTruthValue(None, status=text)
+    parsed = _parse_decimal(text, line_number)
+    if parsed < Decimal("0.01") or parsed > Decimal("2000.00"):
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: price out of range")
+    if parsed.as_tuple().exponent < -2:
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: price has more than two decimals")
+    return GroundTruthValue(parsed)
+
+
+def _parse_price_list(value: str | None, line_number: int) -> tuple[GroundTruthValue, ...]:
+    text = (value or "").strip()
+    if not text:
+        return ()
+    return tuple(_parse_ground_truth_price(part.strip(), line_number) for part in text.split(";") if part.strip())
+
+
+def _parse_decimal(value: str, line_number: int) -> Decimal:
+    if any(marker in value.lower() for marker in ("nan", "inf")):
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: price must be finite")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: invalid Decimal") from exc
+    if not parsed.is_finite():
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: price must be finite")
+    return parsed
+
+
+def _parse_optional_int(value: str | None, line_number: int) -> int | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if not text.isdecimal():
+        raise GroundTruthCsvError(f"ground_truth_invalid: line {line_number}: count must be an integer")
+    return int(text)
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
+def _ground_truth_row_to_private_json(row: GroundTruthRow) -> dict[str, Any]:
+    return {
+        "fixture_id": row.fixture_id,
+        "expected_best_bid": _ground_truth_value_to_json(row.expected_best_bid),
+        "expected_best_ask": _ground_truth_value_to_json(row.expected_best_ask),
+        "expected_bid_count": row.expected_bid_count,
+        "expected_ask_count": row.expected_ask_count,
+        "expected_top_bid_values": [_ground_truth_value_to_json(value) for value in row.expected_top_bid_values],
+        "expected_top_ask_values": [_ground_truth_value_to_json(value) for value in row.expected_top_ask_values],
+        "reviewed": row.reviewed,
+        "notes": row.notes,
+    }
+
+
+def _ground_truth_value_to_json(value: GroundTruthValue) -> str | None:
+    if value.status is not None:
+        return value.status
+    if value.decimal is None:
+        return None
+    return str(value.decimal)
+
+
+def _percentile(values: list[int], percentile: int) -> int | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    rank = (len(values) - 1) * (percentile / 100)
+    lower = int(rank)
+    upper = min(lower + 1, len(values) - 1)
+    if lower == upper:
+        return values[lower]
+    fraction = rank - lower
+    return int(values[lower] + ((values[upper] - values[lower]) * fraction))
 
 
 if __name__ == "__main__":

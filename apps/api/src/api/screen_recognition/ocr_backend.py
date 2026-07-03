@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from decimal import Decimal
@@ -130,7 +131,9 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                 "-OutputJson",
                 str(output_path),
             ]
+            helper_started = time.perf_counter()
             completed = _run_windows_helper(command, timeout_seconds=self._timeout_seconds)
+            helper_duration_ms = int((time.perf_counter() - helper_started) * 1000)
             if completed.returncode != 0:
                 stderr = (completed.stderr or "").strip().splitlines()
                 reason = stderr[-1] if stderr else "windows-ocr failed"
@@ -154,11 +157,27 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                 lines=tuple(_parse_lines(value.get("lines") or [])),
                 warnings=field_warnings,
             )
+        diagnostics = payload.get("diagnostics") or {}
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        helper_total_ms = _safe_int(diagnostics.get("helper_total_duration_ms"))
+        process_startup_ms = (
+            max(0, helper_duration_ms - helper_total_ms)
+            if helper_total_ms is not None
+            else None
+        )
+        diagnostics = {
+            **diagnostics,
+            "powershell_process_count": 1,
+            "python_observed_helper_duration_ms": helper_duration_ms,
+            "powershell_process_startup_overhead_ms": process_startup_ms,
+        }
         return OcrResult(
             backend_name=self.backend_name,
             backend_version=self.backend_version,
             fields=fields,
             warnings=tuple(sorted(code for code in warnings if code != "ocr_confidence_unavailable")),
+            diagnostics=diagnostics,
         )
 
 
@@ -236,6 +255,15 @@ def _parse_sidecar_text(content: str) -> dict[str, str]:
             continue
         fields.setdefault(current, []).append(line)
     return {name: "\n".join(lines).strip() for name, lines in fields.items()}
+
+
+def _safe_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_box(value: dict[str, Any] | None) -> OcrBoundingBox | None:

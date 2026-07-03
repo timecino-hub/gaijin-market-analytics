@@ -8,6 +8,7 @@ import subprocess
 import sys
 import zlib
 import zipfile
+import csv
 from io import StringIO
 from decimal import Decimal
 from pathlib import Path
@@ -18,7 +19,12 @@ from PIL import Image
 from api.screen_recognition.comparison import compare_contracts, summarize_results
 from api.screen_recognition.config import CurrentCutConfig, stable_config_sha256
 from api.screen_recognition.contracts import LayoutProfile, NormalizedRoi, OcrResult
-from api.screen_recognition.evaluate import PRIVATE_FIXTURE_MESSAGE, evaluate_private_fixtures
+from api.screen_recognition.contracts import ScreenContract
+from api.screen_recognition.evaluate import (
+    PRIVATE_FIXTURE_MESSAGE,
+    create_private_ground_truth_template,
+    evaluate_private_fixtures,
+)
 from api.screen_recognition.ground_truth import GroundTruthInvalidError, load_ground_truth
 from api.screen_recognition.image_io import (
     ImageReadError,
@@ -966,6 +972,64 @@ def write_private_fixture(root: Path, name: str = "sample-a", *, browser: str = 
     return image
 
 
+def read_private_ground_truth_rows(path: Path) -> list[dict[str, str]]:
+    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+        return list(csv.DictReader(handle))
+
+
+def write_private_ground_truth_rows(path: Path, rows: list[dict[str, str]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_private_ground_truth_template_uses_paired_fixtures_without_prefilling_truth(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    write_private_fixture(input_dir, "sample-b", browser="chrome", zoom="1.0")
+    (input_dir / "report.json").write_text("{}", encoding="utf-8")
+    unpaired = input_dir / "diagnostics-crops" / "crop.png"
+    unpaired.parent.mkdir()
+    write_png(unpaired)
+    output = input_dir / "ground-truth.csv"
+
+    result = create_private_ground_truth_template(input_dir=input_dir, output_path=output)
+    rows = read_private_ground_truth_rows(output)
+
+    assert result.discovered_fixture_count == 2
+    assert result.appended_row_count == 2
+    assert len(rows) == 2
+    assert {row["reviewed"] for row in rows} == {"false"}
+    assert all(row["expected_best_bid"] == "" and row["expected_best_ask"] == "" for row in rows)
+    assert all(not row["fixture_id"].endswith(".png") for row in rows)
+
+
+def test_private_ground_truth_template_appends_without_overwriting_reviewed_rows(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    output = input_dir / "ground-truth.csv"
+    create_private_ground_truth_template(input_dir=input_dir, output_path=output)
+    rows = read_private_ground_truth_rows(output)
+    rows[0]["expected_best_bid"] = "12.34"
+    rows[0]["expected_best_ask"] = "13.00"
+    rows[0]["notes"] = "human reviewed"
+    rows[0]["reviewed"] = "true"
+    write_private_ground_truth_rows(output, rows)
+    original_first = output.read_text(encoding="utf-8").splitlines()[1]
+
+    write_private_fixture(input_dir, "sample-b")
+    result = create_private_ground_truth_template(input_dir=input_dir, output_path=output)
+    updated = output.read_text(encoding="utf-8").splitlines()
+
+    assert result.existing_row_count == 1
+    assert result.appended_row_count == 1
+    assert updated[1] == original_first
+    rows_after = read_private_ground_truth_rows(output)
+    assert rows_after[0]["expected_best_bid"] == "12.34"
+    assert rows_after[1]["expected_best_bid"] == ""
+
+
 def test_private_evaluation_help_does_not_initialize_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
     import api.screen_recognition.evaluate as evaluate_module
 
@@ -1016,6 +1080,118 @@ def test_private_evaluation_dry_run_skips_ocr_and_ignores_report_json(
     assert "filename" not in report["results"][0]
     assert "item_name_raw" not in report["results"][0]
     assert not (input_dir / "report.json.tmp").exists()
+
+
+def test_private_evaluation_accuracy_false_confident_and_safe_report_privacy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class FakeRecognizer:
+        backend_name = "fake"
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            return OcrResult(
+                backend_name="fake",
+                backend_version="1",
+                fields={"best_bid": evidence("12.34"), "best_ask": evidence("14.00")},
+                warnings=(),
+                diagnostics={
+                    "powershell_process_count": 1,
+                    "ocr_invocation_count": 2,
+                    "pipeline_count_attempted": 2,
+                    "pipeline_count_completed": 2,
+                    "early_exit_used": False,
+                    "total_ocr_duration_ms": 20,
+                    "per_pipeline_duration_ms": [
+                        {"pipeline_name": "gray_3x", "duration_ms": 10, "selected": True}
+                    ],
+                },
+            )
+
+    def fake_parse(_fields: object, *, item_key: str | None):
+        return (
+            ScreenContract(best_bid=Decimal("12.34"), best_ask=Decimal("14.00")),
+            [],
+            [],
+        )
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    gt_path = input_dir / "ground-truth.csv"
+    create_private_ground_truth_template(input_dir=input_dir, output_path=gt_path)
+    rows = read_private_ground_truth_rows(gt_path)
+    rows[0]["expected_best_bid"] = "12.34"
+    rows[0]["expected_best_ask"] = "13.00"
+    rows[0]["reviewed"] = "true"
+    write_private_ground_truth_rows(gt_path, rows)
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: FakeRecognizer())
+    monkeypatch.setattr(evaluate_module, "parse_ocr_contract", fake_parse)
+
+    report = evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        ground_truth_path=gt_path,
+        profile=True,
+        progress_stream=StringIO(),
+    )
+
+    accuracy = report["accuracy"]["overall"]["all"]
+    assert accuracy["reviewed_count"] == 1
+    assert accuracy["best_bid_exact_match"] == 1
+    assert accuracy["ask_wrong_value"] == 1
+    assert accuracy["false_confident_ask"] == 1
+    assert report["profile_summary"]["totals"]["powershell_process_count"] == 1
+    safe_report = (input_dir / "report.json").read_text(encoding="utf-8")
+    assert "13.00" not in safe_report
+    assert "14.00" not in safe_report
+    private_report = json.loads((input_dir / "report.private.json").read_text(encoding="utf-8"))
+    assert private_report["accuracy_private"][0]["expected"]["expected_best_ask"] == "13.00"
+
+
+def test_private_evaluation_reviewed_false_is_not_scored(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class FakeRecognizer:
+        backend_name = "fake"
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            return OcrResult(backend_name="fake", backend_version="1", fields={}, warnings=())
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    gt_path = input_dir / "ground-truth.csv"
+    create_private_ground_truth_template(input_dir=input_dir, output_path=gt_path)
+    rows = read_private_ground_truth_rows(gt_path)
+    rows[0]["expected_best_bid"] = "12.34"
+    rows[0]["expected_best_ask"] = "13.00"
+    rows[0]["reviewed"] = "false"
+    write_private_ground_truth_rows(gt_path, rows)
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: FakeRecognizer())
+    monkeypatch.setattr(
+        evaluate_module,
+        "parse_ocr_contract",
+        lambda _fields, *, item_key: (ScreenContract(best_bid=Decimal("12.34"), best_ask=Decimal("13.00")), [], []),
+    )
+
+    report = evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        ground_truth_path=gt_path,
+        progress_stream=StringIO(),
+    )
+
+    assert report["results"][0]["ground_truth_status"] == "not_reviewed"
+    assert report["accuracy"]["overall"]["all"]["reviewed_count"] == 0
+    assert report["accuracy"]["overall"]["all"]["ground_truth_not_reviewed"] == 1
 
 
 def test_private_evaluation_limit_and_filters_process_one_fixture(tmp_path: Path) -> None:
