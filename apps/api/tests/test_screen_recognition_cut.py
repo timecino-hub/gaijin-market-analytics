@@ -24,6 +24,7 @@ from api.screen_recognition.evaluate import (
     PRIVATE_FIXTURE_MESSAGE,
     create_private_ground_truth_template,
     evaluate_private_fixtures,
+    regenerate_diagnostics_from_private_report,
 )
 from api.screen_recognition.ground_truth import GroundTruthInvalidError, load_ground_truth
 from api.screen_recognition.image_io import (
@@ -984,6 +985,10 @@ def write_private_ground_truth_rows(path: Path, rows: list[dict[str, str]]) -> N
         writer.writerows(rows)
 
 
+def diagnostics_card_count(path: Path) -> int:
+    return path.read_text(encoding="utf-8").count('class="fixture-card"')
+
+
 def test_private_ground_truth_template_uses_paired_fixtures_without_prefilling_truth(tmp_path: Path) -> None:
     input_dir = tmp_path / "private"
     write_private_fixture(input_dir, "sample-a")
@@ -1080,6 +1085,97 @@ def test_private_evaluation_dry_run_skips_ocr_and_ignores_report_json(
     assert "filename" not in report["results"][0]
     assert "item_name_raw" not in report["results"][0]
     assert not (input_dir / "report.json.tmp").exists()
+
+
+def test_private_diagnostics_default_paths_are_output_scoped_and_render_all_fixtures(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    for browser in ("edge", "chrome"):
+        for index in range(10):
+            write_private_fixture(input_dir, f"sample-{index}", browser=browser, zoom="0.8")
+
+    report = evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        progress_stream=StringIO(),
+    )
+
+    diagnostics_path = input_dir / "report.diagnostics.html"
+    html = diagnostics_path.read_text(encoding="utf-8")
+    crop_files = list((input_dir / "report.diagnostics").glob("*.png"))
+
+    assert report["summary"]["processed_count"] == 20
+    assert diagnostics_card_count(diagnostics_path) == 20
+    assert len(crop_files) == 40
+    assert len({path.name for path in crop_files}) == 40
+    assert (input_dir / "report.private.json").is_file()
+    assert not (input_dir / "diagnostics.html").exists()
+    assert str(input_dir) not in html
+    assert "browser-filter" in html
+    assert "zoom-filter" in html
+    assert "sample-filter" in html
+
+
+def test_private_diagnostics_single_report_does_not_overwrite_full_report(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a", browser="edge", zoom="0.8")
+    write_private_fixture(input_dir, "sample-b", browser="edge", zoom="0.9")
+
+    evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        progress_stream=StringIO(),
+    )
+    full_diagnostics = input_dir / "report.diagnostics.html"
+    assert diagnostics_card_count(full_diagnostics) == 2
+
+    evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "single.report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        limit=1,
+        progress_stream=StringIO(),
+    )
+
+    assert diagnostics_card_count(full_diagnostics) == 2
+    assert diagnostics_card_count(input_dir / "single.report.diagnostics.html") == 1
+    assert (input_dir / "single.report.private.json").is_file()
+    assert (input_dir / "single.report.diagnostics").is_dir()
+
+
+def test_private_diagnostics_duplicate_labels_use_unique_preview_names(tmp_path: Path) -> None:
+    input_dir = tmp_path / "private"
+    first = write_private_fixture(input_dir, "file-a", browser="edge", zoom="0.8")
+    second = write_private_fixture(input_dir, "file-b", browser="edge", zoom="0.8")
+    for image in (first, second):
+        image.with_suffix(".json").write_text(
+            json.dumps({"browser": "edge", "browser_zoom": "0.8", "sample_label": "sample-a"}),
+            encoding="utf-8",
+        )
+
+    evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        progress_stream=StringIO(),
+    )
+
+    html = (input_dir / "report.diagnostics.html").read_text(encoding="utf-8")
+    crop_names = [path.name for path in (input_dir / "report.diagnostics").glob("*.png")]
+
+    assert diagnostics_card_count(input_dir / "report.diagnostics.html") == 2
+    assert len(crop_names) == 4
+    assert len(set(crop_names)) == 4
+    assert html.count('id="edge-080-sample-a-') == 2
 
 
 def test_private_evaluation_accuracy_false_confident_and_safe_report_privacy(
@@ -1192,6 +1288,145 @@ def test_private_evaluation_reviewed_false_is_not_scored(
     assert report["results"][0]["ground_truth_status"] == "not_reviewed"
     assert report["accuracy"]["overall"]["all"]["reviewed_count"] == 0
     assert report["accuracy"]["overall"]["all"]["ground_truth_not_reviewed"] == 1
+
+
+def test_private_diagnostics_failed_and_unreviewed_fixture_remains_visible(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class TimeoutRecognizer:
+        backend_name = "fake"
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            raise OcrBackendTimeoutError("timeout")
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    gt_path = input_dir / "ground-truth.csv"
+    create_private_ground_truth_template(input_dir=input_dir, output_path=gt_path)
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: TimeoutRecognizer())
+
+    evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        ground_truth_path=gt_path,
+        progress_stream=StringIO(),
+    )
+
+    html = (input_dir / "report.diagnostics.html").read_text(encoding="utf-8")
+    assert diagnostics_card_count(input_dir / "report.diagnostics.html") == 1
+    assert "ocr_timeout" in html
+    assert "ground_truth=not_reviewed" in html
+
+
+def test_private_diagnostics_missing_roi_preview_uses_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    profile = LayoutProfile(
+        name="no-rois",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={},
+    )
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    monkeypatch.setattr(evaluate_module, "get_layout_profile", lambda _name: profile)
+
+    evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="no-rois",
+        ocr_backend_name="none",
+        dry_run=True,
+        progress_stream=StringIO(),
+    )
+
+    html = (input_dir / "report.diagnostics.html").read_text(encoding="utf-8")
+    assert diagnostics_card_count(input_dir / "report.diagnostics.html") == 1
+    assert "unavailable" in html
+
+
+def test_regenerate_private_diagnostics_from_report_does_not_initialize_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    write_private_fixture(input_dir, "sample-b")
+    evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="none",
+        dry_run=True,
+        progress_stream=StringIO(),
+    )
+    (input_dir / "report.diagnostics.html").unlink()
+    monkeypatch.setattr(
+        evaluate_module,
+        "get_recognizer",
+        lambda *_args, **_kwargs: pytest.fail("regeneration should not initialize OCR"),
+    )
+
+    result = regenerate_diagnostics_from_private_report(
+        private_report_path=input_dir / "report.private.json",
+    )
+
+    assert result["fixture_count"] == 2
+    assert diagnostics_card_count(input_dir / "report.diagnostics.html") == 2
+
+
+def test_private_diagnostics_redacts_sensitive_markers_from_html(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import api.screen_recognition.evaluate as evaluate_module
+
+    class SensitiveRecognizer:
+        backend_name = "fake"
+
+        def recognize(self, _invocation: OcrInvocation) -> OcrResult:
+            return OcrResult(
+                backend_name="fake",
+                backend_version="1",
+                fields={"best_bid": evidence("https://example.invalid Authorization token pairing")},
+                warnings=(),
+            )
+
+    input_dir = tmp_path / "private"
+    write_private_fixture(input_dir, "sample-a")
+    monkeypatch.setattr(evaluate_module, "get_recognizer", lambda *_args, **_kwargs: SensitiveRecognizer())
+    monkeypatch.setattr(
+        evaluate_module,
+        "parse_ocr_contract",
+        lambda _fields, *, item_key: (ScreenContract(), [], ["best_bid_missing", "best_ask_missing"]),
+    )
+
+    evaluate_module.evaluate_private_fixtures(
+        input_dir=input_dir,
+        output_path=input_dir / "report.json",
+        layout_profile_name="gaijin-market-desktop-v1",
+        ocr_backend_name="fake",
+        progress_stream=StringIO(),
+    )
+
+    html = (input_dir / "report.diagnostics.html").read_text(encoding="utf-8").lower()
+    assert "https://example.invalid" not in html
+    assert "authorization" not in html
+    assert "token" not in html
+    assert "pairing" not in html
 
 
 def test_private_evaluation_limit_and_filters_process_one_fixture(tmp_path: Path) -> None:

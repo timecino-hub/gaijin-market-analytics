@@ -34,8 +34,8 @@ SCHEMA_VERSION = "screen-recognition-private-evaluation/1.2.0"
 GROUND_TRUTH_SCHEMA_VERSION = "screen-recognition-private-ground-truth/1.0.0"
 DEFAULT_OCR_TIMEOUT_SECONDS = 60
 GROUND_TRUTH_FILENAME = "ground-truth.csv"
-PRIVATE_REPORT_FILENAME = "report.private.json"
-DIAGNOSTICS_FILENAME = "diagnostics.html"
+DIAGNOSTICS_PRIVATE_REPORT_SUFFIX = ".private.json"
+DIAGNOSTICS_HTML_SUFFIX = ".diagnostics.html"
 GROUND_TRUTH_FIELDS = [
     "schema_version",
     "fixture_id",
@@ -172,7 +172,7 @@ class Progress:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Evaluate local private screen-recognition fixtures.")
-    parser.add_argument("--input", required=True, help="Ignored private fixture directory.")
+    parser.add_argument("--input", help="Ignored private fixture directory.")
     parser.add_argument("--output", help="Ignored safe report JSON path.")
     parser.add_argument("--layout-profile", default="gaijin-market-desktop-v1")
     parser.add_argument("--ocr-backend", default="windows-ocr")
@@ -185,6 +185,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--ground-truth", help="Ignored private ground-truth CSV path.")
     parser.add_argument("--private-report", help="Ignored private detailed report JSON path.")
     parser.add_argument("--diagnostics", help="Ignored private diagnostics HTML path.")
+    parser.add_argument(
+        "--diagnostics-from-private-report",
+        help="Regenerate ignored private diagnostics HTML from an existing private report without OCR.",
+    )
     parser.add_argument("--limit", type=_positive_int)
     parser.add_argument("--only-browser", choices=("edge", "chrome"))
     parser.add_argument("--only-zoom")
@@ -194,6 +198,24 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.quiet and args.verbose:
         parser.error("--quiet and --verbose cannot be used together")
+
+    if args.diagnostics_from_private_report:
+        diagnostics_path = Path(args.diagnostics) if args.diagnostics else None
+        result = regenerate_diagnostics_from_private_report(
+            private_report_path=Path(args.diagnostics_from_private_report),
+            diagnostics_path=diagnostics_path,
+        )
+        if not args.quiet:
+            print(
+                "screen recognition diagnostics regenerated: "
+                f"fixtures={result['fixture_count']} path={_redacted_path(Path(result['diagnostics_path']))}",
+                file=sys.stderr,
+                flush=True,
+            )
+        return
+
+    if not args.input:
+        parser.error("--input is required unless --diagnostics-from-private-report is used")
     input_dir = Path(args.input)
     ground_truth_path = Path(args.ground_truth) if args.ground_truth else input_dir / GROUND_TRUTH_FILENAME
 
@@ -228,8 +250,8 @@ def main(argv: list[str] | None = None) -> None:
         fail_fast=args.fail_fast,
         ocr_timeout_seconds=args.ocr_timeout_seconds,
         ground_truth_path=ground_truth_path,
-        private_report_path=Path(args.private_report) if args.private_report else output_path.with_name(PRIVATE_REPORT_FILENAME),
-        diagnostics_path=Path(args.diagnostics) if args.diagnostics else input_dir / DIAGNOSTICS_FILENAME,
+        private_report_path=Path(args.private_report) if args.private_report else _default_private_report_path(output_path),
+        diagnostics_path=Path(args.diagnostics) if args.diagnostics else _default_diagnostics_path(output_path),
     )
     try:
         report = evaluate_private_fixtures_from_options(options)
@@ -290,6 +312,34 @@ def evaluate_private_fixtures(
         ),
         progress_stream=progress_stream,
     )
+
+
+def regenerate_diagnostics_from_private_report(
+    *,
+    private_report_path: Path,
+    diagnostics_path: Path | None = None,
+) -> dict[str, Any]:
+    private_report = json.loads(private_report_path.read_text(encoding="utf-8"))
+    input_dir = _private_report_input_dir(private_report, private_report_path)
+    diagnostics_output = diagnostics_path or _diagnostics_path_from_private_report_path(private_report_path)
+    _validate_path_within(input_dir, private_report_path)
+    _validate_path_within(input_dir, diagnostics_output)
+    layout_profile_name = _layout_profile_name_from_private_report(private_report)
+    profile = get_layout_profile(layout_profile_name)
+    results = private_report.get("results") or []
+    if not isinstance(results, list):
+        raise ValueError("private_report_invalid: results must be a list")
+    _write_diagnostics_html(
+        path=diagnostics_output,
+        input_dir=input_dir,
+        files=[],
+        profile=profile,
+        private_results=results,
+    )
+    return {
+        "diagnostics_path": str(diagnostics_output.resolve()),
+        "fixture_count": len(results),
+    }
 
 
 def evaluate_private_fixtures_from_options(
@@ -1000,8 +1050,8 @@ def _write_optional_private_outputs(
     *,
     pretty: bool,
 ) -> None:
-    private_report_path = options.private_report_path or options.output_path.with_name(PRIVATE_REPORT_FILENAME)
-    diagnostics_path = options.diagnostics_path or options.input_dir / DIAGNOSTICS_FILENAME
+    private_report_path = options.private_report_path or _default_private_report_path(options.output_path)
+    diagnostics_path = options.diagnostics_path or _default_diagnostics_path(options.output_path)
     _write_report_atomic(private_report_path, private_report, pretty=pretty)
     if profile is not None:
         _write_diagnostics_html(
@@ -1022,36 +1072,78 @@ def _write_diagnostics_html(
     private_results: list[dict[str, Any]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    crops_dir = path.parent / "diagnostics-crops"
+    crops_dir = _diagnostics_assets_dir(path)
     crops_dir.mkdir(parents=True, exist_ok=True)
-    result_by_id = {result["fixture_id"]: result for result in private_results}
+    entries = _diagnostic_entries(files=files, private_results=private_results, input_dir=input_dir)
+    summary = _diagnostics_summary([entry["result"] for entry in entries])
+    browsers = sorted({str(entry["browser"] or "unknown") for entry in entries})
+    zooms = sorted({str(entry["declared_zoom"] or "unknown") for entry in entries})
+    samples = sorted({str(entry["sample_label"] or "unknown") for entry in entries})
     rows = []
-    for item in files:
-        fixture_id = _fixture_id(item, input_dir)
-        result = result_by_id.get(fixture_id, {})
-        crop_links = _write_roi_crops(item, input_dir, profile, crops_dir)
+    nav_links = []
+    for entry in entries:
+        result = entry["result"]
+        anonymous_id = str(entry["anonymous_id"])
+        image_path = entry["image_path"]
+        crop_links = _write_roi_crops(
+            image_path=image_path,
+            input_dir=input_dir,
+            profile=profile,
+            crops_dir=crops_dir,
+            anonymous_id=anonymous_id,
+            roi_pixels=result.get("roi_pixels") if isinstance(result, dict) else None,
+        )
+        reviewed = str(result.get("ground_truth_status") == "reviewed").lower()
+        status = str(result.get("status") or "unknown")
+        browser = str(entry["browser"] or "unknown")
+        zoom = str(entry["declared_zoom"] or "unknown")
+        sample = str(entry["sample_label"] or "unknown")
+        expected = result.get("expected") if isinstance(result.get("expected"), dict) else {}
+        expected_fields_filled = _expected_fields_filled(expected)
+        accuracy = result.get("accuracy") if reviewed == "true" and isinstance(result.get("accuracy"), dict) else None
+        nav_links.append(f"<a href=\"#{html.escape(anonymous_id)}\">{html.escape(anonymous_id)}</a>")
         rows.append(
-            "<section>"
-            f"<h2>{html.escape(fixture_id)}</h2>"
-            f"<p>browser={html.escape(str(item.browser or ''))} "
-            f"zoom={html.escape(str(item.declared_zoom or ''))} "
+            f"<section id=\"{html.escape(anonymous_id)}\" class=\"fixture-card\" "
+            f"data-browser=\"{html.escape(browser)}\" data-zoom=\"{html.escape(zoom)}\" "
+            f"data-sample=\"{html.escape(sample)}\" data-reviewed=\"{reviewed}\" "
+            f"data-status=\"{html.escape(status)}\">"
+            f"<h2>{html.escape(anonymous_id)}</h2>"
+            f"<p>browser={html.escape(browser)} "
+            f"zoom={html.escape(zoom)} "
+            f"sample={html.escape(sample)} "
+            f"status={html.escape(status)} "
             f"ground_truth={html.escape(str(result.get('ground_truth_status', 'unknown')))}</p>"
-            f"<p><img class=\"screenshot\" src=\"{html.escape(str(item.path.resolve()))}\" alt=\"fixture screenshot\"></p>"
-            f"<p>bid ROI: {_html_link(crop_links.get('best_bid'))} "
-            f"ask ROI: {_html_link(crop_links.get('best_ask'))}</p>"
+            f"<p>expected_fields_filled={html.escape(str(expected_fields_filled).lower())} "
+            f"exact_match={html.escape(_exact_match_label(accuracy))}</p>"
+            f"<p>{_html_image(image_path, path.parent, 'fixture screenshot')}</p>"
+            f"<p>bid ROI: {_html_link(crop_links.get('best_bid'), path.parent)} "
+            f"ask ROI: {_html_link(crop_links.get('best_ask'), path.parent)}</p>"
             f"<pre>{html.escape(json.dumps(_diagnostic_result_summary(result), ensure_ascii=False, indent=2))}</pre>"
             "</section>"
         )
+    filter_html = _diagnostics_filter_html(browsers=browsers, zooms=zooms, samples=samples)
     document = (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<title>Private Screen Recognition Diagnostics</title>"
         "<style>body{font-family:Arial,sans-serif;margin:24px;}"
+        ".summary,.filters{border:1px solid #ccc;padding:12px;margin:12px 0;}"
+        ".nav a{display:inline-block;margin:0 8px 8px 0;}"
         "section{border-top:1px solid #ccc;padding:16px 0;}"
+        "section[hidden]{display:none;}"
         ".screenshot{max-width:960px;width:100%;height:auto;}"
+        ".roi-preview{max-width:360px;width:48%;height:auto;border:1px solid #ddd;}"
+        ".placeholder{display:inline-block;padding:10px;border:1px dashed #aaa;color:#555;}"
         "pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;}</style>"
         "</head><body><h1>Private Screen Recognition Diagnostics</h1>"
         "<p>This ignored local report may contain private screenshot previews and OCR debug details.</p>"
+        f"<div class=\"summary\">total={summary['total']} success={summary['success']} "
+        f"failed={summary['failed']} reviewed={summary['reviewed']}</div>"
+        + filter_html
+        + "<p><button type=\"button\" id=\"prev-fixture\">Previous</button> "
+        "<button type=\"button\" id=\"next-fixture\">Next</button></p>"
+        + "<nav class=\"nav\">" + "".join(nav_links) + "</nav>"
         + "".join(rows)
+        + _diagnostics_filter_script()
         + "</body></html>"
     )
     temp_path = path.with_name(f"{path.name}.tmp")
@@ -1059,26 +1151,153 @@ def _write_diagnostics_html(
     temp_path.replace(path)
 
 
+def _diagnostic_entries(
+    *,
+    files: list[EvaluationFile],
+    private_results: list[dict[str, Any]],
+    input_dir: Path,
+) -> list[dict[str, Any]]:
+    result_by_id = {result.get("fixture_id"): result for result in private_results if isinstance(result, dict)}
+    entries: list[dict[str, Any]] = []
+    if files:
+        for item in files:
+            fixture_id = _fixture_id(item, input_dir)
+            result = result_by_id.get(fixture_id, {})
+            entries.append(
+                {
+                    "result": result,
+                    "anonymous_id": _anonymous_fixture_id(
+                        browser=item.browser,
+                        declared_zoom=item.declared_zoom,
+                        sample_label=item.sample_label,
+                        stable_source=_relative_stable_source(item.path, input_dir),
+                    ),
+                    "image_path": item.path,
+                    "browser": item.browser,
+                    "declared_zoom": item.declared_zoom,
+                    "sample_label": item.sample_label,
+                }
+            )
+        return entries
+
+    for index, result in enumerate(private_results, start=1):
+        if not isinstance(result, dict):
+            continue
+        image_path = _private_result_image_path(result, input_dir)
+        sample_label = result.get("sample_label") or f"sample-{index:03d}"
+        entries.append(
+            {
+                "result": result,
+                "anonymous_id": _anonymous_fixture_id(
+                    browser=_string_or_none(result.get("browser")),
+                    declared_zoom=_string_or_none(result.get("declared_zoom")),
+                    sample_label=str(sample_label),
+                    stable_source=_relative_stable_source(image_path, input_dir)
+                    if image_path is not None
+                    else str(result.get("fixture_id") or index),
+                ),
+                "image_path": image_path,
+                "browser": result.get("browser"),
+                "declared_zoom": result.get("declared_zoom"),
+                "sample_label": sample_label,
+            }
+        )
+    return entries
+
+
+def _diagnostics_summary(results: list[dict[str, Any]]) -> dict[str, int]:
+    total = len(results)
+    failed = sum(1 for result in results if result.get("status") == "failed" or result.get("error_code"))
+    reviewed = sum(1 for result in results if result.get("ground_truth_status") == "reviewed")
+    return {
+        "total": total,
+        "success": total - failed,
+        "failed": failed,
+        "reviewed": reviewed,
+    }
+
+
+def _diagnostics_filter_html(*, browsers: list[str], zooms: list[str], samples: list[str]) -> str:
+    return (
+        "<div class=\"filters\">"
+        f"browser={_select_html('browser-filter', browsers)} "
+        f"zoom={_select_html('zoom-filter', zooms)} "
+        f"sample={_select_html('sample-filter', samples)} "
+        "<label><input type=\"checkbox\" id=\"unreviewed-filter\"> only unreviewed</label> "
+        "<label><input type=\"checkbox\" id=\"failed-filter\"> only failed</label>"
+        "</div>"
+    )
+
+
+def _select_html(element_id: str, values: list[str]) -> str:
+    options = ["<option value=\"\">all</option>"]
+    options.extend(
+        f"<option value=\"{html.escape(value)}\">{html.escape(value)}</option>"
+        for value in values
+    )
+    return f"<select id=\"{html.escape(element_id)}\">" + "".join(options) + "</select>"
+
+
+def _diagnostics_filter_script() -> str:
+    return (
+        "<script>"
+        "const cards=[...document.querySelectorAll('.fixture-card')];"
+        "let current=0;"
+        "function visible(){return cards.filter(c=>!c.hidden)}"
+        "function applyFilters(){"
+        "const b=document.getElementById('browser-filter').value;"
+        "const z=document.getElementById('zoom-filter').value;"
+        "const s=document.getElementById('sample-filter').value;"
+        "const u=document.getElementById('unreviewed-filter').checked;"
+        "const f=document.getElementById('failed-filter').checked;"
+        "cards.forEach(c=>{c.hidden=!!((b&&c.dataset.browser!==b)||(z&&c.dataset.zoom!==z)||(s&&c.dataset.sample!==s)"
+        "||(u&&c.dataset.reviewed==='true')||(f&&c.dataset.status!=='failed'));});"
+        "current=0;"
+        "}"
+        "['browser-filter','zoom-filter','sample-filter','unreviewed-filter','failed-filter'].forEach(id=>"
+        "document.getElementById(id).addEventListener('change',applyFilters));"
+        "function jump(delta){const v=visible();if(!v.length)return;current=(current+delta+v.length)%v.length;location.hash=v[current].id;}"
+        "document.getElementById('prev-fixture').addEventListener('click',()=>jump(-1));"
+        "document.getElementById('next-fixture').addEventListener('click',()=>jump(1));"
+        "</script>"
+    )
+
+
+def _resolved_roi_pixels(field: str, roi_pixels: Any, profile: Any, info: ImageInfo) -> tuple[int, int, int, int] | None:
+    if isinstance(roi_pixels, dict):
+        value = roi_pixels.get(field)
+        if isinstance(value, list) and len(value) == 4 and all(isinstance(part, int) for part in value):
+            return (value[0], value[1], value[2], value[3])
+    roi = profile.rois.get(field)
+    if roi is None:
+        return None
+    return resolve_roi_pixels(roi, info).as_tuple()
+
+
 def _write_roi_crops(
-    item: EvaluationFile,
+    *,
+    image_path: Path | None,
     input_dir: Path,
     profile: Any,
     crops_dir: Path,
+    anonymous_id: str,
+    roi_pixels: Any,
 ) -> dict[str, Path]:
     from PIL import Image
 
-    fixture_id = _fixture_id(item, input_dir)
     links: dict[str, Path] = {}
+    if image_path is None:
+        return links
     try:
-        info = read_image_info(item.path)
-        with Image.open(item.path) as image:
+        _validate_path_within(input_dir, image_path)
+        info = read_image_info(image_path)
+        with Image.open(image_path) as image:
             for field in ("best_bid", "best_ask"):
-                roi = profile.rois.get(field)
-                if roi is None:
+                resolved_pixels = _resolved_roi_pixels(field, roi_pixels, profile, info)
+                if resolved_pixels is None:
                     continue
-                resolved = resolve_roi_pixels(roi, info)
-                x, y, width, height = resolved.as_tuple()
-                crop_path = crops_dir / f"{fixture_id}-{field}.png"
+                x, y, width, height = resolved_pixels
+                crop_path = crops_dir / f"{anonymous_id}-{field}.png"
                 image.crop((x, y, x + width, y + height)).save(crop_path)
                 links[field] = crop_path
     except Exception:
@@ -1087,23 +1306,176 @@ def _write_roi_crops(
 
 
 def _diagnostic_result_summary(result: dict[str, Any]) -> dict[str, Any]:
-    return {
+    return _redact_sensitive_markers({
         "status": result.get("status"),
         "error_code": result.get("error_code"),
+        "error_stage": result.get("error_stage"),
         "stage_reasons": result.get("stage_reasons"),
         "requires_review": result.get("requires_review"),
+        "ground_truth_status": result.get("ground_truth_status"),
+        "expected_present": isinstance(result.get("expected"), dict),
         "timings": result.get("timings"),
         "profile": result.get("profile"),
         "accuracy": result.get("accuracy"),
         "raw_ocr": result.get("raw_ocr"),
-    }
+    })
 
 
-def _html_link(path: Path | None) -> str:
+def _html_link(path: Path | None, html_dir: Path) -> str:
     if path is None:
-        return "unavailable"
-    escaped = html.escape(str(path.resolve()))
-    return f"<a href=\"{escaped}\">{html.escape(path.name)}</a>"
+        return "<span class=\"placeholder\">unavailable</span>"
+    escaped = html.escape(_relative_href(path, html_dir))
+    return f"<a href=\"{escaped}\"><img class=\"roi-preview\" src=\"{escaped}\" alt=\"{html.escape(path.name)}\"></a>"
+
+
+def _html_image(path: Path | None, html_dir: Path, alt: str) -> str:
+    if path is None:
+        return "<span class=\"placeholder\">screenshot unavailable</span>"
+    escaped = html.escape(_relative_href(path, html_dir))
+    return f"<img class=\"screenshot\" src=\"{escaped}\" alt=\"{html.escape(alt)}\">"
+
+
+def _relative_href(path: Path, html_dir: Path) -> str:
+    return Path(os.path.relpath(path.resolve(), html_dir.resolve())).as_posix()
+
+
+def _default_private_report_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}.private{output_path.suffix or '.json'}")
+
+
+def _default_diagnostics_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}{DIAGNOSTICS_HTML_SUFFIX}")
+
+
+def _diagnostics_path_from_private_report_path(private_report_path: Path) -> Path:
+    name = private_report_path.name
+    if name.endswith(DIAGNOSTICS_PRIVATE_REPORT_SUFFIX):
+        return private_report_path.with_name(f"{name[: -len(DIAGNOSTICS_PRIVATE_REPORT_SUFFIX)]}{DIAGNOSTICS_HTML_SUFFIX}")
+    return private_report_path.with_name(f"{private_report_path.stem}{DIAGNOSTICS_HTML_SUFFIX}")
+
+
+def _diagnostics_assets_dir(diagnostics_path: Path) -> Path:
+    name = diagnostics_path.name
+    if name.endswith(".html"):
+        return diagnostics_path.with_name(name[:-5])
+    return diagnostics_path.with_name(f"{name}.assets")
+
+
+def _private_report_input_dir(private_report: dict[str, Any], private_report_path: Path) -> Path:
+    value = private_report.get("input_dir")
+    if isinstance(value, str) and value.strip():
+        return Path(value)
+    return private_report_path.parent
+
+
+def _layout_profile_name_from_private_report(private_report: dict[str, Any]) -> str:
+    results = private_report.get("results") or []
+    if isinstance(results, list):
+        for result in results:
+            if isinstance(result, dict) and isinstance(result.get("layout_profile"), str):
+                return result["layout_profile"]
+    return "gaijin-market-desktop-v1"
+
+
+def _private_result_image_path(result: dict[str, Any], input_dir: Path) -> Path | None:
+    value = result.get("image_path")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value)
+    try:
+        _validate_path_within(input_dir, path)
+    except ValueError:
+        return None
+    return path
+
+
+def _validate_path_within(root: Path, path: Path) -> None:
+    root_resolved = root.resolve()
+    path_resolved = path.resolve()
+    try:
+        path_resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("private_report_invalid: referenced path is outside private artifacts directory") from exc
+
+
+def _relative_stable_source(path: Path | None, input_dir: Path) -> str:
+    if path is None:
+        return "missing-image"
+    try:
+        return path.resolve().relative_to(input_dir.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _anonymous_fixture_id(
+    *,
+    browser: str | None,
+    declared_zoom: str | None,
+    sample_label: str,
+    stable_source: str,
+) -> str:
+    parts = [
+        _slug_part(browser or "unknown-browser"),
+        _zoom_slug(declared_zoom),
+        _slug_part(sample_label or "sample"),
+    ]
+    digest = hashlib.sha256(stable_source.encode("utf-8")).hexdigest()[:8]
+    return "-".join(part for part in parts if part) + f"-{digest}"
+
+
+def _slug_part(value: str) -> str:
+    cleaned = "".join(char.lower() if char.isalnum() else "-" for char in value.strip())
+    collapsed = "-".join(part for part in cleaned.split("-") if part)
+    return collapsed[:48] or "unknown"
+
+
+def _zoom_slug(value: str | None) -> str:
+    if value is None:
+        return "zoom-unknown"
+    text = str(value).strip().lower()
+    try:
+        scaled = int((Decimal(text) * Decimal("100")).to_integral_value())
+    except (InvalidOperation, ValueError):
+        scaled = -1
+    if 0 <= scaled <= 999:
+        return f"{scaled:03d}"
+    return _slug_part(text)
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _expected_fields_filled(expected: Any) -> bool:
+    if not isinstance(expected, dict):
+        return False
+    keys = ("expected_best_bid", "expected_best_ask", "expected_bid_count", "expected_ask_count")
+    return any(expected.get(key) not in (None, "", []) for key in keys)
+
+
+def _exact_match_label(accuracy: dict[str, Any] | None) -> str:
+    if accuracy is None:
+        return "not_applicable"
+    value = accuracy.get("both_exact_match")
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "unknown"
+
+
+def _redact_sensitive_markers(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_sensitive_markers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive_markers(item) for item in value]
+    if isinstance(value, str):
+        lowered = value.lower()
+        if any(marker in lowered for marker in ("http://", "https://", "authorization", "token", "pairing")):
+            return "[redacted]"
+    return value
 
 
 def _safe_metadata_text(metadata: dict[str, Any] | None, keys: tuple[str, ...]) -> str | None:
