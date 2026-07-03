@@ -26,6 +26,7 @@ from api.screen_recognition.ocr_backend import (
     windows_ocr_preprocessing_metadata,
 )
 from api.screen_recognition.parser import parse_ocr_contract
+from api.screen_recognition.private_diagnostics import load_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 
 
@@ -189,6 +190,14 @@ def main(argv: list[str] | None = None) -> None:
         "--diagnostics-from-private-report",
         help="Regenerate ignored private diagnostics HTML from an existing private report without OCR.",
     )
+    parser.add_argument(
+        "--diagnose-private-report",
+        help="Write an anonymous JSON diagnostics report from an existing private report without OCR.",
+    )
+    parser.add_argument(
+        "--diagnostic-report-output",
+        help="Anonymous diagnostics JSON output path for --diagnose-private-report.",
+    )
     parser.add_argument("--limit", type=_positive_int)
     parser.add_argument("--only-browser", choices=("edge", "chrome"))
     parser.add_argument("--only-zoom")
@@ -214,8 +223,27 @@ def main(argv: list[str] | None = None) -> None:
             )
         return
 
+    if args.diagnose_private_report:
+        diagnostic_output = (
+            Path(args.diagnostic_report_output)
+            if args.diagnostic_report_output
+            else Path(args.diagnose_private_report).with_suffix(".anonymous-diagnostics.json")
+        )
+        diagnostics = load_anonymous_diagnostics(Path(args.diagnose_private_report))
+        _write_report_atomic(diagnostic_output, diagnostics, pretty=args.pretty)
+        if not args.quiet:
+            print(
+                "screen recognition anonymous diagnostics complete: "
+                f"fixtures={diagnostics['fixture_count']} "
+                f"pipelines={diagnostics['pipeline_diagnostics']['pipeline_count']} "
+                f"path={_redacted_path(diagnostic_output)}",
+                file=sys.stderr,
+                flush=True,
+            )
+        return
+
     if not args.input:
-        parser.error("--input is required unless --diagnostics-from-private-report is used")
+        parser.error("--input is required unless an offline private-report mode is used")
     input_dir = Path(args.input)
     ground_truth_path = Path(args.ground_truth) if args.ground_truth else input_dir / GROUND_TRUTH_FILENAME
 

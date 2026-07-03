@@ -59,6 +59,7 @@ from api.screen_recognition.preprocessing import (
     MAX_NORMALIZED_ROI_PIXELS,
     build_ocr_preprocessing_variants,
 )
+from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 from api.screen_recognition.runner import CutRunConfig, run_cut
 
@@ -989,6 +990,88 @@ def diagnostics_card_count(path: Path) -> int:
     return path.read_text(encoding="utf-8").count('class="fixture-card"')
 
 
+def synthetic_private_result(
+    *,
+    fixture_id: str,
+    browser: str,
+    zoom: str,
+    sample: str,
+    exact_bid: bool,
+    exact_ask: bool,
+    ask_wrong: bool = False,
+) -> dict[str, object]:
+    return {
+        "fixture_id": fixture_id,
+        "browser": browser,
+        "declared_zoom": zoom,
+        "sample_label": sample,
+        "ground_truth_status": "reviewed",
+        "requires_review": ask_wrong,
+        "timings": {
+            "total_ms": 1000,
+            "image_decode_ms": 10,
+            "roi_resolution_ms": 20,
+            "ocr_ms": 900,
+            "ocr_output_parsing_ms": 5,
+        },
+        "accuracy": {
+            "best_bid_exact_match": exact_bid,
+            "best_ask_exact_match": exact_ask,
+            "both_exact_match": exact_bid and exact_ask,
+            "bid_missing": False,
+            "ask_missing": False,
+            "bid_wrong_value": not exact_bid,
+            "ask_wrong_value": ask_wrong or not exact_ask,
+            "false_confident_bid": False,
+            "false_confident_ask": False,
+            "requires_review_false_negative": False,
+        },
+        "recognized": {
+            "best_bid": "12.34" if exact_bid else "12.30",
+            "best_ask": "13.00" if exact_ask else "13.50",
+        },
+        "profile": {
+            "powershell_process_count": 1,
+            "ocr_invocation_count": 2,
+            "pipeline_count_attempted": 2,
+            "pipeline_count_completed": 2,
+            "total_ocr_duration_ms": 700,
+            "ocr_engine_initialization_total_ms": 100,
+            "ocr_execution_total_ms": 30,
+            "powershell_process_startup_overhead_ms": 40,
+            "per_pipeline_duration_ms": [
+                {
+                    "field_name": "best_bid",
+                    "pipeline_name": "gray_3x",
+                    "duration_ms": 300,
+                    "produced_text": True,
+                    "selected": True,
+                },
+                {
+                    "field_name": "best_ask",
+                    "pipeline_name": "gray_autocontrast_4x",
+                    "duration_ms": 400,
+                    "produced_text": True,
+                    "selected": True,
+                },
+            ],
+        },
+        "raw_ocr": {
+            "diagnostics": {"helper_total_duration_ms": 850},
+            "fields": {
+                "best_bid": {
+                    "raw_text": "secret raw 12.34",
+                    "warnings": ["preprocessing_pipeline:gray_3x"],
+                },
+                "best_ask": {
+                    "raw_text": "secret raw 13.00",
+                    "warnings": ["preprocessing_pipeline:gray_autocontrast_4x"],
+                },
+            },
+        },
+    }
+
+
 def test_private_ground_truth_template_uses_paired_fixtures_without_prefilling_truth(tmp_path: Path) -> None:
     input_dir = tmp_path / "private"
     write_private_fixture(input_dir, "sample-a")
@@ -1386,6 +1469,83 @@ def test_regenerate_private_diagnostics_from_report_does_not_initialize_ocr(
 
     assert result["fixture_count"] == 2
     assert diagnostics_card_count(input_dir / "report.diagnostics.html") == 2
+
+
+def test_anonymous_private_report_diagnostics_keeps_split_covered_and_redacted() -> None:
+    results = []
+    for browser in ("edge", "chrome"):
+        for zoom in ("0.8", "0.9", "1", "1.1", "1.25"):
+            for sample in ("sample-a", "sample-b"):
+                exact_bid = sample == "sample-a"
+                exact_ask = browser == "edge"
+                results.append(
+                    synthetic_private_result(
+                        fixture_id=f"{browser}/{zoom}/{sample}",
+                        browser=browser,
+                        zoom=zoom,
+                        sample=sample,
+                        exact_bid=exact_bid,
+                        exact_ask=exact_ask,
+                    )
+                )
+
+    diagnostics = build_anonymous_diagnostics(
+        {"schema_version": "private-test", "results": results}
+    )
+    validation_coverage = diagnostics["split"]["coverage"]["validation"]
+    tuning_coverage = diagnostics["split"]["coverage"]["tuning"]
+    assert diagnostics["split"]["validation_count"] == 8
+    assert diagnostics["split"]["tuning_count"] == 12
+    assert validation_coverage["browser"] == ["chrome", "edge"]
+    assert validation_coverage["declared_zoom"] == ["0.8", "0.9", "1", "1.1", "1.25"]
+    assert validation_coverage["sample_label"] == ["sample-a", "sample-b"]
+    assert tuning_coverage["browser"] == ["chrome", "edge"]
+    assert tuning_coverage["declared_zoom"] == ["0.8", "0.9", "1", "1.1", "1.25"]
+    assert tuning_coverage["sample_label"] == ["sample-a", "sample-b"]
+    serialized = json.dumps(diagnostics, ensure_ascii=False)
+    assert "C:\\" not in serialized
+    assert "12.34" not in serialized
+    assert "13.00" not in serialized
+    assert "secret raw" not in serialized
+    assert "selected_outputs_only" in serialized
+
+
+def test_anonymous_private_report_diagnostics_classifies_pipeline_value() -> None:
+    diagnostics = build_anonymous_diagnostics(
+        {
+            "schema_version": "private-test",
+            "results": [
+                synthetic_private_result(
+                    fixture_id="edge/0.8/sample-a",
+                    browser="edge",
+                    zoom="0.8",
+                    sample="sample-a",
+                    exact_bid=True,
+                    exact_ask=False,
+                    ask_wrong=True,
+                )
+            ],
+        }
+    )
+
+    pipelines = diagnostics["pipeline_diagnostics"]["pipelines"]
+    bid_pipeline = next(
+        item
+        for item in pipelines
+        if item["field_name"] == "best_bid" and item["pipeline_name"] == "gray_3x"
+    )
+    ask_pipeline = next(
+        item
+        for item in pipelines
+        if item["field_name"] == "best_ask" and item["pipeline_name"] == "gray_autocontrast_4x"
+    )
+    assert bid_pipeline["attempt_count"] == 1
+    assert bid_pipeline["selected_best_bid_exact_count"] == 1
+    assert ask_pipeline["selected_wrong_value_count"] == 1
+    assert (
+        "best_ask::gray_autocontrast_4x"
+        in diagnostics["pipeline_diagnostics"]["classifications"]["error_prone_selected_candidates"]
+    )
 
 
 def test_private_diagnostics_redacts_sensitive_markers_from_html(
