@@ -218,6 +218,199 @@ function FileSha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+$script:LegacyBitmapProcessorLoaded = $false
+$script:LegacyBitmapProcessorCompileCount = 0
+$script:LegacyBitmapProcessorCompileMs = 0
+
+function EnsureLegacyBitmapProcessor() {
+  if ($script:LegacyBitmapProcessorLoaded) {
+    return
+  }
+  $compileStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $source = @"
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+
+namespace ScreenRecognitionOcr
+{
+    public sealed class LegacyBitmapProcessingResult
+    {
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public int PixelCount { get; set; }
+        public int BytesPerPixel { get; set; }
+        public int Stride { get; set; }
+        public string PixelFormat { get; set; }
+        public int GetPixelEquivalentCount { get; set; }
+        public int SetPixelEquivalentCount { get; set; }
+        public int LockBitsCount { get; set; }
+        public int UnlockBitsCount { get; set; }
+        public long LockBitsMs { get; set; }
+        public long CopyInMs { get; set; }
+        public long HistogramMs { get; set; }
+        public long PixelTransformMs { get; set; }
+        public long CopyOutMs { get; set; }
+        public long UnlockBitsMs { get; set; }
+    }
+
+    public static class LegacyBitmapProcessorV1
+    {
+        public static LegacyBitmapProcessingResult Process(
+            Bitmap bitmap,
+            bool autocontrast,
+            bool hasThreshold,
+            int threshold,
+            bool invert)
+        {
+            if (bitmap == null) throw new ArgumentNullException("bitmap");
+            if (bitmap.Width <= 0 || bitmap.Height <= 0) throw new ArgumentException("Bitmap must be non-empty.");
+
+            PixelFormat format = bitmap.PixelFormat;
+            int bpp = Image.GetPixelFormatSize(format) / 8;
+            if (format != PixelFormat.Format24bppRgb &&
+                format != PixelFormat.Format32bppArgb &&
+                format != PixelFormat.Format32bppPArgb &&
+                format != PixelFormat.Format32bppRgb)
+            {
+                throw new NotSupportedException("Unsupported pixel format for legacy LockBits processing: " + format);
+            }
+
+            Rectangle rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+            BitmapData data = null;
+            byte[] buffer = null;
+            int absStride = 0;
+            LegacyBitmapProcessingResult result = new LegacyBitmapProcessingResult();
+            result.Width = bitmap.Width;
+            result.Height = bitmap.Height;
+            result.PixelCount = bitmap.Width * bitmap.Height;
+            result.BytesPerPixel = bpp;
+            result.PixelFormat = format.ToString();
+            result.GetPixelEquivalentCount = result.PixelCount + (autocontrast ? result.PixelCount : 0);
+            result.SetPixelEquivalentCount = result.PixelCount;
+
+            try
+            {
+                Stopwatch sw = Stopwatch.StartNew();
+                data = bitmap.LockBits(rect, ImageLockMode.ReadWrite, format);
+                sw.Stop();
+                result.LockBitsMs = sw.ElapsedMilliseconds;
+                result.LockBitsCount = 1;
+                result.Stride = data.Stride;
+                absStride = Math.Abs(data.Stride);
+                buffer = new byte[absStride * bitmap.Height];
+
+                sw.Restart();
+                Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+                sw.Stop();
+                result.CopyInMs = sw.ElapsedMilliseconds;
+
+                int minGray = 255;
+                int maxGray = 0;
+                if (autocontrast)
+                {
+                    sw.Restart();
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        int row = y * absStride;
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int offset = row + (x * bpp);
+                            int gray = LegacyGray(buffer, offset, format);
+                            if (gray < minGray) minGray = gray;
+                            if (gray > maxGray) maxGray = gray;
+                        }
+                    }
+                    sw.Stop();
+                    result.HistogramMs = sw.ElapsedMilliseconds;
+                }
+
+                sw.Restart();
+                for (int y = 0; y < bitmap.Height; y++)
+                {
+                    int row = y * absStride;
+                    for (int x = 0; x < bitmap.Width; x++)
+                    {
+                        int offset = row + (x * bpp);
+                        int gray = LegacyGray(buffer, offset, format);
+                        if (autocontrast && maxGray > minGray)
+                        {
+                            gray = (int)Math.Round(((gray - minGray) * 255.0) / (maxGray - minGray));
+                        }
+                        if (hasThreshold)
+                        {
+                            gray = gray >= threshold ? 255 : 0;
+                        }
+                        if (invert)
+                        {
+                            gray = 255 - gray;
+                        }
+                        buffer[offset] = (byte)gray;
+                        buffer[offset + 1] = (byte)gray;
+                        buffer[offset + 2] = (byte)gray;
+                        if (bpp == 4)
+                        {
+                            buffer[offset + 3] = 255;
+                        }
+                    }
+                }
+                sw.Stop();
+                result.PixelTransformMs = sw.ElapsedMilliseconds;
+
+                sw.Restart();
+                Marshal.Copy(buffer, 0, data.Scan0, buffer.Length);
+                sw.Stop();
+                result.CopyOutMs = sw.ElapsedMilliseconds;
+            }
+            finally
+            {
+                if (data != null)
+                {
+                    Stopwatch unlock = Stopwatch.StartNew();
+                    bitmap.UnlockBits(data);
+                    unlock.Stop();
+                    result.UnlockBitsMs = unlock.ElapsedMilliseconds;
+                    result.UnlockBitsCount = 1;
+                }
+            }
+            return result;
+        }
+
+        private static int LegacyGray(byte[] buffer, int offset, PixelFormat format)
+        {
+            int b = buffer[offset];
+            int g = buffer[offset + 1];
+            int r = buffer[offset + 2];
+            if (format == PixelFormat.Format32bppPArgb)
+            {
+                int a = buffer[offset + 3];
+                if (a == 0)
+                {
+                    r = 0;
+                    g = 0;
+                    b = 0;
+                }
+                else if (a < 255)
+                {
+                    r = Math.Min(255, ((r * 255) + (a / 2)) / a);
+                    g = Math.Min(255, ((g * 255) + (a / 2)) / a);
+                    b = Math.Min(255, ((b * 255) + (a / 2)) / a);
+                }
+            }
+            return (int)Math.Round((r * 0.299) + (g * 0.587) + (b * 0.114));
+        }
+    }
+}
+"@
+  Add-Type -TypeDefinition $source -ReferencedAssemblies @("System.Drawing.dll") -Language CSharp
+  $compileStopwatch.Stop()
+  $script:LegacyBitmapProcessorLoaded = $true
+  $script:LegacyBitmapProcessorCompileCount += 1
+  $script:LegacyBitmapProcessorCompileMs += [int]$compileStopwatch.ElapsedMilliseconds
+}
+
 function GetPreprocessingVariants($Payload) {
   $variants = @()
   if ($Payload.preprocessing -and $Payload.preprocessing.variants) {
@@ -239,7 +432,7 @@ function GetPreprocessingVariants($Payload) {
   return @($variants | Select-Object -First 5)
 }
 
-function New-LegacyPreparedBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+function New-LegacyPreparedBitmapWithTiming($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant, [string]$PixelImplementation) {
   $scale = [int]$Variant.scale_factor
   if ($scale -lt 1) { $scale = 1 }
   $targetWidth = [Math]::Max(1, $Width * $scale)
@@ -250,6 +443,7 @@ function New-LegacyPreparedBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$
     $targetWidth = [Math]::Max(1, [int][Math]::Floor($targetWidth * $ratio))
     $targetHeight = [Math]::Max(1, [int][Math]::Floor($targetHeight * $ratio))
   }
+  $drawStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $crop = New-Object System.Drawing.Bitmap $targetWidth, $targetHeight
   $graphics = [System.Drawing.Graphics]::FromImage($crop)
   $graphics.Clear([System.Drawing.Color]::White)
@@ -260,18 +454,108 @@ function New-LegacyPreparedBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$
   $srcRect = New-Object System.Drawing.Rectangle $X, $Y, $Width, $Height
   $graphics.DrawImage($Source, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
   $graphics.Dispose()
-  ApplyPixelPreprocessing $crop $Variant
-  return $crop
+  $drawStopwatch.Stop()
+  $pixelTiming = ApplyPixelPreprocessing $crop $Variant $PixelImplementation
+  $pixelTiming.draw_resize_ms = [int]$drawStopwatch.ElapsedMilliseconds
+  return @{
+    bitmap = $crop
+    timing = $pixelTiming
+  }
 }
 
-function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
-  return New-LegacyPreparedBitmap $Source $X $Y $Width $Height $Variant
+function New-LegacyPreparedBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+  $prepared = New-LegacyPreparedBitmapWithTiming $Source $X $Y $Width $Height $Variant "legacy-pixel-loop"
+  return $prepared.bitmap
 }
 
-function ApplyPixelPreprocessing($Bitmap, $Variant) {
+function New-LegacyPreparedBitmapFast($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+  $prepared = New-LegacyPreparedBitmapWithTiming $Source $X $Y $Width $Height $Variant "lockbits-v1"
+  return $prepared.bitmap
+}
+
+function EmptyPixelTiming([string]$Implementation) {
+  return @{
+    pixel_implementation = $Implementation
+    draw_resize_ms = 0
+    pixel_read_ms = 0
+    histogram_ms = 0
+    grayscale_ms = 0
+    autocontrast_ms = 0
+    threshold_ms = 0
+    invert_ms = 0
+    pixel_write_ms = 0
+    pixel_transform_ms = 0
+    lockbits_ms = 0
+    unlockbits_ms = 0
+    marshal_copy_in_ms = 0
+    marshal_copy_out_ms = 0
+    encode_ms = 0
+    get_pixel_call_count = 0
+    set_pixel_call_count = 0
+    lockbits_count = 0
+    unlockbits_count = 0
+    pixel_count = 0
+    bitmap_pixel_format = $null
+    stride = 0
+    bytes_per_pixel = 0
+  }
+}
+
+function ApplyPixelPreprocessingLockBits($Bitmap, $Variant) {
+  EnsureLegacyBitmapProcessor
+  $threshold = 0
+  $hasThreshold = $false
+  if ($null -ne $Variant.binary_threshold) {
+    $threshold = [int]$Variant.binary_threshold
+    $hasThreshold = $true
+  }
+  $result = [ScreenRecognitionOcr.LegacyBitmapProcessorV1]::Process(
+    $Bitmap,
+    [bool]$Variant.autocontrast,
+    $hasThreshold,
+    $threshold,
+    [bool]$Variant.invert
+  )
+  return @{
+    pixel_implementation = "lockbits-v1"
+    draw_resize_ms = 0
+    pixel_read_ms = [int]$result.CopyInMs
+    histogram_ms = [int]$result.HistogramMs
+    grayscale_ms = [int]$result.PixelTransformMs
+    autocontrast_ms = if ([bool]$Variant.autocontrast) { [int]$result.HistogramMs } else { 0 }
+    threshold_ms = if ($hasThreshold) { [int]$result.PixelTransformMs } else { 0 }
+    invert_ms = if ([bool]$Variant.invert) { [int]$result.PixelTransformMs } else { 0 }
+    pixel_write_ms = [int]$result.CopyOutMs
+    pixel_transform_ms = [int]$result.PixelTransformMs
+    lockbits_ms = [int]$result.LockBitsMs
+    unlockbits_ms = [int]$result.UnlockBitsMs
+    marshal_copy_in_ms = [int]$result.CopyInMs
+    marshal_copy_out_ms = [int]$result.CopyOutMs
+    encode_ms = 0
+    get_pixel_call_count = [int]$result.GetPixelEquivalentCount
+    set_pixel_call_count = [int]$result.SetPixelEquivalentCount
+    lockbits_count = [int]$result.LockBitsCount
+    unlockbits_count = [int]$result.UnlockBitsCount
+    pixel_count = [int]$result.PixelCount
+    bitmap_pixel_format = [string]$result.PixelFormat
+    stride = [int]$result.Stride
+    bytes_per_pixel = [int]$result.BytesPerPixel
+  }
+}
+
+function ApplyPixelPreprocessing($Bitmap, $Variant, [string]$PixelImplementation = "legacy-pixel-loop") {
+  $timing = EmptyPixelTiming $PixelImplementation
+  $timing.pixel_count = [int]($Bitmap.Width * $Bitmap.Height)
+  $timing.bitmap_pixel_format = [string]$Bitmap.PixelFormat
   $needsPixels = [bool]$Variant.autocontrast -or $null -ne $Variant.binary_threshold -or [bool]$Variant.invert
   if (-not $needsPixels) {
-    return
+    return $timing
+  }
+  if ($PixelImplementation -eq "lockbits-v1") {
+    return ApplyPixelPreprocessingLockBits $Bitmap $Variant
+  }
+  if ($PixelImplementation -ne "legacy-pixel-loop") {
+    throw "Unknown System.Drawing pixel implementation: $PixelImplementation"
   }
   $threshold = $null
   if ($null -ne $Variant.binary_threshold) {
@@ -279,7 +563,9 @@ function ApplyPixelPreprocessing($Bitmap, $Variant) {
   }
   $minGray = 255
   $maxGray = 0
+  $pixelCount = [int]($Bitmap.Width * $Bitmap.Height)
   if ([bool]$Variant.autocontrast) {
+    $histogramStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     for ($py = 0; $py -lt $Bitmap.Height; $py++) {
       for ($px = 0; $px -lt $Bitmap.Width; $px++) {
         $color = $Bitmap.GetPixel($px, $py)
@@ -288,7 +574,11 @@ function ApplyPixelPreprocessing($Bitmap, $Variant) {
         if ($gray -gt $maxGray) { $maxGray = $gray }
       }
     }
+    $histogramStopwatch.Stop()
+    $timing.histogram_ms = [int]$histogramStopwatch.ElapsedMilliseconds
+    $timing.pixel_read_ms += [int]$histogramStopwatch.ElapsedMilliseconds
   }
+  $transformStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   for ($py = 0; $py -lt $Bitmap.Height; $py++) {
     for ($px = 0; $px -lt $Bitmap.Width; $px++) {
       $color = $Bitmap.GetPixel($px, $py)
@@ -305,6 +595,22 @@ function ApplyPixelPreprocessing($Bitmap, $Variant) {
       $Bitmap.SetPixel($px, $py, [System.Drawing.Color]::FromArgb($gray, $gray, $gray))
     }
   }
+  $transformStopwatch.Stop()
+  $timing.grayscale_ms = [int]$transformStopwatch.ElapsedMilliseconds
+  $timing.autocontrast_ms = if ([bool]$Variant.autocontrast) { [int]$timing.histogram_ms } else { 0 }
+  $timing.threshold_ms = if ($null -ne $threshold) { [int]$transformStopwatch.ElapsedMilliseconds } else { 0 }
+  $timing.invert_ms = if ([bool]$Variant.invert) { [int]$transformStopwatch.ElapsedMilliseconds } else { 0 }
+  $timing.pixel_transform_ms = [int]$transformStopwatch.ElapsedMilliseconds
+  $timing.pixel_write_ms = [int]$transformStopwatch.ElapsedMilliseconds
+  $extraReads = 0
+  if ([bool]$Variant.autocontrast) { $extraReads = $pixelCount }
+  $timing.get_pixel_call_count = $pixelCount + $extraReads
+  $timing.set_pixel_call_count = $pixelCount
+  return $timing
+}
+
+function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+  return New-LegacyPreparedBitmap $Source $X $Y $Width $Height $Variant
 }
 
 function RegionHasInk($Bitmap, [int]$X, [int]$Y, [int]$Width, [int]$Height) {
@@ -520,8 +826,16 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-prepared-only-v1") {
 }
 
 if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v1") {
+  $pixelImplementation = [string]$inputPayload.pixel_implementation
+  if ([string]::IsNullOrWhiteSpace($pixelImplementation)) {
+    $pixelImplementation = "lockbits-v1"
+  }
+  if ($pixelImplementation -ne "lockbits-v1" -and $pixelImplementation -ne "legacy-pixel-loop") {
+    throw "Unknown System.Drawing pixel implementation: $pixelImplementation"
+  }
   $systemDrawingDiagnostics = @{
     mode = "system_drawing_batch_v1"
+    pixel_implementation = $pixelImplementation
     powershell_process_count = 1
     source_image_open_count = 0
     graphics_creation_count = 0
@@ -536,6 +850,26 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
     request_error_count = 0
     blank_roi_count = 0
     skip_ocr = [bool]$inputPayload.skip_ocr
+    csharp_type_compile_count = 0
+    csharp_type_compile_ms = 0
+    draw_resize_ms = 0
+    pixel_read_ms = 0
+    histogram_ms = 0
+    grayscale_ms = 0
+    autocontrast_ms = 0
+    threshold_ms = 0
+    invert_ms = 0
+    pixel_write_ms = 0
+    pixel_transform_ms = 0
+    lockbits_ms = 0
+    unlockbits_ms = 0
+    marshal_copy_in_ms = 0
+    marshal_copy_out_ms = 0
+    encode_ms = 0
+    get_pixel_call_count = 0
+    set_pixel_call_count = 0
+    lockbits_count = 0
+    unlockbits_count = 0
   }
   $systemDrawingWarnings = New-Object System.Collections.Generic.List[string]
   $systemDrawingWarnings.Add("ocr_confidence_unavailable")
@@ -595,7 +929,9 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
           })
           continue
         }
-        $crop = New-LegacyPreparedBitmap $source $x $y $w $h $request.preprocessing
+        $preparedBitmap = New-LegacyPreparedBitmapWithTiming $source $x $y $w $h $request.preprocessing $pixelImplementation
+        $crop = $preparedBitmap.bitmap
+        $preprocessingTiming = $preparedBitmap.timing
         $systemDrawingDiagnostics.graphics_creation_count += 1
         $systemDrawingDiagnostics.prepared_image_count += 1
         $variantName = if ([string]::IsNullOrWhiteSpace($pipelineName)) { "unnamed" } else { $pipelineName }
@@ -606,7 +942,13 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
           $preparedPath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString("N") + ".png")
           $systemDrawingTempFiles.Add($preparedPath)
         }
+        $encodeStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $crop.Save($preparedPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $encodeStopwatch.Stop()
+        $preprocessingTiming.encode_ms = [int]$encodeStopwatch.ElapsedMilliseconds
+        foreach ($timingKey in @("draw_resize_ms", "pixel_read_ms", "histogram_ms", "grayscale_ms", "autocontrast_ms", "threshold_ms", "invert_ms", "pixel_write_ms", "pixel_transform_ms", "lockbits_ms", "unlockbits_ms", "marshal_copy_in_ms", "marshal_copy_out_ms", "encode_ms", "get_pixel_call_count", "set_pixel_call_count", "lockbits_count", "unlockbits_count")) {
+          $systemDrawingDiagnostics[$timingKey] += [int]$preprocessingTiming[$timingKey]
+        }
         $systemDrawingDiagnostics.prepared_image_write_count += 1
         $prepared = @{
           image_path = $preparedPath
@@ -617,6 +959,7 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
           horizontal_resolution = [double]$crop.HorizontalResolution
           vertical_resolution = [double]$crop.VerticalResolution
           encoder = "PNG"
+          preprocessing_timing = $preprocessingTiming
         }
         $crop.Dispose()
         if ([bool]$inputPayload.skip_ocr) {
@@ -650,6 +993,7 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
           timing = $recognized.timing
           decoder = $recognized.decoder
           prepared = $prepared
+          preprocessing_timing = $preprocessingTiming
           error_code = $null
         })
       }
@@ -688,6 +1032,8 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v
     }
     $helperStopwatch.Stop()
     $systemDrawingDiagnostics.helper_total_duration_ms = [int]$helperStopwatch.ElapsedMilliseconds
+    $systemDrawingDiagnostics.csharp_type_compile_count = [int]$script:LegacyBitmapProcessorCompileCount
+    $systemDrawingDiagnostics.csharp_type_compile_ms = [int]$script:LegacyBitmapProcessorCompileMs
   }
   @{
     schema_version = "windows-ocr-system-drawing-batch-v1"

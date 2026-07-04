@@ -97,6 +97,8 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     backend_name = "windows-ocr"
     backend_version = "windows-media-ocr-batch-v1"
     system_drawing_backend_version = "windows-media-ocr-system-drawing-batch-v1"
+    system_drawing_lockbits_backend_version = "windows-media-ocr-system-drawing-lockbits-v1"
+    system_drawing_pixel_loop_backend_version = "windows-media-ocr-system-drawing-pixel-loop-v1"
     test_scope = "end_to_end"
 
     def __init__(
@@ -105,12 +107,17 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         timeout_seconds: int = 60,
         legacy_mode: bool = False,
         system_drawing_batch_mode: bool = False,
+        system_drawing_pixel_implementation: str = "lockbits-v1",
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
         self._system_drawing_batch_mode = system_drawing_batch_mode
+        self._system_drawing_pixel_implementation = system_drawing_pixel_implementation
         if system_drawing_batch_mode:
-            self.backend_version = self.system_drawing_backend_version
+            if system_drawing_pixel_implementation == "legacy-pixel-loop":
+                self.backend_version = self.system_drawing_pixel_loop_backend_version
+            else:
+                self.backend_version = self.system_drawing_lockbits_backend_version
 
     def recognize(self, invocation: OcrInvocation) -> OcrResult:
         if os.name != "nt":
@@ -175,6 +182,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
             )
             input_payload = {
                 **prepared.manifest,
+                "pixel_implementation": self._system_drawing_pixel_implementation,
                 "debug_artifacts_dir": (
                     None
                     if invocation.debug_artifacts_dir is None
@@ -279,8 +287,23 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
         return WindowsOcrRecognizer(timeout_seconds=timeout_seconds)
     if name == "windows-ocr-legacy":
         return WindowsOcrRecognizer(timeout_seconds=timeout_seconds, legacy_mode=True)
-    if name in {"windows-ocr-system-drawing-batch", "candidate-system-drawing-batch-v1"}:
-        return WindowsOcrRecognizer(timeout_seconds=timeout_seconds, system_drawing_batch_mode=True)
+    if name in {
+        "windows-ocr-system-drawing-batch",
+        "windows-ocr-system-drawing-lockbits",
+        "candidate-system-drawing-batch-v1",
+        "candidate-system-drawing-lockbits-v1",
+    }:
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+        )
+    if name in {"windows-ocr-system-drawing-pixel-loop", "candidate-system-drawing-pixel-loop-v1"}:
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="legacy-pixel-loop",
+        )
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -407,6 +430,11 @@ def _batch_payload_to_ocr_result(
                 best_request = request
                 best_result = result
             timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
+            preprocessing_timing = (
+                result.get("preprocessing_timing")
+                if isinstance(result.get("preprocessing_timing"), dict)
+                else {}
+            )
             error_code = result.get("error_code")
             response_request_id = result.get("request_id")
             per_pipeline.append(
@@ -421,6 +449,17 @@ def _batch_payload_to_ocr_result(
                     "bitmap_decode_ms": _safe_int(timing.get("bitmap_decode_ms")) or 0,
                     "serialization_ms": _safe_int(timing.get("serialization_ms")) or 0,
                     "dispose_ms": _safe_int(timing.get("dispose_ms")) or 0,
+                    "draw_resize_ms": _safe_int(preprocessing_timing.get("draw_resize_ms")) or 0,
+                    "pixel_read_ms": _safe_int(preprocessing_timing.get("pixel_read_ms")) or 0,
+                    "histogram_ms": _safe_int(preprocessing_timing.get("histogram_ms")) or 0,
+                    "grayscale_ms": _safe_int(preprocessing_timing.get("grayscale_ms")) or 0,
+                    "autocontrast_ms": _safe_int(preprocessing_timing.get("autocontrast_ms")) or 0,
+                    "threshold_ms": _safe_int(preprocessing_timing.get("threshold_ms")) or 0,
+                    "invert_ms": _safe_int(preprocessing_timing.get("invert_ms")) or 0,
+                    "pixel_write_ms": _safe_int(preprocessing_timing.get("pixel_write_ms")) or 0,
+                    "pixel_transform_ms": _safe_int(preprocessing_timing.get("pixel_transform_ms")) or 0,
+                    "encode_ms": _safe_int(preprocessing_timing.get("encode_ms")) or 0,
+                    "pixel_implementation": preprocessing_timing.get("pixel_implementation"),
                     "produced_text": bool(text.strip()),
                     "selected": False,
                     "request_id": request.request_id,

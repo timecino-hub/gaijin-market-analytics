@@ -631,6 +631,69 @@ def test_system_drawing_batch_prepared_pixels_match_legacy_export(tmp_path: Path
         assert _decoded_pixel_identity(system_path) == _decoded_pixel_identity(legacy.image_path)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="System.Drawing LockBits reference requires Windows")
+def test_system_drawing_lockbits_matches_pixel_loop_across_synthetic_edges(tmp_path: Path) -> None:
+    cases = _lockbits_equivalence_sources()
+    for case_name, source in cases:
+        image = tmp_path / f"{case_name}.png"
+        source.save(image)
+        profile = LayoutProfile(
+            name=f"lockbits-{case_name}",
+            version="1",
+            min_width=1,
+            min_height=1,
+            min_aspect_ratio=Decimal("0.1"),
+            max_aspect_ratio=Decimal("20"),
+            rois={
+                "best_ask": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1")),
+            },
+        )
+        batch = prepare_system_drawing_ocr_batch_manifest(
+            image_path=image,
+            layout_profile=profile,
+        )
+
+        pixel_loop = _run_system_drawing_prepared_export(
+            tmp_path=tmp_path,
+            case_name=case_name,
+            batch_manifest=batch.manifest,
+            pixel_implementation="legacy-pixel-loop",
+        )
+        lockbits = _run_system_drawing_prepared_export(
+            tmp_path=tmp_path,
+            case_name=case_name,
+            batch_manifest=batch.manifest,
+            pixel_implementation="lockbits-v1",
+        )
+
+        assert lockbits["diagnostics"]["pixel_implementation"] == "lockbits-v1"
+        assert lockbits["diagnostics"]["csharp_type_compile_count"] == 1
+        assert lockbits["diagnostics"]["lockbits_count"] > 0
+        assert lockbits["diagnostics"]["unlockbits_count"] == lockbits["diagnostics"]["lockbits_count"]
+        assert pixel_loop["diagnostics"]["get_pixel_call_count"] > 0
+        assert lockbits["diagnostics"]["get_pixel_call_count"] == pixel_loop["diagnostics"]["get_pixel_call_count"]
+        assert lockbits["diagnostics"]["set_pixel_call_count"] == pixel_loop["diagnostics"]["set_pixel_call_count"]
+
+        pixel_loop_by_key = {
+            (str(result["field_name"]), str(result["pipeline_name"])): result
+            for result in pixel_loop["results"]
+        }
+        lockbits_by_key = {
+            (str(result["field_name"]), str(result["pipeline_name"])): result
+            for result in lockbits["results"]
+        }
+
+        assert set(lockbits_by_key) == set(pixel_loop_by_key)
+        for key, reference in pixel_loop_by_key.items():
+            candidate = lockbits_by_key[key]
+            reference_prepared = reference["prepared"]
+            candidate_prepared = candidate["prepared"]
+            assert candidate_prepared["encoded_sha256"] == reference_prepared["encoded_sha256"]
+            assert _decoded_pixel_identity(Path(candidate_prepared["image_path"])) == _decoded_pixel_identity(
+                Path(reference_prepared["image_path"])
+            )
+
+
 def test_windows_ocr_batch_contract_maps_results_by_request_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1294,6 +1357,85 @@ def _decoded_pixel_identity(path: Path) -> dict[str, object]:
         "dpi": image.info.get("dpi"),
         "pixel_sha256": hashlib.sha256(image.tobytes()).hexdigest(),
     }
+
+
+def _run_system_drawing_prepared_export(
+    *,
+    tmp_path: Path,
+    case_name: str,
+    batch_manifest: dict[str, object],
+    pixel_implementation: str,
+) -> dict[str, object]:
+    output_dir = tmp_path / f"{case_name}-{pixel_implementation}"
+    output_dir.mkdir()
+    input_path = tmp_path / f"{case_name}-{pixel_implementation}.input.json"
+    output_path = tmp_path / f"{case_name}-{pixel_implementation}.output.json"
+    script_path = Path(__file__).parents[1] / "src" / "api" / "screen_recognition" / "windows_ocr.ps1"
+    dump_json_file(
+        input_path,
+        {
+            **batch_manifest,
+            "debug_artifacts_dir": str(output_dir),
+            "pixel_implementation": pixel_implementation,
+            "skip_ocr": True,
+        },
+    )
+    completed = _run_windows_helper(
+        _windows_helper_command(script_path, input_path, output_path),
+        timeout_seconds=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8-sig"))
+    assert payload["schema_version"] == SYSTEM_DRAWING_BATCH_SCHEMA_VERSION
+    return payload
+
+
+def _lockbits_equivalence_sources() -> list[tuple[str, Image.Image]]:
+    rgb_odd = Image.new("RGB", (17, 13), "white")
+    draw = ImageDraw.Draw(rgb_odd)
+    draw.rectangle((1, 1, 15, 11), fill=(20, 24, 30))
+    draw.line((2, 10, 14, 2), fill=(245, 246, 248), width=1)
+    draw.point((9, 7), fill=(248, 248, 248))
+
+    rgba_alpha = Image.new("RGBA", (19, 11), (255, 255, 255, 255))
+    alpha_draw = ImageDraw.Draw(rgba_alpha, "RGBA")
+    alpha_draw.rectangle((0, 0, 18, 10), fill=(30, 35, 42, 255))
+    alpha_draw.rectangle((2, 2, 8, 8), fill=(255, 255, 255, 128))
+    alpha_draw.rectangle((10, 2, 16, 8), fill=(255, 255, 255, 0))
+    alpha_draw.line((1, 9, 17, 1), fill=(248, 248, 248, 192), width=1)
+
+    single_pixel = Image.new("RGB", (1, 1), (169, 170, 171))
+
+    constant_gray = Image.new("RGB", (9, 7), (170, 170, 170))
+
+    threshold_edges = Image.new("RGB", (15, 5), "white")
+    threshold_pixels = [(168, 168, 168), (169, 169, 169), (170, 170, 170), (171, 171, 171), (172, 172, 172)]
+    for x in range(threshold_edges.width):
+        for y, color in enumerate(threshold_pixels):
+            threshold_edges.putpixel((x, y), color)
+
+    antialias_decimal = _synthetic_pixel_equivalence_image()
+
+    light_background = Image.new("RGB", (23, 15), (241, 243, 245))
+    light_draw = ImageDraw.Draw(light_background)
+    light_draw.text((2, 1), "12.3", fill=(15, 18, 22))
+    light_draw.point((18, 11), fill=(12, 12, 12))
+
+    dark_background = Image.new("RGB", (23, 15), (24, 27, 33))
+    dark_draw = ImageDraw.Draw(dark_background)
+    dark_draw.text((2, 1), "12.3", fill=(246, 247, 249))
+    dark_draw.point((18, 11), fill=(252, 252, 252))
+
+    return [
+        ("rgb-odd", rgb_odd),
+        ("rgba-alpha", rgba_alpha),
+        ("single-pixel", single_pixel),
+        ("constant-gray", constant_gray),
+        ("threshold-edges", threshold_edges),
+        ("antialias-decimal", antialias_decimal),
+        ("light-background", light_background),
+        ("dark-background", dark_background),
+    ]
 
 
 def _write_system_drawing_reference(
