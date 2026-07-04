@@ -430,20 +430,32 @@ def audit_batch_response_mapping(
     logical_requests: Iterable[PreparedOcrRequest] | Iterable[dict[str, Any]],
     response_results: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
-    request_ids = [
-        str(getattr(request, "physical_request_id", None) or request.get("request_id"))
-        for request in logical_requests
-    ]
+    request_ids: list[str] = []
+    logical_request_ids: list[str] = []
+    physical_request_mode = False
+    for request in logical_requests:
+        physical_request_id = getattr(request, "physical_request_id", None)
+        logical_request_id = getattr(request, "request_id", None)
+        if physical_request_id is not None:
+            physical_request_mode = True
+            request_ids.append(str(physical_request_id))
+            logical_request_ids.append(str(logical_request_id))
+            continue
+        if isinstance(request, dict):
+            request_ids.append(str(request.get("request_id")))
+            continue
     response_ids = [str(result.get("request_id")) for result in response_results if isinstance(result, dict)]
-    request_counts = Counter(request_ids)
+    expected_request_ids = list(dict.fromkeys(request_ids)) if physical_request_mode else request_ids
+    request_counts = Counter(logical_request_ids if physical_request_mode else request_ids)
     response_counts = Counter(response_ids)
     duplicate_request_ids = sorted(request_id for request_id, count in request_counts.items() if count > 1)
     duplicate_response_ids = sorted(request_id for request_id, count in response_counts.items() if count > 1)
-    missing_response_ids = sorted(set(request_ids) - set(response_ids))
-    unknown_response_ids = sorted(set(response_ids) - set(request_ids))
+    missing_response_ids = sorted(set(expected_request_ids) - set(response_ids))
+    unknown_response_ids = sorted(set(response_ids) - set(expected_request_ids))
     return {
         "mapping_key": "request_id",
-        "request_count": len(request_ids),
+        "request_count": len(expected_request_ids),
+        "logical_request_count": len(request_ids),
         "response_count": len(response_ids),
         "duplicate_request_ids": duplicate_request_ids,
         "duplicate_response_ids": duplicate_response_ids,

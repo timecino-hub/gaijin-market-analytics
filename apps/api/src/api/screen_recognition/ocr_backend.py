@@ -300,13 +300,13 @@ def _batch_payload_to_ocr_result(
     *,
     helper_duration_ms: int,
 ) -> OcrResult:
-    result_by_request_id = {
-        str(item.get("request_id")): item
-        for item in payload.get("results") or []
-        if isinstance(item, dict)
-    }
+    result_by_request_id, mapping_warnings, mapping_diagnostics = _batch_results_by_request_id(
+        payload.get("results") or [],
+        logical_requests,
+    )
     fields: dict[str, OcrFieldEvidence] = {}
     warnings = set(payload.get("warnings") or [])
+    warnings.update(mapping_warnings)
     per_pipeline: list[dict[str, Any]] = []
     fields_diagnostics: dict[str, dict[str, Any]] = {
         str(name): dict(value)
@@ -316,6 +316,8 @@ def _batch_payload_to_ocr_result(
     grouped: dict[str, list[tuple[PreparedOcrRequest, dict[str, Any]]]] = {}
     for request in logical_requests:
         result = result_by_request_id.get(request.physical_request_id, {})
+        request_warnings = _batch_response_metadata_warnings(request, result)
+        warnings.update(request_warnings)
         grouped.setdefault(request.field_name, []).append((request, result))
     for field_name, field_info in fields_diagnostics.items():
         if field_info.get("blank_roi_fast_path"):
@@ -347,6 +349,7 @@ def _batch_payload_to_ocr_result(
                 best_result = result
             timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
             error_code = result.get("error_code")
+            response_request_id = result.get("request_id")
             per_pipeline.append(
                 {
                     "field_name": field_name,
@@ -363,6 +366,8 @@ def _batch_payload_to_ocr_result(
                     "selected": False,
                     "request_id": request.request_id,
                     "physical_request_id": request.physical_request_id,
+                    "response_request_id": None if response_request_id is None else str(response_request_id),
+                    "response_received": request.physical_request_id in result_by_request_id,
                     "prepared_image_fingerprint": request.fingerprint,
                     "deduplicated_preprocessing": request.deduplicated_preprocessing,
                     "error_code": error_code,
@@ -371,7 +376,7 @@ def _batch_payload_to_ocr_result(
         if best_request is None or best_result is None:
             continue
         for item in per_pipeline:
-            if item["field_name"] == field_name and item["pipeline_name"] == best_request.pipeline_name:
+            if item["request_id"] == best_request.request_id:
                 item["selected"] = True
         field_elapsed_ms = int((time.perf_counter() - field_started) * 1000)
         field_diag = fields_diagnostics.setdefault(field_name, {})
@@ -411,6 +416,7 @@ def _batch_payload_to_ocr_result(
         "pipeline_count_attempted": int(python_diagnostics.get("logical_pipeline_request_count") or 0),
         "pipeline_count_completed": len(per_pipeline),
         "per_pipeline_duration_ms": per_pipeline,
+        "batch_response_mapping": mapping_diagnostics,
         "early_exit_used": False,
     }
     return OcrResult(
@@ -420,6 +426,83 @@ def _batch_payload_to_ocr_result(
         warnings=tuple(sorted(code for code in warnings if code != "ocr_confidence_unavailable")),
         diagnostics=merged_diagnostics,
     )
+
+
+def _batch_results_by_request_id(
+    response_results: Any,
+    logical_requests: tuple[PreparedOcrRequest, ...],
+) -> tuple[dict[str, dict[str, Any]], set[str], dict[str, Any]]:
+    expected_ids = tuple(dict.fromkeys(request.physical_request_id for request in logical_requests))
+    expected_set = set(expected_ids)
+    logical_request_ids = [request.request_id for request in logical_requests]
+    duplicate_logical_request_ids = sorted(
+        request_id
+        for request_id in set(logical_request_ids)
+        if logical_request_ids.count(request_id) > 1
+    )
+    results: list[dict[str, Any]] = [
+        item for item in response_results if isinstance(item, dict)
+    ] if isinstance(response_results, list) else []
+    result_by_request_id: dict[str, dict[str, Any]] = {}
+    response_counts: dict[str, int] = {}
+    unknown_response_ids: list[str] = []
+    for item in results:
+        raw_request_id = item.get("request_id")
+        if raw_request_id is None:
+            unknown_response_ids.append("<missing>")
+            continue
+        request_id = str(raw_request_id)
+        response_counts[request_id] = response_counts.get(request_id, 0) + 1
+        if request_id not in expected_set:
+            unknown_response_ids.append(request_id)
+            continue
+        if request_id not in result_by_request_id:
+            result_by_request_id[request_id] = item
+
+    duplicate_response_ids = sorted(
+        request_id for request_id, count in response_counts.items() if count > 1
+    )
+    missing_response_ids = sorted(
+        request_id for request_id in expected_ids if request_id not in result_by_request_id
+    )
+    warnings: set[str] = set()
+    if duplicate_logical_request_ids:
+        warnings.add("duplicate_request_id")
+    if duplicate_response_ids:
+        warnings.add("duplicate_response")
+    if missing_response_ids:
+        warnings.add("missing_response")
+    if unknown_response_ids:
+        warnings.add("unknown_response")
+    diagnostics = {
+        "mapping_key": "request_id",
+        "logical_request_count": len(logical_requests),
+        "physical_request_count": len(expected_ids),
+        "response_count": len(results),
+        "duplicate_request_ids": duplicate_logical_request_ids,
+        "duplicate_response_ids": duplicate_response_ids,
+        "missing_response_ids": missing_response_ids,
+        "unknown_response_ids": sorted(set(unknown_response_ids)),
+        "valid": not warnings,
+    }
+    return result_by_request_id, warnings, diagnostics
+
+
+def _batch_response_metadata_warnings(
+    request: PreparedOcrRequest,
+    result: dict[str, Any],
+) -> set[str]:
+    warnings: set[str] = set()
+    field_name = result.get("field_name")
+    if field_name is not None and str(field_name) != request.field_name:
+        warnings.add("response_field_mismatch")
+    region_name = result.get("region")
+    if region_name is not None and str(region_name) != request.field_name:
+        warnings.add("response_region_mismatch")
+    pipeline_name = result.get("pipeline_name")
+    if pipeline_name is not None and str(pipeline_name) != request.pipeline_name:
+        warnings.add("response_pipeline_mismatch")
+    return warnings
 
 
 def _score_recognized_text(field_name: str, text: str) -> int:

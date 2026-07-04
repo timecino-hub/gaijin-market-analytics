@@ -125,8 +125,13 @@ def prepare_windows_ocr_batch(
             "width": crop.width,
             "height": crop.height,
         }
-        for variant in selected_variants:
-            request_id = f"r{len(logical_requests) + 1:04d}"
+        for variant_ordinal, variant in enumerate(selected_variants):
+            request_id = _logical_request_id(
+                ordinal=len(logical_requests) + 1,
+                field_name=field_name,
+                pipeline_name=variant.name,
+                pipeline_ordinal=variant_ordinal,
+            )
             preprocess_started = time.perf_counter()
             prepared = _prepared_variant(crop, field_name, variant, cache)
             timings["shared_preprocessing_ms"] += _elapsed_ms(preprocess_started)
@@ -336,6 +341,27 @@ def _write_prepared_image(
     image.save(path, format="PNG")
     data = path.read_bytes()
     return path, hashlib.sha256(data).hexdigest()
+
+
+def _logical_request_id(
+    *,
+    ordinal: int,
+    field_name: str,
+    pipeline_name: str,
+    pipeline_ordinal: int,
+) -> str:
+    return (
+        f"r{ordinal:04d}__"
+        f"{_safe_request_id_segment(field_name)}__"
+        f"{_safe_request_id_segment(pipeline_name)}__"
+        f"p{pipeline_ordinal:02d}"
+    )
+
+
+def _safe_request_id_segment(value: str) -> str:
+    safe = "".join(char if char.isalnum() else "_" for char in value.strip())
+    safe = "_".join(part for part in safe.split("_") if part)
+    return safe[:48] or "unknown"
 
 
 def _region_has_ink(image: Image.Image) -> bool:

@@ -68,10 +68,12 @@ from api.screen_recognition.parser import normalize_item_name, parse_ocr_contrac
 from api.screen_recognition.preprocessing import (
     DEFAULT_OCR_PREPROCESSING_VARIANTS,
     MAX_NORMALIZED_ROI_PIXELS,
+    OcrPreprocessingVariant,
     build_ocr_preprocessing_variants,
 )
 from api.screen_recognition.ocr_batch import (
     BATCH_SCHEMA_VERSION,
+    PreparedOcrRequest,
     _resolve_roi_tuple,
     prepare_windows_ocr_batch,
 )
@@ -306,6 +308,44 @@ def test_python_batch_preprocessing_reuses_roi_and_shared_steps(tmp_path: Path) 
     assert diagnostics["prepared_image_write_count"] == 8
 
 
+def test_python_batch_logical_request_ids_include_field_pipeline_and_ordinal(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = Image.new("RGB", (80, 40), "white")
+    for x in range(5, 45):
+        for y in range(5, 25):
+            source.putpixel((x, y), (0, 0, 0))
+    source.save(image)
+    profile = LayoutProfile(
+        name="semantic-request-ids",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={"best_ask": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1"))},
+    )
+    variants = (
+        OcrPreprocessingVariant("same_pipeline", 1, grayscale=False),
+        OcrPreprocessingVariant("same_pipeline", 1, grayscale=False),
+    )
+
+    batch = prepare_windows_ocr_batch(
+        image_path=image,
+        layout_profile=profile,
+        temp_dir=tmp_path / "prepared",
+        variants=variants,
+    )
+
+    request_ids = [request.request_id for request in batch.logical_requests]
+    assert request_ids == [
+        "r0001__best_ask__same_pipeline__p00",
+        "r0002__best_ask__same_pipeline__p01",
+    ]
+    assert batch.logical_requests[0].physical_request_id == request_ids[0]
+    assert batch.logical_requests[1].physical_request_id == request_ids[0]
+    assert len(batch.manifest["requests"]) == 1
+
+
 def test_batch_roi_crop_boundaries_and_alpha_flatten_match_legacy_shape(tmp_path: Path) -> None:
     image = tmp_path / "alpha-source.png"
     source = Image.new("RGBA", (11, 7), (255, 255, 255, 255))
@@ -507,6 +547,215 @@ def test_windows_ocr_batch_contract_maps_results_by_request_id(
     assert result.diagnostics["ocr_engine_initialization_total_ms"] == 3
     assert result.diagnostics["pipeline_count_attempted"] == 4
     assert result.diagnostics["ocr_invocation_count"] == 4
+
+
+def test_batch_result_mapping_reports_missing_unknown_and_duplicate_responses(tmp_path: Path) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (
+        batch_request(tmp_path, "r0001", "best_ask", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "best_ask", "gray_autocontrast_4x", "p2"),
+    )
+    payload = {
+        "warnings": ["ocr_confidence_unavailable"],
+        "diagnostics": {"helper_total_duration_ms": 1},
+        "results": [
+            batch_response("p2", "13.00"),
+            batch_response("unknown", "99.00"),
+            batch_response("p2", "88.00"),
+        ],
+    }
+
+    result = _batch_payload_to_ocr_result(
+        payload,
+        requests,
+        batch_python_diagnostics(requests),
+        helper_duration_ms=2,
+    )
+
+    assert result.fields["best_ask"].raw_text == "13.00"
+    assert {"missing_response", "unknown_response", "duplicate_response"}.issubset(
+        set(result.warnings)
+    )
+    mapping = result.diagnostics["batch_response_mapping"]
+    assert mapping["valid"] is False
+    assert mapping["missing_response_ids"] == ["p1"]
+    assert mapping["unknown_response_ids"] == ["unknown"]
+    assert mapping["duplicate_response_ids"] == ["p2"]
+
+
+def test_batch_result_mapping_reports_duplicate_logical_request_ids(tmp_path: Path) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (
+        batch_request(tmp_path, "duplicate", "best_ask", "gray_3x", "p1"),
+        batch_request(tmp_path, "duplicate", "best_ask", "gray_autocontrast_4x", "p2"),
+    )
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", ""), batch_response("p2", "13.00")],
+        },
+        requests,
+        batch_python_diagnostics(requests),
+        helper_duration_ms=2,
+    )
+
+    assert "duplicate_request_id" in result.warnings
+    assert result.diagnostics["batch_response_mapping"]["duplicate_request_ids"] == ["duplicate"]
+
+
+def test_batch_result_mapping_reports_response_metadata_mismatch(tmp_path: Path) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (batch_request(tmp_path, "r0001", "best_ask", "gray_3x", "p1"),)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response(
+                    "p1",
+                    "13.00",
+                    field_name="ask_levels",
+                    region="ask_levels",
+                    pipeline_name="gray_autocontrast_4x",
+                )
+            ],
+        },
+        requests,
+        batch_python_diagnostics(requests),
+        helper_duration_ms=2,
+    )
+
+    assert {
+        "response_field_mismatch",
+        "response_region_mismatch",
+        "response_pipeline_mismatch",
+    }.issubset(set(result.warnings))
+
+
+def test_batch_result_mapping_allows_one_physical_response_for_multiple_logical_requests(
+    tmp_path: Path,
+) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (
+        batch_request(tmp_path, "r0001", "best_ask", "gray_3x", "shared"),
+        batch_request(tmp_path, "r0002", "ask_levels", "gray_3x", "shared"),
+    )
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("shared", "13.00")],
+        },
+        requests,
+        batch_python_diagnostics(requests),
+        helper_duration_ms=2,
+    )
+
+    assert result.fields["best_ask"].raw_text == "13.00"
+    assert result.fields["ask_levels"].raw_text == "13.00"
+    assert result.warnings == ()
+    mapping = result.diagnostics["batch_response_mapping"]
+    assert mapping["logical_request_count"] == 2
+    assert mapping["physical_request_count"] == 1
+    assert mapping["valid"] is True
+
+
+def test_batch_pipeline_selection_uses_logical_request_identity_for_ties(
+    tmp_path: Path,
+) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (
+        batch_request(tmp_path, "r0001", "best_ask", "same_pipeline", "p1"),
+        batch_request(tmp_path, "r0002", "best_ask", "same_pipeline", "p2"),
+    )
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", ""), batch_response("p2", "13.00")],
+        },
+        requests,
+        batch_python_diagnostics(requests),
+        helper_duration_ms=2,
+    )
+
+    selected = [
+        item["request_id"]
+        for item in result.diagnostics["per_pipeline_duration_ms"]
+        if item["selected"]
+    ]
+    assert selected == ["r0002"]
+    assert result.diagnostics["fields"]["best_ask"]["selected_pipeline"] == "same_pipeline"
+
+
+def batch_request(
+    tmp_path: Path,
+    request_id: str,
+    field_name: str,
+    pipeline_name: str,
+    physical_request_id: str,
+) -> PreparedOcrRequest:
+    image_path = tmp_path / f"{request_id}.png"
+    image_path.write_bytes(b"synthetic prepared image")
+    return PreparedOcrRequest(
+        request_id=request_id,
+        field_name=field_name,
+        pipeline_name=pipeline_name,
+        image_path=image_path,
+        width=10,
+        height=5,
+        fingerprint=f"hash-{request_id}",
+        physical_request_id=physical_request_id,
+        deduplicated_preprocessing=physical_request_id != request_id,
+    )
+
+
+def batch_response(request_id: str, raw_text: str, **metadata: object) -> dict[str, object]:
+    response: dict[str, object] = {
+        "request_id": request_id,
+        "raw_text": raw_text,
+        "lines": [],
+        "timing": {
+            "total_ms": 1,
+            "image_open_ms": 0,
+            "bitmap_decode_ms": 0,
+            "recognize_ms": 1,
+            "serialization_ms": 0,
+            "dispose_ms": 0,
+        },
+        "error_code": None,
+    }
+    response.update(metadata)
+    return response
+
+
+def batch_python_diagnostics(
+    requests: tuple[PreparedOcrRequest, ...],
+) -> dict[str, object]:
+    fields = {
+        request.field_name: {
+            "blank_roi_fast_path": False,
+            "pipeline_count_attempted": 0,
+            "pipeline_count_completed": 0,
+            "selected_pipeline": None,
+            "duration_ms": 0,
+            "width": request.width,
+            "height": request.height,
+        }
+        for request in requests
+    }
+    return {
+        "logical_pipeline_request_count": len(requests),
+        "fields": fields,
+    }
 
 
 def test_cross_helper_prepared_only_consumers_use_same_physical_file_and_hash(
@@ -722,6 +971,22 @@ def test_cross_helper_request_mapping_audit_detects_order_duplicates_missing_and
     assert audit["missing_response_ids"] == ["r1"]
     assert audit["unknown_response_ids"] == ["r3"]
     assert audit["valid"] is False
+
+
+def test_cross_helper_request_mapping_audit_allows_shared_physical_request(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "best_ask", "gray_3x", "shared"),
+        batch_request(tmp_path, "r0002", "ask_levels", "gray_3x", "shared"),
+    )
+
+    audit = audit_batch_response_mapping(requests, [{"request_id": "shared"}])
+
+    assert audit["request_count"] == 1
+    assert audit["logical_request_count"] == 2
+    assert audit["duplicate_request_ids"] == []
+    assert audit["missing_response_ids"] == []
+    assert audit["unknown_response_ids"] == []
+    assert audit["valid"] is True
 
 
 def test_cross_helper_private_output_must_stay_under_ignored_private_artifacts(tmp_path: Path) -> None:
