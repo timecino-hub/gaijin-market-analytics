@@ -20,7 +20,12 @@ from api.screen_recognition.contracts import (
     OcrWordEvidence,
 )
 from api.screen_recognition.json_util import dump_json_file
-from api.screen_recognition.ocr_batch import BATCH_SCHEMA_VERSION, PreparedOcrRequest, prepare_windows_ocr_batch
+from api.screen_recognition.ocr_batch import (
+    BATCH_SCHEMA_VERSION,
+    PreparedOcrRequest,
+    prepare_system_drawing_ocr_batch_manifest,
+    prepare_windows_ocr_batch,
+)
 from api.screen_recognition.preprocessing import preprocessing_metadata
 
 
@@ -91,11 +96,21 @@ class SidecarRecognizer(ScreenshotRecognizer):
 class WindowsOcrRecognizer(ScreenshotRecognizer):
     backend_name = "windows-ocr"
     backend_version = "windows-media-ocr-batch-v1"
+    system_drawing_backend_version = "windows-media-ocr-system-drawing-batch-v1"
     test_scope = "end_to_end"
 
-    def __init__(self, *, timeout_seconds: int = 60, legacy_mode: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 60,
+        legacy_mode: bool = False,
+        system_drawing_batch_mode: bool = False,
+    ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
+        self._system_drawing_batch_mode = system_drawing_batch_mode
+        if system_drawing_batch_mode:
+            self.backend_version = self.system_drawing_backend_version
 
     def recognize(self, invocation: OcrInvocation) -> OcrResult:
         if os.name != "nt":
@@ -103,6 +118,8 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         script_path = Path(__file__).with_name("windows_ocr.ps1")
         if not script_path.is_file():
             raise OcrBackendNotConfiguredError("windows-ocr helper script is missing.")
+        if self._system_drawing_batch_mode:
+            return self._recognize_system_drawing_batch(invocation, script_path)
         if not self._legacy_mode:
             return self._recognize_batch(invocation, script_path)
         return self._recognize_legacy(invocation, script_path)
@@ -143,10 +160,49 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                 prepared.logical_requests,
                 prepared.diagnostics,
                 helper_duration_ms=helper_duration_ms,
+                backend_version=self.backend_version,
             )
             if invocation.debug_artifacts_dir is not None:
                 _copy_debug_prepared_images(prepared.logical_requests, invocation.debug_artifacts_dir)
             return result
+
+    def _recognize_system_drawing_batch(self, invocation: OcrInvocation, script_path: Path) -> OcrResult:
+        with tempfile.TemporaryDirectory(prefix="cut20-ocr-system-drawing-batch-") as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            prepared = prepare_system_drawing_ocr_batch_manifest(
+                image_path=invocation.image_path,
+                layout_profile=invocation.layout_profile,
+            )
+            input_payload = {
+                **prepared.manifest,
+                "debug_artifacts_dir": (
+                    None
+                    if invocation.debug_artifacts_dir is None
+                    else str(invocation.debug_artifacts_dir)
+                ),
+            }
+            input_path = temp_dir / "input.json"
+            output_path = temp_dir / "output.json"
+            dump_json_file(input_path, input_payload)
+            command = _windows_helper_command(script_path, input_path, output_path)
+            helper_started = time.perf_counter()
+            completed = _run_windows_helper(command, timeout_seconds=self._timeout_seconds)
+            helper_duration_ms = int((time.perf_counter() - helper_started) * 1000)
+            if completed.returncode != 0:
+                stderr = (completed.stderr or "").strip().splitlines()
+                reason = stderr[-1] if stderr else "windows-ocr system-drawing batch failed"
+                raise OcrBackendError(reason[:240])
+            try:
+                payload = json.loads(output_path.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise OcrBackendError("windows-ocr system-drawing batch did not produce valid JSON output.") from exc
+            return _batch_payload_to_ocr_result(
+                payload,
+                prepared.logical_requests,
+                prepared.diagnostics,
+                helper_duration_ms=helper_duration_ms,
+                backend_version=self.backend_version,
+            )
 
     def _recognize_legacy(self, invocation: OcrInvocation, script_path: Path) -> OcrResult:
         input_payload = {
@@ -223,6 +279,8 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
         return WindowsOcrRecognizer(timeout_seconds=timeout_seconds)
     if name == "windows-ocr-legacy":
         return WindowsOcrRecognizer(timeout_seconds=timeout_seconds, legacy_mode=True)
+    if name in {"windows-ocr-system-drawing-batch", "candidate-system-drawing-batch-v1"}:
+        return WindowsOcrRecognizer(timeout_seconds=timeout_seconds, system_drawing_batch_mode=True)
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -299,6 +357,7 @@ def _batch_payload_to_ocr_result(
     python_diagnostics: dict[str, Any],
     *,
     helper_duration_ms: int,
+    backend_version: str = WindowsOcrRecognizer.backend_version,
 ) -> OcrResult:
     result_by_request_id, mapping_warnings, mapping_diagnostics = _batch_results_by_request_id(
         payload.get("results") or [],
@@ -369,6 +428,7 @@ def _batch_payload_to_ocr_result(
                     "response_request_id": None if response_request_id is None else str(response_request_id),
                     "response_received": request.physical_request_id in result_by_request_id,
                     "prepared_image_fingerprint": request.fingerprint,
+                    "preprocessing_descriptor_hash": request.preprocessing_descriptor_hash,
                     "deduplicated_preprocessing": request.deduplicated_preprocessing,
                     "error_code": error_code,
                 }
@@ -421,7 +481,7 @@ def _batch_payload_to_ocr_result(
     }
     return OcrResult(
         backend_name=WindowsOcrRecognizer.backend_name,
-        backend_version=WindowsOcrRecognizer.backend_version,
+        backend_version=backend_version,
         fields=fields,
         warnings=tuple(sorted(code for code in warnings if code != "ocr_confidence_unavailable")),
         diagnostics=merged_diagnostics,

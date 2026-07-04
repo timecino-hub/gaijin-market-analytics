@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN, localcontext
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -17,6 +19,7 @@ from api.screen_recognition.preprocessing import (
 
 
 BATCH_SCHEMA_VERSION = "windows-ocr-batch-v1"
+SYSTEM_DRAWING_BATCH_SCHEMA_VERSION = "windows-ocr-system-drawing-batch-v1"
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,7 @@ class PreparedOcrRequest:
     fingerprint: str
     physical_request_id: str
     deduplicated_preprocessing: bool
+    preprocessing_descriptor_hash: str | None = None
 
     def to_manifest_json(self) -> dict[str, Any]:
         return {
@@ -198,6 +202,158 @@ def prepare_windows_ocr_batch(
     )
 
 
+def prepare_system_drawing_ocr_batch_manifest(
+    *,
+    image_path: Path,
+    layout_profile: LayoutProfile,
+    variants: Iterable[OcrPreprocessingVariant] = DEFAULT_OCR_PREPROCESSING_VARIANTS,
+) -> PreparedOcrBatch:
+    started = time.perf_counter()
+    selected_variants = tuple(variants)
+    fields: dict[str, dict[str, Any]] = {}
+    logical_requests: list[PreparedOcrRequest] = []
+    manifest_requests: list[dict[str, Any]] = []
+    timings = {
+        "image_metadata_decode_ms": 0,
+        "layout_ms": 0,
+        "batch_manifest_ms": 0,
+    }
+
+    decode_started = time.perf_counter()
+    with Image.open(image_path) as opened:
+        source_width, source_height = opened.size
+    timings["image_metadata_decode_ms"] = _elapsed_ms(decode_started)
+
+    layout_started = time.perf_counter()
+    resolved_rois = {
+        field_name: _resolve_roi_tuple_decimal(roi.to_json(), source_width, source_height)
+        for field_name, roi in sorted(layout_profile.rois.items())
+    }
+    timings["layout_ms"] = _elapsed_ms(layout_started)
+
+    manifest_started = time.perf_counter()
+    for field_name, box in resolved_rois.items():
+        x, y, width, height = box
+        fields[field_name] = {
+            "blank_roi_fast_path": False,
+            "pipeline_count_attempted": len(selected_variants),
+            "pipeline_count_completed": 0,
+            "selected_pipeline": None,
+            "duration_ms": 0,
+            "width": width,
+            "height": height,
+        }
+        for variant_ordinal, variant in enumerate(selected_variants):
+            request_id = _logical_request_id(
+                ordinal=len(logical_requests) + 1,
+                field_name=field_name,
+                pipeline_name=variant.name,
+                pipeline_ordinal=variant_ordinal,
+            )
+            target_width, target_height = _target_dimensions(width, height, variant.scale_factor)
+            descriptor = {
+                "version": "system-drawing-batch-v1",
+                "source_image_path": str(image_path),
+                "source_width": source_width,
+                "source_height": source_height,
+                "field_name": field_name,
+                "region": field_name,
+                "pipeline_name": variant.name,
+                "crop": {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                },
+                "target": {
+                    "width": target_width,
+                    "height": target_height,
+                    "max_pixels": MAX_NORMALIZED_ROI_PIXELS,
+                },
+                "preprocessing": variant.to_json(),
+                "drawing": {
+                    "bitmap_constructor": "System.Drawing.Bitmap(width,height)",
+                    "graphics_factory": "Graphics.FromImage",
+                    "clear_color": "White",
+                    "interpolation_mode": "HighQualityBicubic",
+                    "smoothing_mode": "HighQuality",
+                    "pixel_offset_mode": "HighQuality",
+                    "graphics_unit": "Pixel",
+                    "encoder": "PNG",
+                    "pixel_preprocessing": "legacy_getpixel_setpixel_gray_autocontrast_threshold_invert",
+                },
+            }
+            descriptor_hash = _stable_descriptor_hash(descriptor)
+            request = PreparedOcrRequest(
+                request_id=request_id,
+                field_name=field_name,
+                pipeline_name=variant.name,
+                image_path=image_path,
+                width=target_width,
+                height=target_height,
+                fingerprint=descriptor_hash[:16],
+                physical_request_id=request_id,
+                deduplicated_preprocessing=False,
+                preprocessing_descriptor_hash=descriptor_hash,
+            )
+            logical_requests.append(request)
+            manifest_requests.append(
+                {
+                    "request_id": request_id,
+                    "field_name": field_name,
+                    "region": field_name,
+                    "pipeline_name": variant.name,
+                    "logical_ordinal": len(logical_requests),
+                    "crop": descriptor["crop"],
+                    "target": descriptor["target"],
+                    "preprocessing": variant.to_json(),
+                    "preprocessing_descriptor": descriptor,
+                    "preprocessing_descriptor_hash": descriptor_hash,
+                }
+            )
+
+    manifest = {
+        "schema_version": SYSTEM_DRAWING_BATCH_SCHEMA_VERSION,
+        "source_image_path": str(image_path),
+        "requests": manifest_requests,
+    }
+    timings["batch_manifest_ms"] = _elapsed_ms(manifest_started)
+    diagnostics = {
+        "preprocessing_mode": "system_drawing_batch_v1",
+        "recognition_image_decode_count": 0,
+        "recognition_image_metadata_decode_count": 1,
+        "recognition_roi_resolve_count": len(resolved_rois),
+        "logical_pipeline_request_count": len(logical_requests),
+        "unique_prepared_image_count": len(logical_requests),
+        "deduplicated_ocr_request_count": 0,
+        "prepared_image_write_count": len(logical_requests),
+        "prepared_image_read_count": len(logical_requests),
+        "winrt_decoder_count": len(logical_requests),
+        "software_bitmap_count": len(logical_requests),
+        "ocr_engine_initialization_count": 1 if logical_requests else 0,
+        "prepared_image_fingerprints": sorted(
+            {request.fingerprint for request in logical_requests}
+        ),
+        "preprocessing_descriptor_hashes": [
+            request.preprocessing_descriptor_hash for request in logical_requests
+        ],
+        "fields": fields,
+        "python_batch_timings_ms": timings,
+        "python_preprocessing_total_ms": _elapsed_ms(started),
+        "roi_crop_count": 0,
+        "resize_count": 0,
+        "grayscale_count": 0,
+        "autocontrast_count": 0,
+        "threshold_count": 0,
+        "invert_count": 0,
+    }
+    return PreparedOcrBatch(
+        manifest=manifest,
+        logical_requests=tuple(logical_requests),
+        diagnostics=diagnostics,
+    )
+
+
 def _resolve_roi_tuple(roi: dict[str, str], width: int, height: int) -> tuple[int, int, int, int]:
     x = int(float(roi["x"]) * width)
     y = int(float(roi["y"]) * height)
@@ -208,6 +364,25 @@ def _resolve_roi_tuple(roi: dict[str, str], width: int, height: int) -> tuple[in
     if y + h > height:
         h = height - y
     return x, y, w, h
+
+
+def _resolve_roi_tuple_decimal(roi: dict[str, str], width: int, height: int) -> tuple[int, int, int, int]:
+    with localcontext() as context:
+        context.prec = 29
+        x = int(_to_dotnet_decimal(roi["x"]) * Decimal(width))
+        y = int(_to_dotnet_decimal(roi["y"]) * Decimal(height))
+        w = max(1, int(_to_dotnet_decimal(roi["width"]) * Decimal(width)))
+        h = max(1, int(_to_dotnet_decimal(roi["height"]) * Decimal(height)))
+    if x + w > width:
+        w = width - x
+    if y + h > height:
+        h = height - y
+    return x, y, w, h
+
+
+def _to_dotnet_decimal(value: str) -> Decimal:
+    # PowerShell casts normalized ROI strings to System.Decimal before Floor.
+    return Decimal(str(value)).quantize(Decimal("1e-28"), rounding=ROUND_DOWN)
 
 
 def _crop_once(
@@ -321,14 +496,23 @@ def _invert(
 
 
 def _target_size(image: Image.Image, scale_factor: int) -> tuple[int, int]:
+    return _target_dimensions(image.width, image.height, scale_factor)
+
+
+def _target_dimensions(source_width: int, source_height: int, scale_factor: int) -> tuple[int, int]:
     scale = max(1, scale_factor)
-    width = max(1, image.width * scale)
-    height = max(1, image.height * scale)
+    width = max(1, source_width * scale)
+    height = max(1, source_height * scale)
     if width * height > MAX_NORMALIZED_ROI_PIXELS:
         ratio = (MAX_NORMALIZED_ROI_PIXELS / (width * height)) ** 0.5
         width = max(1, int(width * ratio))
         height = max(1, int(height * ratio))
     return width, height
+
+
+def _stable_descriptor_hash(value: dict[str, Any]) -> str:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def _write_prepared_image(

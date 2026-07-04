@@ -239,7 +239,7 @@ function GetPreprocessingVariants($Payload) {
   return @($variants | Select-Object -First 5)
 }
 
-function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+function New-LegacyPreparedBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
   $scale = [int]$Variant.scale_factor
   if ($scale -lt 1) { $scale = 1 }
   $targetWidth = [Math]::Max(1, $Width * $scale)
@@ -262,6 +262,10 @@ function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Va
   $graphics.Dispose()
   ApplyPixelPreprocessing $crop $Variant
   return $crop
+}
+
+function NewCropBitmap($Source, [int]$X, [int]$Y, [int]$Width, [int]$Height, $Variant) {
+  return New-LegacyPreparedBitmap $Source $X $Y $Width $Height $Variant
 }
 
 function ApplyPixelPreprocessing($Bitmap, $Variant) {
@@ -512,6 +516,185 @@ if ([string]$inputPayload.schema_version -eq "windows-ocr-prepared-only-v1") {
     warnings = @($preparedWarnings | Select-Object -Unique)
     diagnostics = $preparedDiagnostics
   } | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $OutputJson
+  exit 0
+}
+
+if ([string]$inputPayload.schema_version -eq "windows-ocr-system-drawing-batch-v1") {
+  $systemDrawingDiagnostics = @{
+    mode = "system_drawing_batch_v1"
+    powershell_process_count = 1
+    source_image_open_count = 0
+    graphics_creation_count = 0
+    prepared_image_count = 0
+    prepared_image_write_count = 0
+    ocr_invocation_count = 0
+    actual_ocr_invocation_count = 0
+    ocr_engine_initialization_count = 0
+    ocr_engine_initialization_total_ms = 0
+    total_ocr_duration_ms = 0
+    helper_total_duration_ms = 0
+    request_error_count = 0
+    blank_roi_count = 0
+    skip_ocr = [bool]$inputPayload.skip_ocr
+  }
+  $systemDrawingWarnings = New-Object System.Collections.Generic.List[string]
+  $systemDrawingWarnings.Add("ocr_confidence_unavailable")
+  $systemDrawingResults = New-Object System.Collections.Generic.List[object]
+  $systemDrawingTempFiles = New-Object System.Collections.Generic.List[string]
+  $source = $null
+  $engine = $null
+  try {
+    $sourceImagePath = [string]$inputPayload.source_image_path
+    if ([string]::IsNullOrWhiteSpace($sourceImagePath)) {
+      throw "system drawing batch requires source_image_path."
+    }
+    $debugDir = $inputPayload.debug_artifacts_dir
+    if ($debugDir) {
+      [System.IO.Directory]::CreateDirectory([string]$debugDir) | Out-Null
+    }
+    $source = [System.Drawing.Bitmap]::FromFile($sourceImagePath)
+    $systemDrawingDiagnostics.source_image_open_count = 1
+    if (-not [bool]$inputPayload.skip_ocr -and $inputPayload.requests.Count -gt 0) {
+      $engineInfo = NewOcrEngine
+      $engine = $engineInfo.engine
+      $systemDrawingDiagnostics.ocr_engine_initialization_count = 1
+      $systemDrawingDiagnostics.ocr_engine_initialization_total_ms = [int]$engineInfo.timing
+    }
+    foreach ($request in $inputPayload.requests) {
+      $requestId = [string]$request.request_id
+      $fieldName = [string]$request.field_name
+      $regionName = [string]$request.region
+      $pipelineName = [string]$request.pipeline_name
+      $descriptorHash = [string]$request.preprocessing_descriptor_hash
+      $x = [int]$request.crop.x
+      $y = [int]$request.crop.y
+      $w = [int]$request.crop.width
+      $h = [int]$request.crop.height
+      try {
+        if (-not (RegionHasInk $source $x $y $w $h)) {
+          $systemDrawingDiagnostics.blank_roi_count += 1
+          $systemDrawingResults.Add(@{
+            request_id = $requestId
+            field_name = $fieldName
+            region = $regionName
+            pipeline_name = $pipelineName
+            preprocessing_descriptor_hash = $descriptorHash
+            raw_text = ""
+            lines = @()
+            timing = @{
+              total_ms = 0
+              image_open_ms = 0
+              bitmap_decode_ms = 0
+              recognize_ms = 0
+              serialization_ms = 0
+              dispose_ms = 0
+            }
+            decoder = $null
+            prepared = $null
+            error_code = "blank_roi_fast_path"
+          })
+          continue
+        }
+        $crop = New-LegacyPreparedBitmap $source $x $y $w $h $request.preprocessing
+        $systemDrawingDiagnostics.graphics_creation_count += 1
+        $systemDrawingDiagnostics.prepared_image_count += 1
+        $variantName = if ([string]::IsNullOrWhiteSpace($pipelineName)) { "unnamed" } else { $pipelineName }
+        if ($debugDir) {
+          $suffix = if ([string]::IsNullOrWhiteSpace($descriptorHash)) { [System.Guid]::NewGuid().ToString("N").Substring(0, 16) } else { $descriptorHash.Substring(0, [Math]::Min(16, $descriptorHash.Length)) }
+          $preparedPath = Join-Path ([string]$debugDir) ((SafeSegment $fieldName) + "." + (SafeSegment $variantName) + "." + $suffix + ".png")
+        } else {
+          $preparedPath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString("N") + ".png")
+          $systemDrawingTempFiles.Add($preparedPath)
+        }
+        $crop.Save($preparedPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $systemDrawingDiagnostics.prepared_image_write_count += 1
+        $prepared = @{
+          image_path = $preparedPath
+          encoded_sha256 = FileSha256 $preparedPath
+          width = [int]$crop.Width
+          height = [int]$crop.Height
+          pixel_format = [string]$crop.PixelFormat
+          horizontal_resolution = [double]$crop.HorizontalResolution
+          vertical_resolution = [double]$crop.VerticalResolution
+          encoder = "PNG"
+        }
+        $crop.Dispose()
+        if ([bool]$inputPayload.skip_ocr) {
+          $recognized = @{
+            text = ""
+            lines = @()
+            timing = @{
+              total_ms = 0
+              image_open_ms = 0
+              bitmap_decode_ms = 0
+              recognize_ms = 0
+              serialization_ms = 0
+              dispose_ms = 0
+            }
+            decoder = $null
+          }
+        } else {
+          $recognized = RecognizePreparedImage $preparedPath $engine
+          $systemDrawingDiagnostics.ocr_invocation_count += 1
+          $systemDrawingDiagnostics.actual_ocr_invocation_count += 1
+          $systemDrawingDiagnostics.total_ocr_duration_ms += [int]$recognized.timing.total_ms
+        }
+        $systemDrawingResults.Add(@{
+          request_id = $requestId
+          field_name = $fieldName
+          region = $regionName
+          pipeline_name = $pipelineName
+          preprocessing_descriptor_hash = $descriptorHash
+          raw_text = [string]$recognized.text
+          lines = @($recognized.lines)
+          timing = $recognized.timing
+          decoder = $recognized.decoder
+          prepared = $prepared
+          error_code = $null
+        })
+      }
+      catch {
+        $systemDrawingDiagnostics.request_error_count += 1
+        $systemDrawingResults.Add(@{
+          request_id = $requestId
+          field_name = $fieldName
+          region = $regionName
+          pipeline_name = $pipelineName
+          preprocessing_descriptor_hash = $descriptorHash
+          raw_text = ""
+          lines = @()
+          timing = @{
+            total_ms = 0
+            image_open_ms = 0
+            bitmap_decode_ms = 0
+            recognize_ms = 0
+            serialization_ms = 0
+            dispose_ms = 0
+          }
+          decoder = $null
+          prepared = $null
+          error_code = "ocr_request_failed"
+          error_message = ([string]$_.Exception.Message)
+        })
+      }
+    }
+  }
+  finally {
+    if ($null -ne $source) { $source.Dispose() }
+    foreach ($tempFile in $systemDrawingTempFiles) {
+      if (Test-Path $tempFile) {
+        Remove-Item -LiteralPath $tempFile -Force
+      }
+    }
+    $helperStopwatch.Stop()
+    $systemDrawingDiagnostics.helper_total_duration_ms = [int]$helperStopwatch.ElapsedMilliseconds
+  }
+  @{
+    schema_version = "windows-ocr-system-drawing-batch-v1"
+    results = @($systemDrawingResults.ToArray())
+    warnings = @($systemDrawingWarnings | Select-Object -Unique)
+    diagnostics = $systemDrawingDiagnostics
+  } | ConvertTo-Json -Depth 12 | Set-Content -Encoding UTF8 $OutputJson
   exit 0
 }
 

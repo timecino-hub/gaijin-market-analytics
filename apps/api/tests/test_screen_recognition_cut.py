@@ -28,6 +28,7 @@ from api.screen_recognition.cross_helper import (
     _safe_png_bmp_result,
     _validate_private_output_dir,
     audit_batch_response_mapping,
+    export_legacy_prepared_images,
     export_pillow_prepared_images,
     recognize_prepared_images,
 )
@@ -43,6 +44,7 @@ from api.screen_recognition.image_io import (
     read_image_info,
     safe_extract_images_zip,
 )
+from api.screen_recognition.json_util import dump_json_file
 from api.screen_recognition.layouts import (
     LayoutUnsupportedError,
     get_layout_profile,
@@ -55,6 +57,7 @@ from api.screen_recognition.ocr_backend import (
     OcrInvocation,
     WindowsOcrRecognizer,
     _run_windows_helper,
+    _windows_helper_command,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -73,8 +76,10 @@ from api.screen_recognition.preprocessing import (
 )
 from api.screen_recognition.ocr_batch import (
     BATCH_SCHEMA_VERSION,
+    SYSTEM_DRAWING_BATCH_SCHEMA_VERSION,
     PreparedOcrRequest,
     _resolve_roi_tuple,
+    prepare_system_drawing_ocr_batch_manifest,
     prepare_windows_ocr_batch,
 )
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
@@ -465,6 +470,165 @@ def test_batch_prepared_pixels_are_close_to_system_drawing_reference(tmp_path: P
     assert stats["max_channel_difference"] <= 255
     assert stats["mean_absolute_difference"] <= 3
     assert stats["decimal_point_region_different_pixel_count"] <= 10
+
+
+def test_system_drawing_batch_manifest_uses_semantic_requests_and_descriptors(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = Image.new("RGB", (80, 40), "white")
+    for x in range(5, 45):
+        for y in range(5, 25):
+            source.putpixel((x, y), (0, 0, 0))
+    source.save(image)
+    profile = LayoutProfile(
+        name="system-drawing-manifest",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={
+            "best_ask": NormalizedRoi(Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1")),
+        },
+    )
+    variants = (
+        OcrPreprocessingVariant("gray_3x", 3, grayscale=True),
+        OcrPreprocessingVariant("binary_4x", 4, grayscale=True, autocontrast=True, binary_threshold=170),
+    )
+
+    batch = prepare_system_drawing_ocr_batch_manifest(
+        image_path=image,
+        layout_profile=profile,
+        variants=variants,
+    )
+
+    assert batch.manifest["schema_version"] == SYSTEM_DRAWING_BATCH_SCHEMA_VERSION
+    assert batch.manifest["source_image_path"] == str(image)
+    assert [request.request_id for request in batch.logical_requests] == [
+        "r0001__best_ask__gray_3x__p00",
+        "r0002__best_ask__binary_4x__p01",
+    ]
+    assert [request.physical_request_id for request in batch.logical_requests] == [
+        "r0001__best_ask__gray_3x__p00",
+        "r0002__best_ask__binary_4x__p01",
+    ]
+    manifest_requests = batch.manifest["requests"]
+    assert [item["request_id"] for item in manifest_requests] == [
+        "r0001__best_ask__gray_3x__p00",
+        "r0002__best_ask__binary_4x__p01",
+    ]
+    assert manifest_requests[0]["crop"] == {"x": 0, "y": 0, "width": 80, "height": 40}
+    assert manifest_requests[0]["target"] == {
+        "width": 240,
+        "height": 120,
+        "max_pixels": MAX_NORMALIZED_ROI_PIXELS,
+    }
+    descriptor_hashes = [
+        request.preprocessing_descriptor_hash for request in batch.logical_requests
+    ]
+    assert all(item and len(item) == 64 for item in descriptor_hashes)
+    assert descriptor_hashes == [
+        item["preprocessing_descriptor_hash"] for item in manifest_requests
+    ]
+    assert len(set(descriptor_hashes)) == len(descriptor_hashes)
+    assert batch.diagnostics["preprocessing_mode"] == "system_drawing_batch_v1"
+    assert batch.diagnostics["deduplicated_ocr_request_count"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="System.Drawing pixel reference requires Windows")
+def test_system_drawing_batch_prepared_pixels_match_legacy_export(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    source = _synthetic_pixel_equivalence_image()
+    source.save(image)
+    profile = LayoutProfile(
+        name="system-drawing-pixel-equivalence",
+        version="1",
+        min_width=1,
+        min_height=1,
+        min_aspect_ratio=Decimal("0.1"),
+        max_aspect_ratio=Decimal("10"),
+        rois={
+            "best_ask": NormalizedRoi(
+                Decimal(3) / Decimal(source.width),
+                Decimal(5) / Decimal(source.height),
+                Decimal(67) / Decimal(source.width),
+                Decimal(31) / Decimal(source.height),
+            ),
+            "ask_levels": NormalizedRoi(
+                Decimal(1) / Decimal(source.width),
+                Decimal(3) / Decimal(source.height),
+                Decimal(69) / Decimal(source.width),
+                Decimal(34) / Decimal(source.height),
+            ),
+        },
+    )
+    legacy_dir = tmp_path / "legacy"
+    system_dir = tmp_path / "system-drawing"
+    temp_root = tmp_path / "tmp"
+    legacy_dir.mkdir()
+    system_dir.mkdir()
+    temp_root.mkdir()
+
+    legacy_exports = export_legacy_prepared_images(
+        image_path=image,
+        layout_profile=profile,
+        fixture_id="synthetic-system-drawing",
+        output_dir=legacy_dir,
+        temp_root=temp_root,
+        timeout_seconds=30,
+    )
+    batch = prepare_system_drawing_ocr_batch_manifest(
+        image_path=image,
+        layout_profile=profile,
+    )
+    input_path = tmp_path / "system-drawing-input.json"
+    output_path = tmp_path / "system-drawing-output.json"
+    script_path = Path(__file__).parents[1] / "src" / "api" / "screen_recognition" / "windows_ocr.ps1"
+    dump_json_file(
+        input_path,
+        {
+            **batch.manifest,
+            "debug_artifacts_dir": str(system_dir),
+            "skip_ocr": True,
+        },
+    )
+
+    completed = _run_windows_helper(
+        _windows_helper_command(script_path, input_path, output_path),
+        timeout_seconds=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8-sig"))
+    assert payload["schema_version"] == SYSTEM_DRAWING_BATCH_SCHEMA_VERSION
+    assert payload["diagnostics"]["source_image_open_count"] == 1
+    assert payload["diagnostics"]["ocr_engine_initialization_count"] == 0
+    assert payload["diagnostics"]["ocr_invocation_count"] == 0
+    assert payload["diagnostics"]["prepared_image_count"] == len(batch.logical_requests)
+
+    legacy_by_key = {
+        (export.field_name, export.pipeline_name): export
+        for export in legacy_exports
+    }
+    system_by_key = {
+        (str(result["field_name"]), str(result["pipeline_name"])): result
+        for result in payload["results"]
+    }
+
+    assert set(legacy_by_key) == set(system_by_key)
+    assert {
+        ("best_ask", "gray_3x"),
+        ("ask_levels", "gray_3x"),
+        ("best_ask", "gray_autocontrast_4x"),
+        ("best_ask", "binary_4x"),
+        ("best_ask", "inverted_binary_4x"),
+    }.issubset(set(system_by_key))
+    for key, legacy in legacy_by_key.items():
+        prepared = system_by_key[key]["prepared"]
+        assert prepared is not None
+        system_path = Path(str(prepared["image_path"]))
+        assert system_path.is_file()
+        assert prepared["encoded_sha256"] == legacy.encoded_sha256
+        assert _decoded_pixel_identity(system_path) == _decoded_pixel_identity(legacy.image_path)
 
 
 def test_windows_ocr_batch_contract_maps_results_by_request_id(
@@ -1117,6 +1281,18 @@ def _pixel_delta_stats(
         "white_pixel_ratio": actual_values.count(255) / max(1, len(actual_values)),
         "alpha_behavior": "opaque_rgb" if actual.mode == "RGB" else actual.mode,
         "decimal_point_region_different_pixel_count": decimal_different,
+    }
+
+
+def _decoded_pixel_identity(path: Path) -> dict[str, object]:
+    with Image.open(path) as opened:
+        image = opened.copy()
+    return {
+        "mode": image.mode,
+        "size": image.size,
+        "alpha": _has_alpha(image),
+        "dpi": image.info.get("dpi"),
+        "pixel_sha256": hashlib.sha256(image.tobytes()).hexdigest(),
     }
 
 
