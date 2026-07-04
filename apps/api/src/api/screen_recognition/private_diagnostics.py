@@ -8,6 +8,8 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
+from api.screen_recognition.ocr_candidates import select_price_candidate
+
 
 SCHEMA_VERSION = "screen-recognition-private-diagnostics/1.0.0"
 SPLIT_VERSION = "fixture-sha256-greedy-coverage-v1"
@@ -191,6 +193,11 @@ def _accuracy_by_dimension(results: list[dict[str, Any]]) -> dict[str, dict[str,
 def _pipeline_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     stats: dict[tuple[str, str], dict[str, Any]] = {}
     output_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
+    has_private_attempts = any(
+        (((item.get("raw_ocr") or {}).get("diagnostics") or {}).get("private_pipeline_attempts"))
+        for item in results
+        if isinstance(item, dict)
+    )
     for item in results:
         profile = item.get("profile") or {}
         accuracy = item.get("accuracy") if isinstance(item.get("accuracy"), dict) else {}
@@ -220,6 +227,7 @@ def _pipeline_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
                 if raw_text.strip():
                     output_hashes[key].add(_text_hash(raw_text))
                 _record_selected_value_stats(entry, field_name, recognized, accuracy)
+        _record_private_attempt_stats(stats, item)
     completed = [_complete_pipeline_entry(entry, output_hashes[(entry["field_name"], entry["pipeline_name"])]) for entry in stats.values()]
     p75_duration = _percentile(
         [item["mean_duration_ms"] for item in completed if item["mean_duration_ms"] is not None],
@@ -230,7 +238,11 @@ def _pipeline_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "scope": {
             "attempts_and_duration": "all_recorded_pipeline_attempts",
-            "parse_valid_exact_wrong_and_duplicate": "selected_outputs_only",
+            "parse_valid_exact_wrong_and_duplicate": (
+                "all_private_pipeline_attempts"
+                if has_private_attempts
+                else "selected_outputs_only"
+            ),
         },
         "pipeline_count": len(completed),
         "pipelines": sorted(completed, key=lambda item: (item["field_name"], item["pipeline_name"])),
@@ -245,6 +257,10 @@ def _new_pipeline_entry(field_name: str, pipeline_name: str) -> dict[str, Any]:
         "pipeline_name": pipeline_name,
         "attempt_count": 0,
         "ocr_non_empty_count": 0,
+        "attempt_parse_valid_count": 0,
+        "attempt_exact_count": 0,
+        "attempt_wrong_value_count": 0,
+        "attempt_missing_count": 0,
         "selected_count": 0,
         "selected_parse_valid_count": 0,
         "selected_best_bid_exact_count": 0,
@@ -253,6 +269,45 @@ def _new_pipeline_entry(field_name: str, pipeline_name: str) -> dict[str, Any]:
         "selected_false_confident_count": 0,
         "durations_ms": [],
     }
+
+
+def _record_private_attempt_stats(
+    stats: dict[tuple[str, str], dict[str, Any]],
+    result: dict[str, Any],
+) -> None:
+    diagnostics = ((result.get("raw_ocr") or {}).get("diagnostics") or {})
+    attempts = diagnostics.get("private_pipeline_attempts") or []
+    if not isinstance(attempts, list):
+        return
+    expected = result.get("expected") if isinstance(result.get("expected"), dict) else {}
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        field_name = str(attempt.get("field_name") or "unknown")
+        pipeline_name = str(attempt.get("pipeline_name") or "unknown")
+        if field_name not in PRICE_FIELDS:
+            continue
+        key = (field_name, pipeline_name)
+        entry = stats.setdefault(key, _new_pipeline_entry(field_name, pipeline_name))
+        side_field = PRICE_FIELDS[field_name]
+        scalar_text = str(attempt.get("raw_text") or "") if field_name == side_field else ""
+        first_level_text = str(attempt.get("raw_text") or "") if field_name != side_field else None
+        selected = select_price_candidate(
+            field_name=side_field,
+            scalar_text=scalar_text,
+            first_level_text=first_level_text,
+        )
+        expected_value = _expected_decimal(expected.get(f"expected_{side_field}"))
+        if selected.value is None:
+            entry["attempt_missing_count"] += 1
+            continue
+        entry["attempt_parse_valid_count"] += 1
+        if expected_value is None:
+            entry["attempt_wrong_value_count"] += 1
+        elif selected.value == expected_value:
+            entry["attempt_exact_count"] += 1
+        else:
+            entry["attempt_wrong_value_count"] += 1
 
 
 def _record_selected_value_stats(
@@ -463,6 +518,15 @@ def _int_or_none(value: Any) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _expected_decimal(value: Any) -> Decimal | None:
+    if value in (None, "", "not_visible", "not_applicable"):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
         return None
 
 
