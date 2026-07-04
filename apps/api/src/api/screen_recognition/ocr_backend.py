@@ -29,6 +29,14 @@ from api.screen_recognition.ocr_batch import (
 from api.screen_recognition.preprocessing import preprocessing_metadata
 
 
+SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
+    "best_bid": ("gray_3x", "binary_4x"),
+    "bid_levels": ("gray_3x", "binary_4x"),
+    "best_ask": ("gray_3x", "binary_4x"),
+    "ask_levels": ("gray_3x", "binary_4x"),
+}
+
+
 class OcrBackendError(RuntimeError):
     pass
 
@@ -99,6 +107,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     system_drawing_backend_version = "windows-media-ocr-system-drawing-batch-v1"
     system_drawing_lockbits_backend_version = "windows-media-ocr-system-drawing-lockbits-v1"
     system_drawing_pixel_loop_backend_version = "windows-media-ocr-system-drawing-pixel-loop-v1"
+    system_drawing_cascade_backend_version = "windows-media-ocr-system-drawing-cascade-v1"
     test_scope = "end_to_end"
 
     def __init__(
@@ -108,13 +117,17 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         legacy_mode: bool = False,
         system_drawing_batch_mode: bool = False,
         system_drawing_pixel_implementation: str = "lockbits-v1",
+        system_drawing_field_variant_plan: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
         self._system_drawing_batch_mode = system_drawing_batch_mode
         self._system_drawing_pixel_implementation = system_drawing_pixel_implementation
+        self._system_drawing_field_variant_plan = system_drawing_field_variant_plan
         if system_drawing_batch_mode:
-            if system_drawing_pixel_implementation == "legacy-pixel-loop":
+            if system_drawing_field_variant_plan is not None:
+                self.backend_version = self.system_drawing_cascade_backend_version
+            elif system_drawing_pixel_implementation == "legacy-pixel-loop":
                 self.backend_version = self.system_drawing_pixel_loop_backend_version
             else:
                 self.backend_version = self.system_drawing_lockbits_backend_version
@@ -179,6 +192,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
             prepared = prepare_system_drawing_ocr_batch_manifest(
                 image_path=invocation.image_path,
                 layout_profile=invocation.layout_profile,
+                field_variant_names=self._system_drawing_field_variant_plan,
             )
             input_payload = {
                 **prepared.manifest,
@@ -304,6 +318,13 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             system_drawing_batch_mode=True,
             system_drawing_pixel_implementation="legacy-pixel-loop",
         )
+    if name == "candidate-system-drawing-cascade-v1":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+        )
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -390,6 +411,7 @@ def _batch_payload_to_ocr_result(
     warnings = set(payload.get("warnings") or [])
     warnings.update(mapping_warnings)
     per_pipeline: list[dict[str, Any]] = []
+    private_pipeline_attempts: list[dict[str, Any]] = []
     fields_diagnostics: dict[str, dict[str, Any]] = {
         str(name): dict(value)
         for name, value in (python_diagnostics.get("fields") or {}).items()
@@ -437,6 +459,7 @@ def _batch_payload_to_ocr_result(
             )
             error_code = result.get("error_code")
             response_request_id = result.get("request_id")
+            lines_payload = result.get("lines") or []
             per_pipeline.append(
                 {
                     "field_name": field_name,
@@ -472,9 +495,30 @@ def _batch_payload_to_ocr_result(
                     "error_code": error_code,
                 }
             )
+            private_pipeline_attempts.append(
+                {
+                    "field_name": field_name,
+                    "pipeline_name": request.pipeline_name,
+                    "request_id": request.request_id,
+                    "physical_request_id": request.physical_request_id,
+                    "response_request_id": None if response_request_id is None else str(response_request_id),
+                    "response_received": request.physical_request_id in result_by_request_id,
+                    "raw_text": text,
+                    "line_texts": [
+                        str(line.get("text") or "")
+                        for line in lines_payload
+                        if isinstance(line, dict)
+                    ],
+                    "selected": False,
+                    "error_code": error_code,
+                }
+            )
         if best_request is None or best_result is None:
             continue
         for item in per_pipeline:
+            if item["request_id"] == best_request.request_id:
+                item["selected"] = True
+        for item in private_pipeline_attempts:
             if item["request_id"] == best_request.request_id:
                 item["selected"] = True
         field_elapsed_ms = int((time.perf_counter() - field_started) * 1000)
@@ -515,6 +559,7 @@ def _batch_payload_to_ocr_result(
         "pipeline_count_attempted": int(python_diagnostics.get("logical_pipeline_request_count") or 0),
         "pipeline_count_completed": len(per_pipeline),
         "per_pipeline_duration_ms": per_pipeline,
+        "private_pipeline_attempts": private_pipeline_attempts,
         "batch_response_mapping": mapping_diagnostics,
         "early_exit_used": False,
     }

@@ -2845,6 +2845,97 @@ def test_anonymous_private_report_diagnostics_classifies_pipeline_value() -> Non
     )
 
 
+def test_system_drawing_manifest_can_limit_field_variants(tmp_path: Path) -> None:
+    image = tmp_path / "fixture.png"
+    write_png(image)
+    profile = get_layout_profile("gaijin-market-desktop-v1")
+
+    prepared = prepare_system_drawing_ocr_batch_manifest(
+        image_path=image,
+        layout_profile=profile,
+        field_variant_names={
+            "best_bid": ("gray_3x", "binary_4x"),
+            "ask_levels": ("gray_3x",),
+        },
+    )
+
+    assert prepared.diagnostics["logical_pipeline_request_count"] == 3
+    assert [
+        (request.field_name, request.pipeline_name)
+        for request in prepared.logical_requests
+    ] == [
+        ("ask_levels", "gray_3x"),
+        ("best_bid", "gray_3x"),
+        ("best_bid", "binary_4x"),
+    ]
+    assert prepared.diagnostics["fields"]["best_bid"]["pipeline_count_attempted"] == 2
+    assert prepared.diagnostics["fields"]["ask_levels"]["pipeline_count_attempted"] == 1
+    assert prepared.diagnostics["fields"]["best_ask"]["pipeline_count_attempted"] == 0
+
+
+def test_anonymous_diagnostics_uses_private_pipeline_attempts_when_present() -> None:
+    result = synthetic_private_result(
+        fixture_id="edge/0.8/sample-a",
+        browser="edge",
+        zoom="0.8",
+        sample="sample-a",
+        exact_bid=False,
+        exact_ask=False,
+    )
+    result["expected"] = {
+        "expected_best_bid": "12.34",
+        "expected_best_ask": "13.00",
+    }
+    result["raw_ocr"]["diagnostics"]["private_pipeline_attempts"] = [
+        {
+            "field_name": "best_ask",
+            "pipeline_name": "gray_3x",
+            "raw_text": "13.00",
+        },
+        {
+            "field_name": "best_ask",
+            "pipeline_name": "binary_4x",
+            "raw_text": "13.50",
+        },
+        {
+            "field_name": "best_bid",
+            "pipeline_name": "gray_3x",
+            "raw_text": "",
+        },
+    ]
+
+    diagnostics = build_anonymous_diagnostics(
+        {"schema_version": "private-test", "results": [result]}
+    )
+
+    assert (
+        diagnostics["pipeline_diagnostics"]["scope"]["parse_valid_exact_wrong_and_duplicate"]
+        == "all_private_pipeline_attempts"
+    )
+    pipelines = diagnostics["pipeline_diagnostics"]["pipelines"]
+    ask_gray = next(
+        item
+        for item in pipelines
+        if item["field_name"] == "best_ask" and item["pipeline_name"] == "gray_3x"
+    )
+    ask_binary = next(
+        item
+        for item in pipelines
+        if item["field_name"] == "best_ask" and item["pipeline_name"] == "binary_4x"
+    )
+    bid_gray = next(
+        item
+        for item in pipelines
+        if item["field_name"] == "best_bid" and item["pipeline_name"] == "gray_3x"
+    )
+    assert ask_gray["attempt_exact_count"] == 1
+    assert ask_binary["attempt_wrong_value_count"] == 1
+    assert bid_gray["attempt_missing_count"] == 1
+    serialized = json.dumps(diagnostics, ensure_ascii=False)
+    assert "13.00" not in serialized
+    assert "13.50" not in serialized
+
+
 def test_private_diagnostics_redacts_sensitive_markers_from_html(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

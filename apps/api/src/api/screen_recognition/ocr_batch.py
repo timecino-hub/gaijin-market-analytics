@@ -207,6 +207,7 @@ def prepare_system_drawing_ocr_batch_manifest(
     image_path: Path,
     layout_profile: LayoutProfile,
     variants: Iterable[OcrPreprocessingVariant] = DEFAULT_OCR_PREPROCESSING_VARIANTS,
+    field_variant_names: dict[str, tuple[str, ...]] | None = None,
 ) -> PreparedOcrBatch:
     started = time.perf_counter()
     selected_variants = tuple(variants)
@@ -232,18 +233,26 @@ def prepare_system_drawing_ocr_batch_manifest(
     timings["layout_ms"] = _elapsed_ms(layout_started)
 
     manifest_started = time.perf_counter()
+    variants_by_name = {variant.name: variant for variant in selected_variants}
     for field_name, box in resolved_rois.items():
         x, y, width, height = box
+        field_variants = selected_variants
+        if field_variant_names is not None:
+            field_variants = tuple(
+                variants_by_name[name]
+                for name in field_variant_names.get(field_name, ())
+                if name in variants_by_name
+            )
         fields[field_name] = {
             "blank_roi_fast_path": False,
-            "pipeline_count_attempted": len(selected_variants),
+            "pipeline_count_attempted": len(field_variants),
             "pipeline_count_completed": 0,
             "selected_pipeline": None,
             "duration_ms": 0,
             "width": width,
             "height": height,
         }
-        for variant_ordinal, variant in enumerate(selected_variants):
+        for variant_ordinal, variant in enumerate(field_variants):
             request_id = _logical_request_id(
                 ordinal=len(logical_requests) + 1,
                 field_name=field_name,
