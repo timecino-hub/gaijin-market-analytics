@@ -11,6 +11,7 @@ from api.screen_recognition.roi import PixelRoi
 
 PRICE_CELL_PROFILE_VERSION = "button-anchored-price-cells-v2"
 PRICE_CELL_PROFILE_VERSION_V3 = "button-anchored-price-cells-v3"
+PRICE_CELL_PROFILE_VERSION_V4 = "button-anchored-price-cells-v4"
 
 
 class PriceCellDetectionError(ValueError):
@@ -68,6 +69,7 @@ def detect_price_cell_rois(image_path: Path) -> PriceCellDetection:
         profile_version=PRICE_CELL_PROFILE_VERSION,
         merge_fragmented_summary=False,
         expanded_leading_padding=False,
+        allow_active_sell_button=False,
     )
 
 
@@ -79,6 +81,19 @@ def detect_price_cell_rois_v3(image_path: Path) -> PriceCellDetection:
         profile_version=PRICE_CELL_PROFILE_VERSION_V3,
         merge_fragmented_summary=True,
         expanded_leading_padding=True,
+        allow_active_sell_button=False,
+    )
+
+
+def detect_price_cell_rois_v4(image_path: Path) -> PriceCellDetection:
+    """Locate v3 price cells while accepting inactive-gray or active-green sell buttons."""
+
+    return _detect_price_cell_rois(
+        image_path,
+        profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+        merge_fragmented_summary=True,
+        expanded_leading_padding=True,
+        allow_active_sell_button=True,
     )
 
 
@@ -88,6 +103,7 @@ def _detect_price_cell_rois(
     profile_version: str,
     merge_fragmented_summary: bool,
     expanded_leading_padding: bool,
+    allow_active_sell_button: bool,
 ) -> PriceCellDetection:
     """Locate compact bid/ask price cells from the two large action buttons.
 
@@ -99,7 +115,10 @@ def _detect_price_cell_rois(
 
     with Image.open(image_path) as opened:
         image = opened.convert("RGB")
-    bid_button, ask_button = _detect_action_buttons(image)
+    bid_button, ask_button = _detect_action_buttons(
+        image,
+        allow_active_sell_button=allow_active_sell_button,
+    )
     text_mask = _neutral_text_mask(image)
     bid = _detect_side(
         text_mask,
@@ -126,7 +145,11 @@ def _detect_price_cell_rois(
     }
     diagnostics = {
         "profile_version": profile_version,
-        "anchor_detection": "button_fill_color",
+        "anchor_detection": (
+            "button_fill_color_gray_or_active_green"
+            if allow_active_sell_button
+            else "button_fill_color"
+        ),
         "row_detection": "neutral_text_projection",
         "price_group_selection": {
             "summary": (
@@ -164,7 +187,11 @@ def _side_diagnostics(value: _SideDetection) -> dict[str, Any]:
     }
 
 
-def _detect_action_buttons(image: Image.Image) -> tuple[_Box, _Box]:
+def _detect_action_buttons(
+    image: Image.Image,
+    *,
+    allow_active_sell_button: bool,
+) -> tuple[_Box, _Box]:
     width, height = image.size
     red_mask = _color_range_mask(
         image,
@@ -182,10 +209,13 @@ def _detect_action_buttons(image: Image.Image) -> tuple[_Box, _Box]:
         code="buy_button_not_detected",
     )
 
-    gray_mask = _gray_button_mask(image)
+    sell_mask = _sell_button_mask(
+        image,
+        allow_active=allow_active_sell_button,
+    )
     vertical_margin = max(4, red_button.height // 4)
     gray_button = _largest_button_band(
-        gray_mask,
+        sell_mask,
         x0=0,
         x1=max(1, red_button.x),
         y0=max(0, red_button.y - vertical_margin),
@@ -596,6 +626,24 @@ def _color_range_mask(
         _channel_range_mask(r, red[0], red[1]),
         _channel_range_mask(g, green[0], green[1]),
         _channel_range_mask(b, blue[0], blue[1]),
+    )
+
+
+def _sell_button_mask(image: Image.Image, *, allow_active: bool) -> Image.Image:
+    inactive = _gray_button_mask(image)
+    if not allow_active:
+        return inactive
+    return ImageChops.lighter(inactive, _active_sell_button_mask(image))
+
+
+def _active_sell_button_mask(image: Image.Image) -> Image.Image:
+    # Gaijin renders a usable sell action in teal-green instead of the inactive gray.
+    # The search remains constrained to the button-sized band aligned left of Buy.
+    return _color_range_mask(
+        image,
+        red=(25, 75),
+        green=(100, 175),
+        blue=(75, 150),
     )
 
 

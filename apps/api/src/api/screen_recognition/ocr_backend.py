@@ -31,9 +31,11 @@ from api.screen_recognition.preprocessing import preprocessing_metadata
 from api.screen_recognition.price_cells import (
     PRICE_CELL_PROFILE_VERSION,
     PRICE_CELL_PROFILE_VERSION_V3,
+    PRICE_CELL_PROFILE_VERSION_V4,
     PriceCellDetectionError,
     detect_price_cell_rois,
     detect_price_cell_rois_v3,
+    detect_price_cell_rois_v4,
 )
 
 
@@ -118,6 +120,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     system_drawing_cascade_backend_version = "windows-media-ocr-system-drawing-cascade-v1"
     price_cells_backend_version = "windows-media-ocr-price-cells-v2"
     price_cells_v3_backend_version = "windows-media-ocr-price-cells-v3"
+    price_cells_v4_backend_version = "windows-media-ocr-price-cells-v4"
     test_scope = "end_to_end"
 
     def __init__(
@@ -140,11 +143,12 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         self._price_cell_profile_version = price_cell_profile_version
         if system_drawing_batch_mode:
             if price_cell_mode:
-                self.backend_version = (
-                    self.price_cells_v3_backend_version
-                    if price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3
-                    else self.price_cells_backend_version
-                )
+                if price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V4:
+                    self.backend_version = self.price_cells_v4_backend_version
+                elif price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3:
+                    self.backend_version = self.price_cells_v3_backend_version
+                else:
+                    self.backend_version = self.price_cells_backend_version
             elif system_drawing_field_variant_plan is not None:
                 self.backend_version = self.system_drawing_cascade_backend_version
             elif system_drawing_pixel_implementation == "legacy-pixel-loop":
@@ -215,11 +219,12 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
             preprocessing_mode = "system_drawing_batch_v1"
             if self._price_cell_mode:
                 preprocessing_mode = self._price_cell_profile_version
-                detector = (
-                    detect_price_cell_rois_v3
-                    if self._price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3
-                    else detect_price_cell_rois
-                )
+                if self._price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V4:
+                    detector = detect_price_cell_rois_v4
+                elif self._price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3:
+                    detector = detect_price_cell_rois_v3
+                else:
+                    detector = detect_price_cell_rois
                 try:
                     detection = detector(invocation.image_path)
                 except PriceCellDetectionError as exc:
@@ -400,6 +405,15 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
             price_cell_mode=True,
             price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V3,
+        )
+    if name == "candidate-price-cells-v4":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
         )
     if name == "sidecar":
         return SidecarRecognizer()

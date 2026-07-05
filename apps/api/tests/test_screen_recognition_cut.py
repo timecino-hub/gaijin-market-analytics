@@ -90,6 +90,7 @@ from api.screen_recognition.price_cells import (
     PriceCellDetectionError,
     detect_price_cell_rois,
     detect_price_cell_rois_v3,
+    detect_price_cell_rois_v4,
 )
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
@@ -3250,10 +3251,12 @@ def _draw_synthetic_price_cell_fixture(
     *,
     split_summary_leading_digit: bool = False,
     fragmented_summary_price: bool = False,
+    active_sell_button: bool = False,
 ) -> dict[str, tuple[int, int, int, int]]:
     image = Image.new("RGB", (1200, 800), (39, 42, 46))
     draw = ImageDraw.Draw(image)
-    draw.rectangle((180, 250, 400, 310), fill=(69, 72, 76))
+    sell_fill = (42, 130, 109) if active_sell_button else (69, 72, 76)
+    draw.rectangle((180, 250, 400, 310), fill=sell_fill)
     draw.rectangle((700, 250, 920, 310), fill=(191, 45, 54))
 
     def draw_group(x: int, y: int, width: int, height: int, segments: int) -> None:
@@ -3393,6 +3396,22 @@ def test_button_anchored_price_cells_v3_merge_fragmented_price_span(tmp_path: Pa
     assert detection.diagnostics["profile_version"] == "button-anchored-price-cells-v3"
 
 
+def test_button_anchored_price_cells_v4_accepts_active_green_sell_button(tmp_path: Path) -> None:
+    image = tmp_path / "price-cells-active-sell.png"
+    expected = _draw_synthetic_price_cell_fixture(image, active_sell_button=True)
+
+    with pytest.raises(PriceCellDetectionError) as exc_info:
+        detect_price_cell_rois_v3(image)
+    assert exc_info.value.code == "sell_button_not_detected"
+
+    detection = detect_price_cell_rois_v4(image)
+
+    assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
+    assert _roi_contains_box(detection.rois["best_ask"], expected["best_ask_price"])
+    assert detection.diagnostics["profile_version"] == "button-anchored-price-cells-v4"
+    assert detection.diagnostics["anchor_detection"] == "button_fill_color_gray_or_active_green"
+
+
 def test_button_anchored_price_cells_fail_closed_without_action_buttons(tmp_path: Path) -> None:
     image = tmp_path / "no-buttons.png"
     Image.new("RGB", (1200, 800), (39, 42, 46)).save(image)
@@ -3441,16 +3460,20 @@ def test_candidate_price_cells_backend_is_explicit_and_default_is_unchanged() ->
     default = get_recognizer("windows-ocr")
     candidate = get_recognizer("candidate-price-cells-v2")
     candidate_v3 = get_recognizer("candidate-price-cells-v3")
+    candidate_v4 = get_recognizer("candidate-price-cells-v4")
 
     assert isinstance(default, WindowsOcrRecognizer)
     assert isinstance(candidate, WindowsOcrRecognizer)
     assert isinstance(candidate_v3, WindowsOcrRecognizer)
+    assert isinstance(candidate_v4, WindowsOcrRecognizer)
     assert default.backend_version == "windows-media-ocr-batch-v1"
     assert default._price_cell_mode is False
     assert candidate.backend_version == "windows-media-ocr-price-cells-v2"
     assert candidate._price_cell_mode is True
     assert candidate_v3.backend_version == "windows-media-ocr-price-cells-v3"
     assert candidate_v3._price_cell_profile_version == "button-anchored-price-cells-v3"
+    assert candidate_v4.backend_version == "windows-media-ocr-price-cells-v4"
+    assert candidate_v4._price_cell_profile_version == "button-anchored-price-cells-v4"
     assert candidate._system_drawing_field_variant_plan == {
         "best_bid": ("gray_3x", "binary_4x"),
         "bid_levels": ("gray_3x", "binary_4x"),

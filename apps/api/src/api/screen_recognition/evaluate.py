@@ -609,7 +609,10 @@ def _evaluate_file(
 
             progress.detail("OCR output parsing: running")
             parse_started = time.perf_counter()
-            if ocr_result.backend_version == WindowsOcrRecognizer.price_cells_v3_backend_version:
+            if ocr_result.backend_version in {
+                WindowsOcrRecognizer.price_cells_v3_backend_version,
+                WindowsOcrRecognizer.price_cells_v4_backend_version,
+            }:
                 contract, parse_warnings, parse_errors = parse_ocr_contract(
                     ocr_result.fields,
                     item_key=None,
