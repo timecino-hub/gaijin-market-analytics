@@ -10,6 +10,7 @@ from api.screen_recognition.roi import PixelRoi
 
 
 PRICE_CELL_PROFILE_VERSION = "button-anchored-price-cells-v2"
+PRICE_CELL_PROFILE_VERSION_V3 = "button-anchored-price-cells-v3"
 
 
 class PriceCellDetectionError(ValueError):
@@ -56,9 +57,38 @@ class _SideDetection:
     summary_price: PixelRoi
     first_row_price: PixelRoi
     summary_leading_fragment_merged: bool
+    summary_fragment_count_merged: int
 
 
 def detect_price_cell_rois(image_path: Path) -> PriceCellDetection:
+    """Locate compact bid/ask price cells with the frozen v2 geometry."""
+
+    return _detect_price_cell_rois(
+        image_path,
+        profile_version=PRICE_CELL_PROFILE_VERSION,
+        merge_fragmented_summary=False,
+        expanded_leading_padding=False,
+    )
+
+
+def detect_price_cell_rois_v3(image_path: Path) -> PriceCellDetection:
+    """Locate price cells with fragmented-price recovery and wider leading context."""
+
+    return _detect_price_cell_rois(
+        image_path,
+        profile_version=PRICE_CELL_PROFILE_VERSION_V3,
+        merge_fragmented_summary=True,
+        expanded_leading_padding=True,
+    )
+
+
+def _detect_price_cell_rois(
+    image_path: Path,
+    *,
+    profile_version: str,
+    merge_fragmented_summary: bool,
+    expanded_leading_padding: bool,
+) -> PriceCellDetection:
     """Locate compact bid/ask price cells from the two large action buttons.
 
     The detector is deliberately geometric and deterministic. It does not OCR the
@@ -71,8 +101,22 @@ def detect_price_cell_rois(image_path: Path) -> PriceCellDetection:
         image = opened.convert("RGB")
     bid_button, ask_button = _detect_action_buttons(image)
     text_mask = _neutral_text_mask(image)
-    bid = _detect_side(text_mask, bid_button, image.size, side="bid")
-    ask = _detect_side(text_mask, ask_button, image.size, side="ask")
+    bid = _detect_side(
+        text_mask,
+        bid_button,
+        image.size,
+        side="bid",
+        merge_fragmented_summary=merge_fragmented_summary,
+        expanded_leading_padding=expanded_leading_padding,
+    )
+    ask = _detect_side(
+        text_mask,
+        ask_button,
+        image.size,
+        side="ask",
+        merge_fragmented_summary=merge_fragmented_summary,
+        expanded_leading_padding=expanded_leading_padding,
+    )
 
     rois = {
         "best_bid": bid.summary_price,
@@ -81,11 +125,15 @@ def detect_price_cell_rois(image_path: Path) -> PriceCellDetection:
         "ask_levels": ask.first_row_price,
     }
     diagnostics = {
-        "profile_version": PRICE_CELL_PROFILE_VERSION,
+        "profile_version": profile_version,
         "anchor_detection": "button_fill_color",
         "row_detection": "neutral_text_projection",
         "price_group_selection": {
-            "summary": "third_group_from_right",
+            "summary": (
+                "fragmented_price_span_before_trailing_icon"
+                if merge_fragmented_summary
+                else "third_group_from_right"
+            ),
             "first_level": "rightmost_group",
         },
         "anchors": {
@@ -112,6 +160,7 @@ def _side_diagnostics(value: _SideDetection) -> dict[str, Any]:
         "summary_price_roi": value.summary_price.to_json(),
         "first_row_price_roi": value.first_row_price.to_json(),
         "summary_leading_fragment_merged": value.summary_leading_fragment_merged,
+        "summary_fragment_count_merged": value.summary_fragment_count_merged,
     }
 
 
@@ -162,6 +211,8 @@ def _detect_side(
     image_size: tuple[int, int],
     *,
     side: str,
+    merge_fragmented_summary: bool,
+    expanded_leading_padding: bool,
 ) -> _SideDetection:
     image_width, image_height = image_size
     x_margin = round(button.width * 0.15)
@@ -219,22 +270,50 @@ def _detect_side(
         )
 
     summary_group = summary_groups[-3]
-    summary_leading_fragment_merged = False
-    if len(summary_groups) >= 4:
+    summary_fragment_count_merged = 0
+    if merge_fragmented_summary:
+        summary_group, summary_fragment_count_merged = _merge_fragmented_summary_price(
+            summary_groups,
+            button,
+        )
+    elif len(summary_groups) >= 4:
         previous_group = summary_groups[-4]
         if _should_merge_summary_leading_fragment(previous_group, summary_group, button):
             summary_group = (previous_group[0], summary_group[1])
-            summary_leading_fragment_merged = True
+            summary_fragment_count_merged = 1
+    summary_leading_fragment_merged = summary_fragment_count_merged > 0
     first_row_group = first_row_groups[-1]
     _validate_price_group(summary_group, button, side=side, source="summary")
     _validate_price_group(first_row_group, button, side=side, source="first_level")
 
     pad_x = max(4, round(button.height * 0.08))
+    desired_pad_left = max(8, round(button.height * 0.16))
+    summary_pad_left = (
+        _bounded_leading_padding(
+            summary_groups,
+            summary_group,
+            desired=desired_pad_left,
+            minimum=pad_x,
+        )
+        if expanded_leading_padding
+        else pad_x
+    )
+    first_row_pad_left = (
+        _bounded_leading_padding(
+            first_row_groups,
+            first_row_group,
+            desired=desired_pad_left,
+            minimum=pad_x,
+        )
+        if expanded_leading_padding
+        else pad_x
+    )
     pad_y = max(3, round(button.height * 0.08))
     summary_price = _padded_roi(
         summary_group,
         summary_band,
-        pad_x=pad_x,
+        pad_left=summary_pad_left,
+        pad_right=pad_x,
         pad_y=pad_y,
         image_width=image_width,
         image_height=image_height,
@@ -242,7 +321,8 @@ def _detect_side(
     first_row_price = _padded_roi(
         first_row_group,
         first_row_band,
-        pad_x=pad_x,
+        pad_left=first_row_pad_left,
+        pad_right=pad_x,
         pad_y=pad_y,
         image_width=image_width,
         image_height=image_height,
@@ -257,7 +337,45 @@ def _detect_side(
         summary_price=summary_price,
         first_row_price=first_row_price,
         summary_leading_fragment_merged=summary_leading_fragment_merged,
+        summary_fragment_count_merged=summary_fragment_count_merged,
     )
+
+
+def _merge_fragmented_summary_price(
+    summary_groups: tuple[tuple[int, int], ...],
+    button: _Box,
+) -> tuple[tuple[int, int], int]:
+    """Join only tightly spaced price fragments immediately before the trailing UI."""
+
+    base_index = len(summary_groups) - 3
+    group = summary_groups[base_index]
+    previous_index = base_index - 1
+    if previous_index < 0:
+        return group, 0
+
+    minimum_price_width = max(8, round(button.width * 0.08))
+    previous = summary_groups[previous_index]
+    should_start = (
+        group[1] - group[0] < minimum_price_width
+        or _should_merge_summary_leading_fragment(previous, group, button)
+    )
+    if not should_start:
+        return group, 0
+
+    maximum_gap = max(5, round(button.height * 0.07))
+    minimum_relative_center = 0.54
+    merged_count = 0
+    while previous_index >= 0:
+        previous = summary_groups[previous_index]
+        gap = group[0] - previous[1]
+        previous_center = (previous[0] + previous[1]) / 2
+        relative_center = (previous_center - button.x) / button.width
+        if gap < 0 or gap > maximum_gap or relative_center < minimum_relative_center:
+            break
+        group = (previous[0], group[1])
+        merged_count += 1
+        previous_index -= 1
+    return group, merged_count
 
 
 def _should_merge_summary_leading_fragment(
@@ -430,18 +548,36 @@ def _active_bands(
     return tuple(bands)
 
 
+def _bounded_leading_padding(
+    groups: tuple[tuple[int, int], ...],
+    selected_group: tuple[int, int],
+    *,
+    desired: int,
+    minimum: int,
+) -> int:
+    """Add OCR context without crossing into the preceding label or quantity."""
+
+    preceding = [group for group in groups if group[1] <= selected_group[0]]
+    if not preceding:
+        return desired
+    gap = selected_group[0] - preceding[-1][1]
+    safe_blank_space = max(minimum, gap - 2)
+    return min(desired, safe_blank_space)
+
+
 def _padded_roi(
     group: tuple[int, int],
     band: tuple[int, int],
     *,
-    pad_x: int,
+    pad_left: int,
+    pad_right: int,
     pad_y: int,
     image_width: int,
     image_height: int,
 ) -> PixelRoi:
-    left = max(0, group[0] - pad_x)
+    left = max(0, group[0] - pad_left)
     top = max(0, band[0] - pad_y)
-    right = min(image_width, group[1] + pad_x)
+    right = min(image_width, group[1] + pad_right)
     bottom = min(image_height, band[1] + pad_y)
     if right - left < 4 or bottom - top < 4:
         raise PriceCellDetectionError("price_cell_too_small", "The detected price cell is too small.")

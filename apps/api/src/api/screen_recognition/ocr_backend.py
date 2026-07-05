@@ -30,8 +30,10 @@ from api.screen_recognition.ocr_candidates import normalize_numeric_ocr_token
 from api.screen_recognition.preprocessing import preprocessing_metadata
 from api.screen_recognition.price_cells import (
     PRICE_CELL_PROFILE_VERSION,
+    PRICE_CELL_PROFILE_VERSION_V3,
     PriceCellDetectionError,
     detect_price_cell_rois,
+    detect_price_cell_rois_v3,
 )
 
 
@@ -115,6 +117,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     system_drawing_pixel_loop_backend_version = "windows-media-ocr-system-drawing-pixel-loop-v1"
     system_drawing_cascade_backend_version = "windows-media-ocr-system-drawing-cascade-v1"
     price_cells_backend_version = "windows-media-ocr-price-cells-v2"
+    price_cells_v3_backend_version = "windows-media-ocr-price-cells-v3"
     test_scope = "end_to_end"
 
     def __init__(
@@ -126,6 +129,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         system_drawing_pixel_implementation: str = "lockbits-v1",
         system_drawing_field_variant_plan: dict[str, tuple[str, ...]] | None = None,
         price_cell_mode: bool = False,
+        price_cell_profile_version: str = PRICE_CELL_PROFILE_VERSION,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
@@ -133,9 +137,14 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         self._system_drawing_pixel_implementation = system_drawing_pixel_implementation
         self._system_drawing_field_variant_plan = system_drawing_field_variant_plan
         self._price_cell_mode = price_cell_mode
+        self._price_cell_profile_version = price_cell_profile_version
         if system_drawing_batch_mode:
             if price_cell_mode:
-                self.backend_version = self.price_cells_backend_version
+                self.backend_version = (
+                    self.price_cells_v3_backend_version
+                    if price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3
+                    else self.price_cells_backend_version
+                )
             elif system_drawing_field_variant_plan is not None:
                 self.backend_version = self.system_drawing_cascade_backend_version
             elif system_drawing_pixel_implementation == "legacy-pixel-loop":
@@ -205,9 +214,14 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
             additional_diagnostics: dict[str, Any] | None = None
             preprocessing_mode = "system_drawing_batch_v1"
             if self._price_cell_mode:
-                preprocessing_mode = PRICE_CELL_PROFILE_VERSION
+                preprocessing_mode = self._price_cell_profile_version
+                detector = (
+                    detect_price_cell_rois_v3
+                    if self._price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3
+                    else detect_price_cell_rois
+                )
                 try:
-                    detection = detect_price_cell_rois(invocation.image_path)
+                    detection = detector(invocation.image_path)
                 except PriceCellDetectionError as exc:
                     preparation_warnings = (
                         "price_cell_anchor_fallback",
@@ -215,7 +229,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                     )
                     additional_diagnostics = {
                         "price_cell_detection": {
-                            "profile_version": PRICE_CELL_PROFILE_VERSION,
+                            "profile_version": self._price_cell_profile_version,
                             "fallback_used": True,
                             "error_code": exc.code,
                         }
@@ -376,6 +390,16 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             system_drawing_pixel_implementation="lockbits-v1",
             system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
             price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION,
+        )
+    if name == "candidate-price-cells-v3":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V3,
         )
     if name == "sidecar":
         return SidecarRecognizer()

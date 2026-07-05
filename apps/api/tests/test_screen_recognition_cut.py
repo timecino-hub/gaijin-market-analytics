@@ -64,6 +64,8 @@ from api.screen_recognition.ocr_backend import (
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
     PRICE_SELECTION_ORDER,
+    PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+    PRICE_SOURCE_DISAGREEMENT_WARNING,
     normalize_numeric_ocr_token,
     parse_quantity_candidate,
     select_price_candidate,
@@ -87,6 +89,7 @@ from api.screen_recognition.ocr_batch import (
 from api.screen_recognition.price_cells import (
     PriceCellDetectionError,
     detect_price_cell_rois,
+    detect_price_cell_rois_v3,
 )
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
@@ -1752,6 +1755,47 @@ def test_price_candidate_normalizes_middle_dot_and_ignores_ambiguous_integer_sou
     assert "price_ocr_invalid" in ambiguous.errors
 
 
+def test_price_cells_v3_resolves_bounded_source_disagreements_with_review() -> None:
+    leading_digit = select_price_candidate(
+        field_name="best_ask",
+        scalar_text="845 · 72",
+        first_level_text="145 · 72",
+        selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+    )
+    assert leading_digit.value == Decimal("145.72")
+    assert leading_digit.selection_reason == "first_level_over_summary_leading_digit_disagreement"
+    assert PRICE_SOURCE_DISAGREEMENT_WARNING in leading_digit.warnings
+
+    truncated_level = select_price_candidate(
+        field_name="best_bid",
+        scalar_text="208 · 63",
+        first_level_text="8 · 63",
+        selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+    )
+    assert truncated_level.value == Decimal("208.63")
+    assert truncated_level.selection_reason == "longer_explicit_scalar_over_truncated_first_level"
+    assert PRICE_SOURCE_DISAGREEMENT_WARNING in truncated_level.warnings
+
+    scalar_explicit = select_price_candidate(
+        field_name="best_ask",
+        scalar_text="421 · 37",
+        first_level_text="37",
+        selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+    )
+    assert scalar_explicit.value == Decimal("421.37")
+    assert scalar_explicit.selection_reason == "explicit_scalar_over_truncated_first_level"
+    assert PRICE_SOURCE_DISAGREEMENT_WARNING in scalar_explicit.warnings
+
+    unrelated = select_price_candidate(
+        field_name="best_bid",
+        scalar_text="903.01",
+        first_level_text="904.01",
+        selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+    )
+    assert unrelated.value is None
+    assert "ocr_candidate_ambiguous" in unrelated.errors
+
+
 def test_price_pipeline_scoring_prefers_normalized_explicit_decimal() -> None:
     assert _score_recognized_text("best_bid", "742 · 35") > _score_recognized_text(
         "best_bid", "742 ℃ 5"
@@ -3202,7 +3246,10 @@ def _draw_text_image_with_powershell(path: Path, text: str, image_format: str) -
 
 
 def _draw_synthetic_price_cell_fixture(
-    path: Path, *, split_summary_leading_digit: bool = False
+    path: Path,
+    *,
+    split_summary_leading_digit: bool = False,
+    fragmented_summary_price: bool = False,
 ) -> dict[str, tuple[int, int, int, int]]:
     image = Image.new("RGB", (1200, 800), (39, 42, 46))
     draw = ImageDraw.Draw(image)
@@ -3227,15 +3274,28 @@ def _draw_synthetic_price_cell_fixture(
             if split_summary_leading_digit
             else (button_x + 125, 18, 2)
         )
-        summary_groups = (
-            (button_x + 10, 55, 5),
-            (button_x + 70, 4, 1),
-            (button_x + 90, 24, 3),
-            summary_leading,
-            (button_x + 150, 42, 6),
-            (button_x + 198, 8, 1),
-            (button_x + 212, 22, 2),
-        )
+        if fragmented_summary_price:
+            summary_groups = (
+                (button_x + 10, 55, 5),
+                (button_x + 70, 4, 1),
+                (button_x + 90, 18, 2),
+                (button_x + 112, 20, 2),
+                (button_x + 140, 7, 1),
+                (button_x + 152, 29, 4),
+                (button_x + 186, 13, 2),
+                (button_x + 205, 8, 1),
+                (button_x + 220, 22, 2),
+            )
+        else:
+            summary_groups = (
+                (button_x + 10, 55, 5),
+                (button_x + 70, 4, 1),
+                (button_x + 90, 24, 3),
+                summary_leading,
+                (button_x + 150, 42, 6),
+                (button_x + 198, 8, 1),
+                (button_x + 212, 22, 2),
+            )
         for x, width, segments in summary_groups:
             draw_group(x, 335, width, 14, segments)
         draw_group(button_x + 60, 380, 30, 12, 3)
@@ -3246,13 +3306,21 @@ def _draw_synthetic_price_cell_fixture(
     draw_side(180)
     draw_side(700)
     image.save(path)
-    bid_summary_left = 320 if split_summary_leading_digit else 330
-    ask_summary_left = 840 if split_summary_leading_digit else 850
+    if fragmented_summary_price:
+        bid_summary_left = 320
+        ask_summary_left = 840
+        bid_summary_right = 379
+        ask_summary_right = 899
+    else:
+        bid_summary_left = 320 if split_summary_leading_digit else 330
+        ask_summary_left = 840 if split_summary_leading_digit else 850
+        bid_summary_right = 372
+        ask_summary_right = 892
     return {
-        "best_bid_price": (bid_summary_left, 335, 372, 349),
+        "best_bid_price": (bid_summary_left, 335, bid_summary_right, 349),
         "bid_quantity": (260, 420, 270, 434),
         "bid_level_price": (310, 420, 360, 434),
-        "best_ask_price": (ask_summary_left, 335, 892, 349),
+        "best_ask_price": (ask_summary_left, 335, ask_summary_right, 349),
         "ask_quantity": (780, 420, 790, 434),
         "ask_level_price": (830, 420, 880, 434),
     }
@@ -3308,6 +3376,23 @@ def test_button_anchored_price_cells_merge_detached_leading_digit(tmp_path: Path
     assert detection.diagnostics["sides"]["ask"]["summary_leading_fragment_merged"] is True
 
 
+def test_button_anchored_price_cells_v3_merge_fragmented_price_span(tmp_path: Path) -> None:
+    image = tmp_path / "price-cells-fragmented-price.png"
+    expected = _draw_synthetic_price_cell_fixture(image, fragmented_summary_price=True)
+
+    with pytest.raises(PriceCellDetectionError) as exc_info:
+        detect_price_cell_rois(image)
+    assert exc_info.value.code == "bid_summary_price_group_too_narrow"
+
+    detection = detect_price_cell_rois_v3(image)
+
+    assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
+    assert _roi_contains_box(detection.rois["best_ask"], expected["best_ask_price"])
+    assert detection.diagnostics["sides"]["bid"]["summary_fragment_count_merged"] == 2
+    assert detection.diagnostics["sides"]["ask"]["summary_fragment_count_merged"] == 2
+    assert detection.diagnostics["profile_version"] == "button-anchored-price-cells-v3"
+
+
 def test_button_anchored_price_cells_fail_closed_without_action_buttons(tmp_path: Path) -> None:
     image = tmp_path / "no-buttons.png"
     Image.new("RGB", (1200, 800), (39, 42, 46)).save(image)
@@ -3355,13 +3440,17 @@ def test_system_drawing_manifest_accepts_explicit_price_cell_pixel_rois(tmp_path
 def test_candidate_price_cells_backend_is_explicit_and_default_is_unchanged() -> None:
     default = get_recognizer("windows-ocr")
     candidate = get_recognizer("candidate-price-cells-v2")
+    candidate_v3 = get_recognizer("candidate-price-cells-v3")
 
     assert isinstance(default, WindowsOcrRecognizer)
     assert isinstance(candidate, WindowsOcrRecognizer)
+    assert isinstance(candidate_v3, WindowsOcrRecognizer)
     assert default.backend_version == "windows-media-ocr-batch-v1"
     assert default._price_cell_mode is False
     assert candidate.backend_version == "windows-media-ocr-price-cells-v2"
     assert candidate._price_cell_mode is True
+    assert candidate_v3.backend_version == "windows-media-ocr-price-cells-v3"
+    assert candidate_v3._price_cell_profile_version == "button-anchored-price-cells-v3"
     assert candidate._system_drawing_field_variant_plan == {
         "best_bid": ("gray_3x", "binary_4x"),
         "bid_levels": ("gray_3x", "binary_4x"),

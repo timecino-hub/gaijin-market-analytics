@@ -22,8 +22,12 @@ from api.screen_recognition.ocr_backend import (
     OcrBackendNotConfiguredError,
     OcrBackendTimeoutError,
     OcrInvocation,
+    WindowsOcrRecognizer,
     get_recognizer,
     windows_ocr_preprocessing_metadata,
+)
+from api.screen_recognition.ocr_candidates import (
+    PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
 )
 from api.screen_recognition.parser import parse_ocr_contract
 from api.screen_recognition.private_diagnostics import load_anonymous_diagnostics
@@ -605,7 +609,17 @@ def _evaluate_file(
 
             progress.detail("OCR output parsing: running")
             parse_started = time.perf_counter()
-            contract, parse_warnings, parse_errors = parse_ocr_contract(ocr_result.fields, item_key=None)
+            if ocr_result.backend_version == WindowsOcrRecognizer.price_cells_v3_backend_version:
+                contract, parse_warnings, parse_errors = parse_ocr_contract(
+                    ocr_result.fields,
+                    item_key=None,
+                    price_selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+                )
+            else:
+                contract, parse_warnings, parse_errors = parse_ocr_contract(
+                    ocr_result.fields,
+                    item_key=None,
+                )
             timings["ocr_output_parsing_ms"] = int((time.perf_counter() - parse_started) * 1000)
             warnings.extend(ocr_result.warnings)
             warnings.extend(parse_warnings)

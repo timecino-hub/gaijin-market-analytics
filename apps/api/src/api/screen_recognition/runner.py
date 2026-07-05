@@ -32,8 +32,12 @@ from api.screen_recognition.ocr_backend import (
     OcrBackendError,
     OcrBackendNotConfiguredError,
     OcrInvocation,
+    WindowsOcrRecognizer,
     get_recognizer,
     windows_ocr_preprocessing_metadata,
+)
+from api.screen_recognition.ocr_candidates import (
+    PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
 )
 from api.screen_recognition.parser import parse_ocr_contract
 from api.screen_recognition.reporting import write_outputs
@@ -187,9 +191,17 @@ def _process_entry(
         )
         raw_ocr = ocr_result.fields
         warnings.extend(ocr_result.warnings)
-        recognized, parse_warnings, parse_errors = parse_ocr_contract(
-            ocr_result.fields, item_key=entry.item_key
-        )
+        if ocr_result.backend_version == WindowsOcrRecognizer.price_cells_v3_backend_version:
+            recognized, parse_warnings, parse_errors = parse_ocr_contract(
+                ocr_result.fields,
+                item_key=entry.item_key,
+                price_selection_policy=PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
+            )
+        else:
+            recognized, parse_warnings, parse_errors = parse_ocr_contract(
+                ocr_result.fields,
+                item_key=entry.item_key,
+            )
         warnings.extend(parse_warnings)
         errors.extend(parse_errors)
         comparisons, compare_warnings, compare_errors = compare_contracts(entry, recognized)

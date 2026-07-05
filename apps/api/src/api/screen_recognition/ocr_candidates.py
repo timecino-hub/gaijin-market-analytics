@@ -29,6 +29,10 @@ FIELD_OCR_PIPELINES = {
     ),
 }
 
+
+PRICE_SELECTION_POLICY_STRICT = "strict"
+PRICE_SELECTION_POLICY_PRICE_CELLS_V3 = "price-cells-v3"
+PRICE_SOURCE_DISAGREEMENT_WARNING = "price_source_disagreement_review"
 PRICE_SELECTION_ORDER = (
     "independent_roi_agreement",
     "repeated_candidate_agreement",
@@ -152,6 +156,7 @@ def select_price_candidate(
     field_name: str,
     scalar_text: str,
     first_level_text: str | None = None,
+    selection_policy: str = PRICE_SELECTION_POLICY_STRICT,
 ) -> SelectedPriceCandidate:
     candidates = build_price_candidates(
         field_name=field_name, scalar_text=scalar_text, first_level_text=first_level_text
@@ -174,6 +179,16 @@ def select_price_candidate(
             value = next(iter(common))
             return _selected(valid, value, "independent_roi_agreement")
         if len(set().union(*by_source.values())) > 1:
+            if selection_policy == PRICE_SELECTION_POLICY_PRICE_CELLS_V3:
+                resolved = _resolve_price_cells_v3_source_disagreement(valid)
+                if resolved is not None:
+                    value, reason = resolved
+                    return _selected(
+                        valid,
+                        value,
+                        reason,
+                        extra_warnings=(PRICE_SOURCE_DISAGREEMENT_WARNING,),
+                    )
             return SelectedPriceCandidate(
                 value=None,
                 candidates=candidates,
@@ -266,8 +281,73 @@ def select_quantity_candidate(
     return _selected_quantity(candidates, value, _quantity_selection_reason(valid))
 
 
+def _resolve_price_cells_v3_source_disagreement(
+    candidates: list[OcrPriceCandidate],
+) -> tuple[Decimal, str] | None:
+    """Resolve only narrow, review-required disagreements between the two price cells.
+
+    The first order-book row is a direct price source while the summary row is
+    embedded in prose.  v3 may select one value only when each source contributes
+    exactly one valid candidate and the disagreement matches a bounded OCR failure
+    pattern.  The caller always adds a review warning.
+    """
+
+    by_source: dict[str, list[OcrPriceCandidate]] = {}
+    for candidate in candidates:
+        if candidate.decimal_value is None:
+            continue
+        by_source.setdefault(candidate.source, []).append(candidate)
+    expected_sources = {"scalar_price_roi", "first_level_price_roi"}
+    if set(by_source) != expected_sources:
+        return None
+    if any(len({candidate.decimal_value for candidate in values}) != 1 for values in by_source.values()):
+        return None
+
+    scalar = by_source["scalar_price_roi"][0]
+    first_level = by_source["first_level_price_roi"][0]
+    assert scalar.decimal_value is not None
+    assert first_level.decimal_value is not None
+
+    if scalar.contains_explicit_decimal and not first_level.contains_explicit_decimal:
+        return scalar.decimal_value, "explicit_scalar_over_truncated_first_level"
+    if first_level.contains_explicit_decimal and not scalar.contains_explicit_decimal:
+        return first_level.decimal_value, "explicit_first_level_over_integer_scalar"
+    if not scalar.contains_explicit_decimal or not first_level.contains_explicit_decimal:
+        return None
+
+    scalar_token = _canonical_decimal_token(scalar.decimal_value)
+    first_level_token = _canonical_decimal_token(first_level.decimal_value)
+    scalar_digits = scalar_token.replace(".", "")
+    first_level_digits = first_level_token.replace(".", "")
+
+    if len(scalar_digits) > len(first_level_digits) and scalar_digits.endswith(first_level_digits):
+        return scalar.decimal_value, "longer_explicit_scalar_over_truncated_first_level"
+    if len(first_level_digits) > len(scalar_digits) and first_level_digits.endswith(scalar_digits):
+        return first_level.decimal_value, "longer_explicit_first_level_over_truncated_scalar"
+
+    scalar_integer, scalar_fraction = scalar_token.split(".", 1)
+    level_integer, level_fraction = first_level_token.split(".", 1)
+    if (
+        scalar_fraction == level_fraction
+        and len(scalar_integer) == len(level_integer)
+        and len(scalar_integer) >= 2
+        and scalar_integer[1:] == level_integer[1:]
+        and scalar_integer[0] != level_integer[0]
+    ):
+        return first_level.decimal_value, "first_level_over_summary_leading_digit_disagreement"
+    return None
+
+
+def _canonical_decimal_token(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.01")), "f")
+
+
 def _selected(
-    candidates: list[OcrPriceCandidate], value: Decimal | None, reason: str
+    candidates: list[OcrPriceCandidate],
+    value: Decimal | None,
+    reason: str,
+    *,
+    extra_warnings: tuple[str, ...] = (),
 ) -> SelectedPriceCandidate:
     selected = tuple(
         OcrPriceCandidate(
@@ -287,10 +367,17 @@ def _selected(
         for candidate in candidates
     )
     warnings = tuple(
-        code
-        for candidate in selected
-        if candidate.selected
-        for code in candidate.correction_codes
+        dict.fromkeys(
+            [
+                *extra_warnings,
+                *[
+                    code
+                    for candidate in selected
+                    if candidate.selected
+                    for code in candidate.correction_codes
+                ],
+            ]
+        )
     )
     return SelectedPriceCandidate(
         value=value, candidates=selected, warnings=warnings, selection_reason=reason
