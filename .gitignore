@@ -26,6 +26,9 @@ out/
 # Logs
 *.log
 
+# Private local evaluation artifacts
+artifacts/private/
+
 # Local installers
 DockerDesktopInstaller.exe
 ubuntu-*-wsl*.tar.gz

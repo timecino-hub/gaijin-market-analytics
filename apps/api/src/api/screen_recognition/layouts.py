@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from api.screen_recognition.contracts import ImageInfo, LayoutProfile, NormalizedRoi
+from api.screen_recognition.roi import resolve_roi_pixels
 
 
 class LayoutUnsupportedError(ValueError):
@@ -79,10 +80,4 @@ def validate_layout_match(profile: LayoutProfile, image_info: ImageInfo) -> None
 
 
 def roi_to_pixels(roi: NormalizedRoi, image_info: ImageInfo) -> tuple[int, int, int, int]:
-    x = int((Decimal(image_info.width) * roi.x).to_integral_value(rounding="ROUND_FLOOR"))
-    y = int((Decimal(image_info.height) * roi.y).to_integral_value(rounding="ROUND_FLOOR"))
-    width = int((Decimal(image_info.width) * roi.width).to_integral_value(rounding="ROUND_FLOOR"))
-    height = int((Decimal(image_info.height) * roi.height).to_integral_value(rounding="ROUND_FLOOR"))
-    width = max(1, min(width, image_info.width - x))
-    height = max(1, min(height, image_info.height - y))
-    return x, y, width, height
+    return resolve_roi_pixels(roi, image_info).as_tuple()

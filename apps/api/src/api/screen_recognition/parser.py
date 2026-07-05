@@ -5,7 +5,11 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 
 from api.screen_recognition.contracts import MARKET_PRICE_CAP, OcrFieldEvidence, PriceLevel, ScreenContract
-from api.screen_recognition.ocr_candidates import select_price_candidate, select_quantity_candidate
+from api.screen_recognition.ocr_candidates import (
+    PRICE_SELECTION_POLICY_STRICT,
+    select_price_candidate,
+    select_quantity_candidate,
+)
 
 
 PRICE_RE = re.compile(r"(?P<price>\d+(?:[\.,]\d{1,2})?)(?P<plus>\+)?")
@@ -34,7 +38,10 @@ def normalize_item_name(value: str) -> str:
 
 
 def parse_ocr_contract(
-    fields: dict[str, OcrFieldEvidence], *, item_key: str | None
+    fields: dict[str, OcrFieldEvidence],
+    *,
+    item_key: str | None,
+    price_selection_policy: str = PRICE_SELECTION_POLICY_STRICT,
 ) -> tuple[ScreenContract, list[str], list[str]]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -46,10 +53,20 @@ def parse_ocr_contract(
         item_name = None
 
     best_bid = _parse_price_field(
-        raw.get("best_bid", ""), raw.get("bid_levels", ""), "best_bid", errors, warnings
+        raw.get("best_bid", ""),
+        raw.get("bid_levels", ""),
+        "best_bid",
+        errors,
+        warnings,
+        price_selection_policy,
     )
     best_ask = _parse_price_field(
-        raw.get("best_ask", ""), raw.get("ask_levels", ""), "best_ask", errors, warnings
+        raw.get("best_ask", ""),
+        raw.get("ask_levels", ""),
+        "best_ask",
+        errors,
+        warnings,
+        price_selection_policy,
     )
     total_bid_quantity = _parse_quantity_field(
         fields.get("total_bid_quantity"),
@@ -99,10 +116,18 @@ def validate_screen_contract(contract: ScreenContract) -> list[str]:
 
 
 def _parse_price_field(
-    text: str, first_level_text: str, field: str, errors: list[str], warnings: list[str]
+    text: str,
+    first_level_text: str,
+    field: str,
+    errors: list[str],
+    warnings: list[str],
+    selection_policy: str,
 ) -> Decimal | None:
     selected = select_price_candidate(
-        field_name=field, scalar_text=text, first_level_text=first_level_text
+        field_name=field,
+        scalar_text=text,
+        first_level_text=first_level_text,
+        selection_policy=selection_policy,
     )
     warnings.extend(selected.warnings)
     errors.extend(selected.errors)
@@ -202,7 +227,7 @@ def _validate_prices(values: list[Decimal | None]) -> list[str]:
 def _validate_price(value: Decimal | None, errors: list[str]) -> None:
     if value is None:
         return
-    if value <= 0:
+    if value < Decimal("0.01"):
         errors.append("non_positive_price")
     if value > MARKET_PRICE_CAP:
         errors.append("price_above_market_cap")

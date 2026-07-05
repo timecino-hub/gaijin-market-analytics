@@ -29,6 +29,10 @@ FIELD_OCR_PIPELINES = {
     ),
 }
 
+
+PRICE_SELECTION_POLICY_STRICT = "strict"
+PRICE_SELECTION_POLICY_PRICE_CELLS_V3 = "price-cells-v3"
+PRICE_SOURCE_DISAGREEMENT_WARNING = "price_source_disagreement_review"
 PRICE_SELECTION_ORDER = (
     "independent_roi_agreement",
     "repeated_candidate_agreement",
@@ -36,10 +40,16 @@ PRICE_SELECTION_ORDER = (
     "single_integer_price",
 )
 
-_NUMERIC_CONTEXT_RE = re.compile(r"^[\s\dOoIlLl,.\u3001\uff0c\uff0e\u3002]+$")
+_DECIMAL_SEPARATOR_CHARS = ".,\u3001\uff0c\uff0e\u3002\u00b7\u2022\u2219\u22c5"
+_DECIMAL_SEPARATOR_CLASS = re.escape(_DECIMAL_SEPARATOR_CHARS)
+_NUMERIC_CONTEXT_RE = re.compile(
+    rf"^[\s\dOoIlLl{_DECIMAL_SEPARATOR_CLASS}]+$"
+)
 _PRICE_TOKEN_RE = re.compile(r"\d+(?:\.\d{1,2})?\+?")
 _INTEGER_TOKEN_RE = re.compile(r"\d+")
-_DECIMAL_LIKE_RE = re.compile(r"\d+\s*[\.,\u3001\uff0c\uff0e\u3002]\s*\d+")
+_DECIMAL_LIKE_RE = re.compile(
+    rf"\d+\s*[{_DECIMAL_SEPARATOR_CLASS}]\s*\d+"
+)
 _PRICE_MARKER_RE = re.compile(r"\bGJN\b|价格|價|浠.*鏍", re.IGNORECASE)
 _SUMMARY_LABELS = {
     "bid": ("正在购买", "购买", "求购", "采购"),
@@ -58,6 +68,9 @@ class OcrPriceCandidate:
     selected: bool = False
     correction_codes: tuple[str, ...] = ()
     rejection_reason: str | None = None
+    suggested_decimal_value: Decimal | None = None
+    suggestion_reason: str | None = None
+    suggestion_confidence: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -98,9 +111,13 @@ def normalize_numeric_ocr_token(raw: str) -> tuple[str, tuple[str, ...], bool]:
         if replaced != text:
             corrections.append("numeric_confusable_repaired")
         text = replaced
-    if any(separator in text for separator in ("\u3001", "\uff0c", "\uff0e", "\u3002", ",")):
+    if any(separator in text for separator in _DECIMAL_SEPARATOR_CHARS if separator != "."):
         corrections.append("decimal_separator_normalized")
-    text = re.sub(r"(?<=\d)\s*[\u3001\uff0c\uff0e\u3002,]\s*(?=\d{1,2}\b)", ".", text)
+    text = re.sub(
+        rf"(?<=\d)\s*[{_DECIMAL_SEPARATOR_CLASS}]\s*(?=\d{{1,2}}\b)",
+        ".",
+        text,
+    )
     text = re.sub(r"(?<=\d)\s+\.\s*(?=\d{1,2}\b)", ".", text)
     contains_explicit_decimal = "." in text
     compact = re.sub(r"\s+", "", text)
@@ -139,6 +156,7 @@ def select_price_candidate(
     field_name: str,
     scalar_text: str,
     first_level_text: str | None = None,
+    selection_policy: str = PRICE_SELECTION_POLICY_STRICT,
 ) -> SelectedPriceCandidate:
     candidates = build_price_candidates(
         field_name=field_name, scalar_text=scalar_text, first_level_text=first_level_text
@@ -146,6 +164,8 @@ def select_price_candidate(
     valid = [candidate for candidate in candidates if candidate.decimal_value is not None]
     if not valid:
         errors = [f"{field_name}_missing"]
+        if any(candidate.rejection_reason == "price_decimal_unconfirmed" for candidate in candidates):
+            errors.append("price_decimal_unconfirmed")
         if any(candidate.rejection_reason for candidate in candidates):
             errors.append("price_ocr_invalid")
         return SelectedPriceCandidate(value=None, candidates=candidates, errors=tuple(errors))
@@ -159,6 +179,16 @@ def select_price_candidate(
             value = next(iter(common))
             return _selected(valid, value, "independent_roi_agreement")
         if len(set().union(*by_source.values())) > 1:
+            if selection_policy == PRICE_SELECTION_POLICY_PRICE_CELLS_V3:
+                resolved = _resolve_price_cells_v3_source_disagreement(valid)
+                if resolved is not None:
+                    value, reason = resolved
+                    return _selected(
+                        valid,
+                        value,
+                        reason,
+                        extra_warnings=(PRICE_SOURCE_DISAGREEMENT_WARNING,),
+                    )
             return SelectedPriceCandidate(
                 value=None,
                 candidates=candidates,
@@ -251,8 +281,73 @@ def select_quantity_candidate(
     return _selected_quantity(candidates, value, _quantity_selection_reason(valid))
 
 
+def _resolve_price_cells_v3_source_disagreement(
+    candidates: list[OcrPriceCandidate],
+) -> tuple[Decimal, str] | None:
+    """Resolve only narrow, review-required disagreements between the two price cells.
+
+    The first order-book row is a direct price source while the summary row is
+    embedded in prose.  v3 may select one value only when each source contributes
+    exactly one valid candidate and the disagreement matches a bounded OCR failure
+    pattern.  The caller always adds a review warning.
+    """
+
+    by_source: dict[str, list[OcrPriceCandidate]] = {}
+    for candidate in candidates:
+        if candidate.decimal_value is None:
+            continue
+        by_source.setdefault(candidate.source, []).append(candidate)
+    expected_sources = {"scalar_price_roi", "first_level_price_roi"}
+    if set(by_source) != expected_sources:
+        return None
+    if any(len({candidate.decimal_value for candidate in values}) != 1 for values in by_source.values()):
+        return None
+
+    scalar = by_source["scalar_price_roi"][0]
+    first_level = by_source["first_level_price_roi"][0]
+    assert scalar.decimal_value is not None
+    assert first_level.decimal_value is not None
+
+    if scalar.contains_explicit_decimal and not first_level.contains_explicit_decimal:
+        return scalar.decimal_value, "explicit_scalar_over_truncated_first_level"
+    if first_level.contains_explicit_decimal and not scalar.contains_explicit_decimal:
+        return first_level.decimal_value, "explicit_first_level_over_integer_scalar"
+    if not scalar.contains_explicit_decimal or not first_level.contains_explicit_decimal:
+        return None
+
+    scalar_token = _canonical_decimal_token(scalar.decimal_value)
+    first_level_token = _canonical_decimal_token(first_level.decimal_value)
+    scalar_digits = scalar_token.replace(".", "")
+    first_level_digits = first_level_token.replace(".", "")
+
+    if len(scalar_digits) > len(first_level_digits) and scalar_digits.endswith(first_level_digits):
+        return scalar.decimal_value, "longer_explicit_scalar_over_truncated_first_level"
+    if len(first_level_digits) > len(scalar_digits) and first_level_digits.endswith(scalar_digits):
+        return first_level.decimal_value, "longer_explicit_first_level_over_truncated_scalar"
+
+    scalar_integer, scalar_fraction = scalar_token.split(".", 1)
+    level_integer, level_fraction = first_level_token.split(".", 1)
+    if (
+        scalar_fraction == level_fraction
+        and len(scalar_integer) == len(level_integer)
+        and len(scalar_integer) >= 2
+        and scalar_integer[1:] == level_integer[1:]
+        and scalar_integer[0] != level_integer[0]
+    ):
+        return first_level.decimal_value, "first_level_over_summary_leading_digit_disagreement"
+    return None
+
+
+def _canonical_decimal_token(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.01")), "f")
+
+
 def _selected(
-    candidates: list[OcrPriceCandidate], value: Decimal | None, reason: str
+    candidates: list[OcrPriceCandidate],
+    value: Decimal | None,
+    reason: str,
+    *,
+    extra_warnings: tuple[str, ...] = (),
 ) -> SelectedPriceCandidate:
     selected = tuple(
         OcrPriceCandidate(
@@ -265,14 +360,24 @@ def _selected(
             selected=candidate.decimal_value == value,
             correction_codes=candidate.correction_codes,
             rejection_reason=candidate.rejection_reason,
+            suggested_decimal_value=candidate.suggested_decimal_value,
+            suggestion_reason=candidate.suggestion_reason,
+            suggestion_confidence=candidate.suggestion_confidence,
         )
         for candidate in candidates
     )
     warnings = tuple(
-        code
-        for candidate in selected
-        if candidate.selected
-        for code in candidate.correction_codes
+        dict.fromkeys(
+            [
+                *extra_warnings,
+                *[
+                    code
+                    for candidate in selected
+                    if candidate.selected
+                    for code in candidate.correction_codes
+                ],
+            ]
+        )
     )
     return SelectedPriceCandidate(
         value=value, candidates=selected, warnings=warnings, selection_reason=reason
@@ -632,6 +737,19 @@ def _candidates_from_text(
         if match:
             search_text = search_text[match.end() :]
     normalized, corrections, contains_decimal = normalize_numeric_ocr_token(search_text)
+    if re.fullmatch(r"\d+\.\d{3,}", normalized) or re.fullmatch(r"\d+\.\d+\.", normalized):
+        return [
+            OcrPriceCandidate(
+                pipeline_id=pipeline_id,
+                source=source,
+                raw_text=raw_text,
+                normalized_token=None,
+                decimal_value=None,
+                contains_explicit_decimal=True,
+                correction_codes=corrections,
+                rejection_reason="price_ocr_invalid",
+            )
+        ]
     tokens = _PRICE_TOKEN_RE.findall(normalized)
     if not tokens:
         return [
@@ -651,8 +769,18 @@ def _candidates_from_text(
         token_has_decimal = "." in token
         parsed = _parse_candidate_decimal(token.rstrip("+"))
         rejection = None
+        suggested_decimal = None
+        suggestion_reason = None
+        suggestion_confidence = None
         if parsed is None:
             rejection = "price_ocr_invalid"
+        elif not token_has_decimal and parsed >= Decimal("1000"):
+            suggested_decimal = (parsed / Decimal("100")).quantize(Decimal("0.01"))
+            if Decimal("0.01") <= suggested_decimal <= MARKET_PRICE_CAP:
+                rejection = "price_decimal_unconfirmed"
+                suggestion_reason = "possible_missing_decimal_point"
+                suggestion_confidence = Decimal("0.50")
+                parsed = None
         elif parsed == 0 and len(tokens) == 1 and normalized == token:
             rejection = None
         elif parsed <= 0 or parsed > MARKET_PRICE_CAP:
@@ -660,6 +788,11 @@ def _candidates_from_text(
                 rejection = "price_ocr_invalid"
             else:
                 rejection = "price_decimal_unconfirmed"
+                suggested_decimal = (parsed / Decimal("100")).quantize(Decimal("0.01"))
+                if suggested_decimal > MARKET_PRICE_CAP:
+                    suggested_decimal = None
+                suggestion_reason = "possible_missing_decimal_point" if suggested_decimal is not None else None
+                suggestion_confidence = Decimal("0.50") if suggested_decimal is not None else None
             parsed = None
         candidates.append(
             OcrPriceCandidate(
@@ -671,8 +804,34 @@ def _candidates_from_text(
                 contains_explicit_decimal=contains_decimal or token_has_decimal,
                 correction_codes=corrections,
                 rejection_reason=rejection,
+                suggested_decimal_value=suggested_decimal,
+                suggestion_reason=suggestion_reason,
+                suggestion_confidence=suggestion_confidence,
             )
         )
+    valid_values = {
+        candidate.decimal_value
+        for candidate in candidates
+        if candidate.decimal_value is not None
+    }
+    explicit_values = {
+        candidate.decimal_value
+        for candidate in candidates
+        if candidate.decimal_value is not None and candidate.contains_explicit_decimal
+    }
+    if len(valid_values) > 1 and not explicit_values:
+        return [
+            OcrPriceCandidate(
+                pipeline_id=pipeline_id,
+                source=source,
+                raw_text=raw_text,
+                normalized_token=None,
+                decimal_value=None,
+                contains_explicit_decimal=False,
+                correction_codes=corrections,
+                rejection_reason="price_candidate_ambiguous_within_source",
+            )
+        ]
     if prefer_after_price_label:
         explicit_decimal_candidates = [
             candidate for candidate in candidates if candidate.contains_explicit_decimal
@@ -688,5 +847,7 @@ def _parse_candidate_decimal(token: str) -> Decimal | None:
     except InvalidOperation:
         return None
     if not parsed.is_finite():
+        return None
+    if parsed.as_tuple().exponent < -2:
         return None
     return parsed
