@@ -36,10 +36,16 @@ PRICE_SELECTION_ORDER = (
     "single_integer_price",
 )
 
-_NUMERIC_CONTEXT_RE = re.compile(r"^[\s\dOoIlLl,.\u3001\uff0c\uff0e\u3002]+$")
+_DECIMAL_SEPARATOR_CHARS = ".,\u3001\uff0c\uff0e\u3002\u00b7\u2022\u2219\u22c5"
+_DECIMAL_SEPARATOR_CLASS = re.escape(_DECIMAL_SEPARATOR_CHARS)
+_NUMERIC_CONTEXT_RE = re.compile(
+    rf"^[\s\dOoIlLl{_DECIMAL_SEPARATOR_CLASS}]+$"
+)
 _PRICE_TOKEN_RE = re.compile(r"\d+(?:\.\d{1,2})?\+?")
 _INTEGER_TOKEN_RE = re.compile(r"\d+")
-_DECIMAL_LIKE_RE = re.compile(r"\d+\s*[\.,\u3001\uff0c\uff0e\u3002]\s*\d+")
+_DECIMAL_LIKE_RE = re.compile(
+    rf"\d+\s*[{_DECIMAL_SEPARATOR_CLASS}]\s*\d+"
+)
 _PRICE_MARKER_RE = re.compile(r"\bGJN\b|价格|價|浠.*鏍", re.IGNORECASE)
 _SUMMARY_LABELS = {
     "bid": ("正在购买", "购买", "求购", "采购"),
@@ -101,9 +107,13 @@ def normalize_numeric_ocr_token(raw: str) -> tuple[str, tuple[str, ...], bool]:
         if replaced != text:
             corrections.append("numeric_confusable_repaired")
         text = replaced
-    if any(separator in text for separator in ("\u3001", "\uff0c", "\uff0e", "\u3002", ",")):
+    if any(separator in text for separator in _DECIMAL_SEPARATOR_CHARS if separator != "."):
         corrections.append("decimal_separator_normalized")
-    text = re.sub(r"(?<=\d)\s*[\u3001\uff0c\uff0e\u3002,]\s*(?=\d{1,2}\b)", ".", text)
+    text = re.sub(
+        rf"(?<=\d)\s*[{_DECIMAL_SEPARATOR_CLASS}]\s*(?=\d{{1,2}}\b)",
+        ".",
+        text,
+    )
     text = re.sub(r"(?<=\d)\s+\.\s*(?=\d{1,2}\b)", ".", text)
     contains_explicit_decimal = "." in text
     compact = re.sub(r"\s+", "", text)
@@ -712,6 +722,29 @@ def _candidates_from_text(
                 suggestion_confidence=suggestion_confidence,
             )
         )
+    valid_values = {
+        candidate.decimal_value
+        for candidate in candidates
+        if candidate.decimal_value is not None
+    }
+    explicit_values = {
+        candidate.decimal_value
+        for candidate in candidates
+        if candidate.decimal_value is not None and candidate.contains_explicit_decimal
+    }
+    if len(valid_values) > 1 and not explicit_values:
+        return [
+            OcrPriceCandidate(
+                pipeline_id=pipeline_id,
+                source=source,
+                raw_text=raw_text,
+                normalized_token=None,
+                decimal_value=None,
+                contains_explicit_decimal=False,
+                correction_codes=corrections,
+                rejection_reason="price_candidate_ambiguous_within_source",
+            )
+        ]
     if prefer_after_price_label:
         explicit_decimal_candidates = [
             candidate for candidate in candidates if candidate.contains_explicit_decimal

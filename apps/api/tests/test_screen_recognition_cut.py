@@ -57,7 +57,9 @@ from api.screen_recognition.ocr_backend import (
     OcrInvocation,
     WindowsOcrRecognizer,
     _run_windows_helper,
+    _score_recognized_text,
     _windows_helper_command,
+    get_recognizer,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -81,6 +83,10 @@ from api.screen_recognition.ocr_batch import (
     _resolve_roi_tuple,
     prepare_system_drawing_ocr_batch_manifest,
     prepare_windows_ocr_batch,
+)
+from api.screen_recognition.price_cells import (
+    PriceCellDetectionError,
+    detect_price_cell_rois,
 )
 from api.screen_recognition.private_diagnostics import build_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
@@ -1726,6 +1732,32 @@ def test_price_candidate_selection_agreement_conflict_and_decimal_rules() -> Non
     assert table.selection_reason == "independent_roi_agreement"
 
 
+def test_price_candidate_normalizes_middle_dot_and_ignores_ambiguous_integer_source() -> None:
+    token, corrections, explicit = normalize_numeric_ocr_token("742 · 35")
+    assert token == "742.35"
+    assert explicit is True
+    assert "decimal_separator_normalized" in corrections
+
+    selected = select_price_candidate(
+        field_name="best_bid",
+        scalar_text="742 · 35",
+        first_level_text="742 ℃ 5",
+    )
+    assert selected.value == Decimal("742.35")
+    assert selected.selection_reason == "single_explicit_decimal"
+    assert "decimal_separator_normalized" in selected.warnings
+
+    ambiguous = select_price_candidate(field_name="best_bid", scalar_text="742 ℃ 5")
+    assert ambiguous.value is None
+    assert "price_ocr_invalid" in ambiguous.errors
+
+
+def test_price_pipeline_scoring_prefers_normalized_explicit_decimal() -> None:
+    assert _score_recognized_text("best_bid", "742 · 35") > _score_recognized_text(
+        "best_bid", "742 ℃ 5"
+    )
+
+
 def test_numeric_ocr_repairs_only_in_numeric_context() -> None:
     token, corrections, _explicit = normalize_numeric_ocr_token("I2O，5O")
     assert token == "120.50"
@@ -3166,3 +3198,198 @@ def _draw_text_image_with_powershell(path: Path, text: str, image_format: str) -
     )
     if completed.returncode != 0:
         pytest.skip("Could not generate Windows OCR smoke image.")
+
+
+
+def _draw_synthetic_price_cell_fixture(
+    path: Path, *, split_summary_leading_digit: bool = False
+) -> dict[str, tuple[int, int, int, int]]:
+    image = Image.new("RGB", (1200, 800), (39, 42, 46))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((180, 250, 400, 310), fill=(69, 72, 76))
+    draw.rectangle((700, 250, 920, 310), fill=(191, 45, 54))
+
+    def draw_group(x: int, y: int, width: int, height: int, segments: int) -> None:
+        gap = 2
+        segment_width = max(2, (width - gap * (segments - 1)) // segments)
+        cursor = x
+        for index in range(segments):
+            current_width = segment_width if index < segments - 1 else x + width - cursor
+            draw.rectangle(
+                (cursor, y, cursor + current_width - 1, y + height - 1),
+                fill=(210, 214, 218),
+            )
+            cursor += current_width + gap
+
+    def draw_side(button_x: int) -> None:
+        summary_leading = (
+            (button_x + 140, 6, 1)
+            if split_summary_leading_digit
+            else (button_x + 125, 18, 2)
+        )
+        summary_groups = (
+            (button_x + 10, 55, 5),
+            (button_x + 70, 4, 1),
+            (button_x + 90, 24, 3),
+            summary_leading,
+            (button_x + 150, 42, 6),
+            (button_x + 198, 8, 1),
+            (button_x + 212, 22, 2),
+        )
+        for x, width, segments in summary_groups:
+            draw_group(x, 335, width, 14, segments)
+        draw_group(button_x + 60, 380, 30, 12, 3)
+        draw_group(button_x + 125, 380, 55, 12, 5)
+        draw_group(button_x + 80, 420, 10, 14, 1)
+        draw_group(button_x + 130, 420, 50, 14, 6)
+
+    draw_side(180)
+    draw_side(700)
+    image.save(path)
+    bid_summary_left = 320 if split_summary_leading_digit else 330
+    ask_summary_left = 840 if split_summary_leading_digit else 850
+    return {
+        "best_bid_price": (bid_summary_left, 335, 372, 349),
+        "bid_quantity": (260, 420, 270, 434),
+        "bid_level_price": (310, 420, 360, 434),
+        "best_ask_price": (ask_summary_left, 335, 892, 349),
+        "ask_quantity": (780, 420, 790, 434),
+        "ask_level_price": (830, 420, 880, 434),
+    }
+
+
+def _roi_contains_box(roi: object, box: tuple[int, int, int, int]) -> bool:
+    assert hasattr(roi, "x") and hasattr(roi, "right")
+    return (
+        roi.x <= box[0]
+        and roi.y <= box[1]
+        and roi.right >= box[2]
+        and roi.bottom >= box[3]
+    )
+
+
+def _roi_overlaps_box(roi: object, box: tuple[int, int, int, int]) -> bool:
+    return not (
+        roi.right <= box[0]
+        or roi.x >= box[2]
+        or roi.bottom <= box[1]
+        or roi.y >= box[3]
+    )
+
+
+def test_button_anchored_price_cells_extract_compact_price_regions(tmp_path: Path) -> None:
+    image = tmp_path / "price-cells.png"
+    expected = _draw_synthetic_price_cell_fixture(image)
+
+    detection = detect_price_cell_rois(image)
+
+    assert set(detection.rois) == {"best_bid", "bid_levels", "best_ask", "ask_levels"}
+    assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
+    assert _roi_contains_box(detection.rois["bid_levels"], expected["bid_level_price"])
+    assert _roi_contains_box(detection.rois["best_ask"], expected["best_ask_price"])
+    assert _roi_contains_box(detection.rois["ask_levels"], expected["ask_level_price"])
+    assert not _roi_overlaps_box(detection.rois["bid_levels"], expected["bid_quantity"])
+    assert not _roi_overlaps_box(detection.rois["ask_levels"], expected["ask_quantity"])
+    assert detection.diagnostics["fallback_used"] is False
+    assert detection.diagnostics["sides"]["bid"]["summary_leading_fragment_merged"] is False
+    assert detection.diagnostics["sides"]["ask"]["summary_leading_fragment_merged"] is False
+    assert detection.diagnostics["anchors"]["bid_button"]["x"] < detection.diagnostics["anchors"]["ask_button"]["x"]
+
+
+def test_button_anchored_price_cells_merge_detached_leading_digit(tmp_path: Path) -> None:
+    image = tmp_path / "price-cells-split-leading.png"
+    expected = _draw_synthetic_price_cell_fixture(image, split_summary_leading_digit=True)
+
+    detection = detect_price_cell_rois(image)
+
+    assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
+    assert _roi_contains_box(detection.rois["best_ask"], expected["best_ask_price"])
+    assert detection.diagnostics["sides"]["bid"]["summary_leading_fragment_merged"] is True
+    assert detection.diagnostics["sides"]["ask"]["summary_leading_fragment_merged"] is True
+
+
+def test_button_anchored_price_cells_fail_closed_without_action_buttons(tmp_path: Path) -> None:
+    image = tmp_path / "no-buttons.png"
+    Image.new("RGB", (1200, 800), (39, 42, 46)).save(image)
+
+    with pytest.raises(PriceCellDetectionError) as exc_info:
+        detect_price_cell_rois(image)
+
+    assert exc_info.value.code == "buy_button_not_detected"
+
+
+def test_system_drawing_manifest_accepts_explicit_price_cell_pixel_rois(tmp_path: Path) -> None:
+    image = tmp_path / "fixture.png"
+    expected = _draw_synthetic_price_cell_fixture(image)
+    detection = detect_price_cell_rois(image)
+    profile = get_layout_profile("gaijin-market-desktop-v1")
+
+    prepared = prepare_system_drawing_ocr_batch_manifest(
+        image_path=image,
+        layout_profile=profile,
+        field_variant_names={
+            "best_bid": ("gray_3x", "binary_4x"),
+            "bid_levels": ("gray_3x", "binary_4x"),
+            "best_ask": ("gray_3x", "binary_4x"),
+            "ask_levels": ("gray_3x", "binary_4x"),
+        },
+        pixel_rois={name: roi.as_tuple() for name, roi in detection.rois.items()},
+        preprocessing_mode="button_anchored_price_cells_v1",
+        additional_diagnostics={"price_cell_detection": detection.diagnostics},
+    )
+
+    assert prepared.diagnostics["preprocessing_mode"] == "button_anchored_price_cells_v1"
+    assert prepared.diagnostics["logical_pipeline_request_count"] == 8
+    assert prepared.diagnostics["price_cell_detection"]["fallback_used"] is False
+    requests = prepared.manifest["requests"]
+    best_bid = next(request for request in requests if request["field_name"] == "best_bid")
+    assert best_bid["crop"] == {
+        "x": detection.rois["best_bid"].x,
+        "y": detection.rois["best_bid"].y,
+        "width": detection.rois["best_bid"].width,
+        "height": detection.rois["best_bid"].height,
+    }
+    assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
+
+
+def test_candidate_price_cells_backend_is_explicit_and_default_is_unchanged() -> None:
+    default = get_recognizer("windows-ocr")
+    candidate = get_recognizer("candidate-price-cells-v2")
+
+    assert isinstance(default, WindowsOcrRecognizer)
+    assert isinstance(candidate, WindowsOcrRecognizer)
+    assert default.backend_version == "windows-media-ocr-batch-v1"
+    assert default._price_cell_mode is False
+    assert candidate.backend_version == "windows-media-ocr-price-cells-v2"
+    assert candidate._price_cell_mode is True
+    assert candidate._system_drawing_field_variant_plan == {
+        "best_bid": ("gray_3x", "binary_4x"),
+        "bid_levels": ("gray_3x", "binary_4x"),
+        "best_ask": ("gray_3x", "binary_4x"),
+        "ask_levels": ("gray_3x", "binary_4x"),
+    }
+
+
+def test_price_cell_anchor_fallback_warning_is_preserved_in_ocr_result(tmp_path: Path) -> None:
+    from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
+
+    requests = (batch_request(tmp_path, "r0001", "best_ask", "gray_3x", "p1"),)
+    diagnostics = batch_python_diagnostics(requests)
+    diagnostics["preparation_warnings"] = [
+        "price_cell_anchor_fallback",
+        "buy_button_not_detected",
+    ]
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", "13.00")],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+    )
+
+    assert "price_cell_anchor_fallback" in result.warnings
+    assert "buy_button_not_detected" in result.warnings

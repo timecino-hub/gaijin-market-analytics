@@ -26,7 +26,13 @@ from api.screen_recognition.ocr_batch import (
     prepare_system_drawing_ocr_batch_manifest,
     prepare_windows_ocr_batch,
 )
+from api.screen_recognition.ocr_candidates import normalize_numeric_ocr_token
 from api.screen_recognition.preprocessing import preprocessing_metadata
+from api.screen_recognition.price_cells import (
+    PRICE_CELL_PROFILE_VERSION,
+    PriceCellDetectionError,
+    detect_price_cell_rois,
+)
 
 
 SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
@@ -108,6 +114,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     system_drawing_lockbits_backend_version = "windows-media-ocr-system-drawing-lockbits-v1"
     system_drawing_pixel_loop_backend_version = "windows-media-ocr-system-drawing-pixel-loop-v1"
     system_drawing_cascade_backend_version = "windows-media-ocr-system-drawing-cascade-v1"
+    price_cells_backend_version = "windows-media-ocr-price-cells-v2"
     test_scope = "end_to_end"
 
     def __init__(
@@ -118,14 +125,18 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         system_drawing_batch_mode: bool = False,
         system_drawing_pixel_implementation: str = "lockbits-v1",
         system_drawing_field_variant_plan: dict[str, tuple[str, ...]] | None = None,
+        price_cell_mode: bool = False,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
         self._system_drawing_batch_mode = system_drawing_batch_mode
         self._system_drawing_pixel_implementation = system_drawing_pixel_implementation
         self._system_drawing_field_variant_plan = system_drawing_field_variant_plan
+        self._price_cell_mode = price_cell_mode
         if system_drawing_batch_mode:
-            if system_drawing_field_variant_plan is not None:
+            if price_cell_mode:
+                self.backend_version = self.price_cells_backend_version
+            elif system_drawing_field_variant_plan is not None:
                 self.backend_version = self.system_drawing_cascade_backend_version
             elif system_drawing_pixel_implementation == "legacy-pixel-loop":
                 self.backend_version = self.system_drawing_pixel_loop_backend_version
@@ -189,10 +200,43 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     def _recognize_system_drawing_batch(self, invocation: OcrInvocation, script_path: Path) -> OcrResult:
         with tempfile.TemporaryDirectory(prefix="cut20-ocr-system-drawing-batch-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
+            pixel_rois: dict[str, tuple[int, int, int, int]] | None = None
+            preparation_warnings: tuple[str, ...] = ()
+            additional_diagnostics: dict[str, Any] | None = None
+            preprocessing_mode = "system_drawing_batch_v1"
+            if self._price_cell_mode:
+                preprocessing_mode = PRICE_CELL_PROFILE_VERSION
+                try:
+                    detection = detect_price_cell_rois(invocation.image_path)
+                except PriceCellDetectionError as exc:
+                    preparation_warnings = (
+                        "price_cell_anchor_fallback",
+                        exc.code,
+                    )
+                    additional_diagnostics = {
+                        "price_cell_detection": {
+                            "profile_version": PRICE_CELL_PROFILE_VERSION,
+                            "fallback_used": True,
+                            "error_code": exc.code,
+                        }
+                    }
+                else:
+                    pixel_rois = {
+                        field_name: roi.as_tuple()
+                        for field_name, roi in detection.rois.items()
+                    }
+                    preparation_warnings = detection.warnings
+                    additional_diagnostics = {
+                        "price_cell_detection": detection.diagnostics
+                    }
             prepared = prepare_system_drawing_ocr_batch_manifest(
                 image_path=invocation.image_path,
                 layout_profile=invocation.layout_profile,
                 field_variant_names=self._system_drawing_field_variant_plan,
+                pixel_rois=pixel_rois,
+                preprocessing_mode=preprocessing_mode,
+                additional_diagnostics=additional_diagnostics,
+                preparation_warnings=preparation_warnings,
             )
             input_payload = {
                 **prepared.manifest,
@@ -325,6 +369,14 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             system_drawing_pixel_implementation="lockbits-v1",
             system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
         )
+    if name in {"candidate-price-cells-v1", "candidate-price-cells-v2"}:
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+            price_cell_mode=True,
+        )
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -410,6 +462,7 @@ def _batch_payload_to_ocr_result(
     fields: dict[str, OcrFieldEvidence] = {}
     warnings = set(payload.get("warnings") or [])
     warnings.update(mapping_warnings)
+    warnings.update(str(code) for code in (python_diagnostics.get("preparation_warnings") or []))
     per_pipeline: list[dict[str, Any]] = []
     private_pipeline_attempts: list[dict[str, Any]] = []
     fields_diagnostics: dict[str, dict[str, Any]] = {
@@ -658,10 +711,13 @@ def _score_recognized_text(field_name: str, text: str) -> int:
     if any(token in lower_name for token in ("bid", "ask", "price", "levels")):
         import re
 
-        if re.search(r"\d+[\.,]\d{1,2}", clean):
+        normalized, _corrections, _contains_decimal = normalize_numeric_ocr_token(clean)
+        if re.search(r"\d+\.\d{1,2}(?:\+)?", normalized):
             score += 40
-        elif re.search(r"\d+", clean):
+        elif re.search(r"\d+", normalized):
             score += 20
+        if len(re.findall(r"\d+", normalized)) > 1 and "." not in normalized:
+            score -= 10
         if re.search(r"[A-Za-z\u4e00-\u9fff]", clean):
             score -= 5
     elif "quantity" in lower_name:

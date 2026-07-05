@@ -208,6 +208,10 @@ def prepare_system_drawing_ocr_batch_manifest(
     layout_profile: LayoutProfile,
     variants: Iterable[OcrPreprocessingVariant] = DEFAULT_OCR_PREPROCESSING_VARIANTS,
     field_variant_names: dict[str, tuple[str, ...]] | None = None,
+    pixel_rois: dict[str, tuple[int, int, int, int]] | None = None,
+    preprocessing_mode: str = "system_drawing_batch_v1",
+    additional_diagnostics: dict[str, Any] | None = None,
+    preparation_warnings: tuple[str, ...] = (),
 ) -> PreparedOcrBatch:
     started = time.perf_counter()
     selected_variants = tuple(variants)
@@ -230,6 +234,11 @@ def prepare_system_drawing_ocr_batch_manifest(
         field_name: _resolve_roi_tuple_decimal(roi.to_json(), source_width, source_height)
         for field_name, roi in sorted(layout_profile.rois.items())
     }
+    if pixel_rois is not None:
+        for field_name, box in pixel_rois.items():
+            resolved_rois[field_name] = _validated_pixel_roi(
+                box, source_width=source_width, source_height=source_height
+            )
     timings["layout_ms"] = _elapsed_ms(layout_started)
 
     manifest_started = time.perf_counter()
@@ -261,7 +270,7 @@ def prepare_system_drawing_ocr_batch_manifest(
             )
             target_width, target_height = _target_dimensions(width, height, variant.scale_factor)
             descriptor = {
-                "version": "system-drawing-batch-v1",
+                "version": preprocessing_mode,
                 "source_image_path": str(image_path),
                 "source_width": source_width,
                 "source_height": source_height,
@@ -328,7 +337,7 @@ def prepare_system_drawing_ocr_batch_manifest(
     }
     timings["batch_manifest_ms"] = _elapsed_ms(manifest_started)
     diagnostics = {
-        "preprocessing_mode": "system_drawing_batch_v1",
+        "preprocessing_mode": preprocessing_mode,
         "recognition_image_decode_count": 0,
         "recognition_image_metadata_decode_count": 1,
         "recognition_roi_resolve_count": len(resolved_rois),
@@ -355,12 +364,29 @@ def prepare_system_drawing_ocr_batch_manifest(
         "autocontrast_count": 0,
         "threshold_count": 0,
         "invert_count": 0,
+        "preparation_warnings": list(preparation_warnings),
+        **(additional_diagnostics or {}),
     }
     return PreparedOcrBatch(
         manifest=manifest,
         logical_requests=tuple(logical_requests),
         diagnostics=diagnostics,
     )
+
+
+
+def _validated_pixel_roi(
+    box: tuple[int, int, int, int],
+    *,
+    source_width: int,
+    source_height: int,
+) -> tuple[int, int, int, int]:
+    x, y, width, height = (int(value) for value in box)
+    if width <= 0 or height <= 0:
+        raise ValueError("Pixel ROI dimensions must be positive.")
+    if x < 0 or y < 0 or x + width > source_width or y + height > source_height:
+        raise ValueError("Pixel ROI must be contained within the source image.")
+    return x, y, width, height
 
 
 def _resolve_roi_tuple(roi: dict[str, str], width: int, height: int) -> tuple[int, int, int, int]:
