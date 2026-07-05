@@ -361,7 +361,14 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
 
 def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecognizer:
     if name == "windows-ocr":
-        return WindowsOcrRecognizer(timeout_seconds=timeout_seconds)
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+        )
     if name == "windows-ocr-legacy":
         return WindowsOcrRecognizer(timeout_seconds=timeout_seconds, legacy_mode=True)
     if name in {

@@ -3456,7 +3456,7 @@ def test_system_drawing_manifest_accepts_explicit_price_cell_pixel_rois(tmp_path
     assert _roi_contains_box(detection.rois["best_bid"], expected["best_bid_price"])
 
 
-def test_candidate_price_cells_backend_is_explicit_and_default_is_unchanged() -> None:
+def test_price_cells_v4_is_production_default_and_candidates_stay_explicit() -> None:
     default = get_recognizer("windows-ocr")
     candidate = get_recognizer("candidate-price-cells-v2")
     candidate_v3 = get_recognizer("candidate-price-cells-v3")
@@ -3466,8 +3466,9 @@ def test_candidate_price_cells_backend_is_explicit_and_default_is_unchanged() ->
     assert isinstance(candidate, WindowsOcrRecognizer)
     assert isinstance(candidate_v3, WindowsOcrRecognizer)
     assert isinstance(candidate_v4, WindowsOcrRecognizer)
-    assert default.backend_version == "windows-media-ocr-batch-v1"
-    assert default._price_cell_mode is False
+    assert default.backend_version == "windows-media-ocr-price-cells-v4"
+    assert default._price_cell_mode is True
+    assert default._price_cell_profile_version == "button-anchored-price-cells-v4"
     assert candidate.backend_version == "windows-media-ocr-price-cells-v2"
     assert candidate._price_cell_mode is True
     assert candidate_v3.backend_version == "windows-media-ocr-price-cells-v3"

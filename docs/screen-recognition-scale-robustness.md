@@ -84,6 +84,23 @@ The helper records the selected pipeline in field warnings. Windows OCR does
 not expose confidence, so confidence remains unavailable; the selection rule is
 field format first, then non-empty text. It does not fabricate confidence.
 
+## Production OCR Backend
+
+The production `windows-ocr` alias now uses the button-anchored price-cell v4
+profile (`windows-media-ocr-price-cells-v4`). This profile anchors compact
+bid/ask price cells from the large order buttons and accepts both inactive gray
+and active green sell-button states.
+
+The production alias still runs eight OCR attempts per screenshot. If the button
+anchor cannot be detected, recognition falls back to the normalized ROI path and
+requires review instead of treating the result as confident. Item-name or
+quantity recognition issues can still make the overall review require manual
+confirmation even when bid and ask prices are exact.
+
+Older backends remain explicitly selectable for regression and diagnostics,
+including `candidate-price-cells-v2`, `candidate-price-cells-v3`, and
+`candidate-price-cells-v4`.
+
 ## Price Rules
 
 Prices remain `Decimal` values. Valid recognized prices must be non-empty,
