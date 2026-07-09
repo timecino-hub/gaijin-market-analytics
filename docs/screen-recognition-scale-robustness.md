@@ -101,6 +101,26 @@ Older backends remain explicitly selectable for regression and diagnostics,
 including `candidate-price-cells-v2`, `candidate-price-cells-v3`, and
 `candidate-price-cells-v4`.
 
+### Experimental item-title OCR
+
+`candidate-item-title-v2` keeps the production v4 price path and adds two OCR
+attempts for the item title. It uses the validated action-button geometry to
+infer the title row, then selects only the text groups between the stable
+`War Thunder` label and the trailing link icon. The candidate therefore runs
+ten OCR attempts per screenshot: eight price attempts plus two title attempts.
+
+The candidate is intentionally review-first. Any non-empty title evidence adds
+`item_title_candidate_review`, because two Windows OCR pipelines can agree on the
+same wrong title text. A single non-empty pipeline or a pipeline disagreement adds
+additional review evidence through `item_title_single_pipeline_review` or
+`item_title_ocr_ambiguous`. If title anchors cannot be detected, the candidate
+disables title OCR instead of trusting the broad normalized fallback ROI.
+
+The title normalizer performs deterministic cleanup only: Unicode punctuation,
+spaces around slash separators, bracket glyph drift, and tightly scoped title-bar
+OCR confusions such as `Sd.Kf 乙` -> `Sd.Kfz.` or `T-IOA` -> `T-10A`. No catalogue
+lookup, edit-distance repair, or market-name guessing is performed.
+
 ## Price Rules
 
 Prices remain `Decimal` values. Valid recognized prices must be non-empty,
@@ -192,6 +212,10 @@ expected_best_bid
 expected_best_ask
 reviewed
 ```
+
+For item-title experiments, the optional `expected_item_name` column may contain
+the exact title transcribed from the screenshot. Older private ground-truth CSV
+files without this optional column remain valid.
 
 Prices must be Decimal strings exactly as displayed, for example `18.20`,
 `18.10`, `0.01`, or `2000.00`. Valid prices are finite, use at most two decimal

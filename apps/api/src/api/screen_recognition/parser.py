@@ -37,6 +37,45 @@ def normalize_item_name(value: str) -> str:
     return normalized
 
 
+def normalize_item_title_ocr(value: str) -> str:
+    """Normalize title-bar OCR without consulting a market catalogue.
+
+    This intentionally stays narrower than an item-name autocorrector.  The
+    transformations below are deterministic OCR/UI cleanup rules observed in the
+    title bar: punctuation width, slash spacing, common bracket glyphs, and a few
+    tightly scoped glyph confusions inside model-style tokens.  The caller still
+    marks item-title evidence for Review, so these normalizations improve
+    matching and display quality without making item names trusted.
+    """
+
+    normalized = normalize_item_name(value)
+    normalized = re.sub(r"^\W*War\s+Thunder\s+", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^[|:;·•\-\s]+", "", normalized)
+    normalized = re.sub(r"[|:;·•\s]+$", "", normalized)
+
+    # Bracket glyphs frequently drift in Windows OCR for title text.
+    normalized = normalized.replace("〗", ")").replace("】", ")").replace("］", ")")
+    normalized = normalized.replace("〖", "(").replace("【", "(").replace("［", "(")
+
+    # Remove spaces around model separators without joining ordinary words.
+    normalized = re.sub(r"\s*/\s*", "/", normalized)
+
+    # Windows OCR often reads the Latin ``z`` in Sd.Kfz. as the CJK glyph 乙.
+    normalized = re.sub(r"\bSd\.Kf\s*[乙Zz]\.?(?=\s*\d)", "Sd.Kfz.", normalized)
+
+    # Join spaced short Latin variant markers such as ``M k 88`` -> ``Mk 88``.
+    normalized = re.sub(r"\bM\s+k(?=\s*\d)", "Mk", normalized)
+
+    # A short horizontal dash is often recognized as the CJK one character.
+    normalized = re.sub(r"(?<=[A-Za-z\u4e00-\u9fff])\s*[一—–-]\s*(?=\d)", "-", normalized)
+    normalized = re.sub(r"(?<=\d)\s*[一—–-]\s*(?=[A-Za-z])", "-", normalized)
+
+    # Constrain I/O -> 1/0 to the model-token position used in T-10A style names.
+    normalized = re.sub(r"\bT-IO(?=[A-Z]\b)", "T-10", normalized)
+
+    return normalize_item_name(normalized)
+
+
 def parse_ocr_contract(
     fields: dict[str, OcrFieldEvidence],
     *,
@@ -46,7 +85,7 @@ def parse_ocr_contract(
     warnings: list[str] = []
     errors: list[str] = []
     raw = {name: evidence.raw_text for name, evidence in fields.items()}
-    item_name = normalize_item_name(raw.get("item_name", ""))
+    item_name = normalize_item_title_ocr(raw.get("item_name", ""))
     if not item_name:
         errors.append("item_name_missing")
         errors.append("item_name_ocr_empty")

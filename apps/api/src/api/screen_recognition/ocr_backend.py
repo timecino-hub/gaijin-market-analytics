@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -20,6 +21,11 @@ from api.screen_recognition.contracts import (
     OcrWordEvidence,
 )
 from api.screen_recognition.json_util import dump_json_file
+from api.screen_recognition.item_titles import (
+    ITEM_TITLE_PROFILE_VERSION_V2,
+    ItemTitleDetectionError,
+    detect_item_title_roi_v2,
+)
 from api.screen_recognition.ocr_batch import (
     BATCH_SCHEMA_VERSION,
     PreparedOcrRequest,
@@ -27,6 +33,7 @@ from api.screen_recognition.ocr_batch import (
     prepare_windows_ocr_batch,
 )
 from api.screen_recognition.ocr_candidates import normalize_numeric_ocr_token
+from api.screen_recognition.parser import normalize_item_title_ocr
 from api.screen_recognition.preprocessing import preprocessing_metadata
 from api.screen_recognition.price_cells import (
     PRICE_CELL_PROFILE_VERSION,
@@ -45,6 +52,15 @@ SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
     "best_ask": ("gray_3x", "binary_4x"),
     "ask_levels": ("gray_3x", "binary_4x"),
 }
+
+ITEM_TITLE_V2_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
+    **SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+    "item_name": ("gray_3x", "gray_autocontrast_4x"),
+}
+
+ITEM_TITLE_AMBIGUOUS_WARNING = "item_title_ocr_ambiguous"
+ITEM_TITLE_SINGLE_PIPELINE_WARNING = "item_title_single_pipeline_review"
+ITEM_TITLE_CANDIDATE_REVIEW_WARNING = "item_title_candidate_review"
 
 
 class OcrBackendError(RuntimeError):
@@ -121,6 +137,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     price_cells_backend_version = "windows-media-ocr-price-cells-v2"
     price_cells_v3_backend_version = "windows-media-ocr-price-cells-v3"
     price_cells_v4_backend_version = "windows-media-ocr-price-cells-v4"
+    item_title_v2_backend_version = "windows-media-ocr-price-cells-v4-item-title-v2"
     test_scope = "end_to_end"
 
     def __init__(
@@ -133,6 +150,8 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         system_drawing_field_variant_plan: dict[str, tuple[str, ...]] | None = None,
         price_cell_mode: bool = False,
         price_cell_profile_version: str = PRICE_CELL_PROFILE_VERSION,
+        item_title_mode: bool = False,
+        item_title_profile_version: str = ITEM_TITLE_PROFILE_VERSION_V2,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
@@ -141,8 +160,12 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         self._system_drawing_field_variant_plan = system_drawing_field_variant_plan
         self._price_cell_mode = price_cell_mode
         self._price_cell_profile_version = price_cell_profile_version
+        self._item_title_mode = item_title_mode
+        self._item_title_profile_version = item_title_profile_version
         if system_drawing_batch_mode:
-            if price_cell_mode:
+            if price_cell_mode and item_title_mode:
+                self.backend_version = self.item_title_v2_backend_version
+            elif price_cell_mode:
                 if price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V4:
                     self.backend_version = self.price_cells_v4_backend_version
                 elif price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V3:
@@ -213,9 +236,10 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     def _recognize_system_drawing_batch(self, invocation: OcrInvocation, script_path: Path) -> OcrResult:
         with tempfile.TemporaryDirectory(prefix="cut20-ocr-system-drawing-batch-") as temp_dir_name:
             temp_dir = Path(temp_dir_name)
-            pixel_rois: dict[str, tuple[int, int, int, int]] | None = None
-            preparation_warnings: tuple[str, ...] = ()
-            additional_diagnostics: dict[str, Any] | None = None
+            pixel_rois: dict[str, tuple[int, int, int, int]] = {}
+            preparation_warning_list: list[str] = []
+            additional_diagnostics: dict[str, Any] = {}
+            field_variant_plan = self._system_drawing_field_variant_plan
             preprocessing_mode = "system_drawing_batch_v1"
             if self._price_cell_mode:
                 preprocessing_mode = self._price_cell_profile_version
@@ -228,34 +252,57 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                 try:
                     detection = detector(invocation.image_path)
                 except PriceCellDetectionError as exc:
-                    preparation_warnings = (
-                        "price_cell_anchor_fallback",
-                        exc.code,
+                    preparation_warning_list.extend(
+                        ("price_cell_anchor_fallback", exc.code)
                     )
-                    additional_diagnostics = {
-                        "price_cell_detection": {
-                            "profile_version": self._price_cell_profile_version,
-                            "fallback_used": True,
-                            "error_code": exc.code,
-                        }
+                    additional_diagnostics["price_cell_detection"] = {
+                        "profile_version": self._price_cell_profile_version,
+                        "fallback_used": True,
+                        "error_code": exc.code,
                     }
                 else:
-                    pixel_rois = {
-                        field_name: roi.as_tuple()
-                        for field_name, roi in detection.rois.items()
+                    pixel_rois.update(
+                        {
+                            field_name: roi.as_tuple()
+                            for field_name, roi in detection.rois.items()
+                        }
+                    )
+                    preparation_warning_list.extend(detection.warnings)
+                    additional_diagnostics["price_cell_detection"] = detection.diagnostics
+            if self._item_title_mode:
+                preprocessing_mode = (
+                    f"{preprocessing_mode}+{self._item_title_profile_version}"
+                )
+                try:
+                    title_detection = detect_item_title_roi_v2(invocation.image_path)
+                except ItemTitleDetectionError as exc:
+                    preparation_warning_list.extend(
+                        ("item_title_anchor_fallback", exc.code)
+                    )
+                    additional_diagnostics["item_title_detection"] = {
+                        "profile_version": self._item_title_profile_version,
+                        "fallback_used": True,
+                        "error_code": exc.code,
                     }
-                    preparation_warnings = detection.warnings
-                    additional_diagnostics = {
-                        "price_cell_detection": detection.diagnostics
-                    }
+                    if field_variant_plan is not None:
+                        field_variant_plan = dict(field_variant_plan)
+                        # Fail closed: a fixed title ROI may include the game label
+                        # or unrelated navigation text. Do not OCR it as an item name.
+                        field_variant_plan["item_name"] = ()
+                else:
+                    pixel_rois["item_name"] = title_detection.roi.as_tuple()
+                    preparation_warning_list.extend(title_detection.warnings)
+                    additional_diagnostics["item_title_detection"] = (
+                        title_detection.diagnostics
+                    )
             prepared = prepare_system_drawing_ocr_batch_manifest(
                 image_path=invocation.image_path,
                 layout_profile=invocation.layout_profile,
-                field_variant_names=self._system_drawing_field_variant_plan,
-                pixel_rois=pixel_rois,
+                field_variant_names=field_variant_plan,
+                pixel_rois=pixel_rois or None,
                 preprocessing_mode=preprocessing_mode,
-                additional_diagnostics=additional_diagnostics,
-                preparation_warnings=preparation_warnings,
+                additional_diagnostics=additional_diagnostics or None,
+                preparation_warnings=tuple(dict.fromkeys(preparation_warning_list)),
             )
             input_payload = {
                 **prepared.manifest,
@@ -422,6 +469,17 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             price_cell_mode=True,
             price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
         )
+    if name == "candidate-item-title-v2":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=ITEM_TITLE_V2_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+            item_title_mode=True,
+            item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V2,
+        )
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -541,9 +599,17 @@ def _batch_payload_to_ocr_result(
         best_request: PreparedOcrRequest | None = None
         best_result: dict[str, Any] | None = None
         best_score = -9999
+        selected_text_override: str | None = None
+        title_candidates: list[
+            tuple[PreparedOcrRequest, dict[str, Any], str]
+        ] = []
         field_started = time.perf_counter()
         for request, result in request_results:
             text = str(result.get("raw_text") or "")
+            if field_name == "item_name":
+                title_candidates.append(
+                    (request, result, normalize_item_title_ocr(text))
+                )
             score = _score_recognized_text(field_name, text)
             if score > best_score:
                 best_score = score
@@ -611,6 +677,14 @@ def _batch_payload_to_ocr_result(
                     "error_code": error_code,
                 }
             )
+        if field_name == "item_name" and title_candidates:
+            (
+                best_request,
+                best_result,
+                selected_text_override,
+                title_selection_warnings,
+            ) = _select_item_title_result(title_candidates)
+            warnings.update(title_selection_warnings)
         if best_request is None or best_result is None:
             continue
         for item in per_pipeline:
@@ -626,7 +700,11 @@ def _batch_payload_to_ocr_result(
         field_diag["duration_ms"] = field_elapsed_ms
         fields[field_name] = OcrFieldEvidence(
             field_name=field_name,
-            raw_text=str(best_result.get("raw_text") or ""),
+            raw_text=(
+                selected_text_override
+                if selected_text_override is not None
+                else str(best_result.get("raw_text") or "")
+            ),
             confidence=None,
             confidence_source="unavailable",
             bounding_box=OcrBoundingBox(
@@ -774,6 +852,62 @@ def _score_recognized_text(field_name: str, text: str) -> int:
             score -= 15
     elif len(clean) > 2:
         score += 20
+    return score
+
+
+def _select_item_title_result(
+    candidates: list[tuple[PreparedOcrRequest, dict[str, Any], str]],
+) -> tuple[PreparedOcrRequest, dict[str, Any], str, tuple[str, ...]]:
+    """Select title evidence, but never make it trusted in this candidate.
+
+    Windows title OCR is useful for surfacing a likely value to a reviewer, but
+    diagnostics from v1 showed that two pipelines can agree on the same wrong
+    text.  v2 therefore always adds an item-title Review warning for any
+    non-empty title.  Agreement only determines which value to display.
+    """
+
+    first_request, first_result, _first_text = candidates[0]
+    non_empty = [candidate for candidate in candidates if candidate[2]]
+    if not non_empty:
+        return first_request, first_result, "", ()
+
+    by_key: dict[str, list[tuple[PreparedOcrRequest, dict[str, Any], str]]] = {}
+    for candidate in non_empty:
+        by_key.setdefault(_item_title_agreement_key(candidate[2]), []).append(candidate)
+
+    warnings: set[str] = {ITEM_TITLE_CANDIDATE_REVIEW_WARNING}
+    if len(by_key) == 1:
+        agreeing = next(iter(by_key.values()))
+        selected = max(agreeing, key=lambda candidate: _score_item_title(candidate[2]))
+        if len(agreeing) == 1:
+            warnings.add(ITEM_TITLE_SINGLE_PIPELINE_WARNING)
+        return selected[0], selected[1], selected[2], tuple(sorted(warnings))
+
+    selected = max(non_empty, key=lambda candidate: _score_item_title(candidate[2]))
+    warnings.add(ITEM_TITLE_AMBIGUOUS_WARNING)
+    return selected[0], selected[1], selected[2], tuple(sorted(warnings))
+
+
+def _item_title_agreement_key(value: str) -> str:
+    # Preserve word boundaries: ``A B`` and ``AB`` are not safely equivalent.
+    return normalize_item_title_ocr(value).casefold()
+
+
+def _score_item_title(value: str) -> int:
+    normalized = normalize_item_title_ocr(value)
+    score = sum(
+        1
+        for char in normalized
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    )
+    if re.search(r"\([^()]+\)$", normalized):
+        score += 8
+    if normalized.count("(") == normalized.count(")"):
+        score += 4
+    if normalized.count('"') % 2 == 0 and normalized.count("'") % 2 == 0:
+        score += 2
+    if "�" in normalized:
+        score -= 20
     return score
 
 

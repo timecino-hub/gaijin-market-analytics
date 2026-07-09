@@ -34,6 +34,9 @@ from api.screen_recognition.cross_helper import (
 )
 from api.screen_recognition.evaluate import (
     PRIVATE_FIXTURE_MESSAGE,
+    _compare_item_name,
+    _item_name_review_required,
+    _load_private_ground_truth,
     create_private_ground_truth_template,
     evaluate_private_fixtures,
     regenerate_diagnostics_from_private_report,
@@ -52,14 +55,22 @@ from api.screen_recognition.layouts import (
     validate_layout_match,
 )
 from api.screen_recognition.ocr_backend import (
+    ITEM_TITLE_AMBIGUOUS_WARNING,
+    ITEM_TITLE_CANDIDATE_REVIEW_WARNING,
+    ITEM_TITLE_SINGLE_PIPELINE_WARNING,
     OcrBackendError,
     OcrBackendTimeoutError,
     OcrInvocation,
     WindowsOcrRecognizer,
+    _batch_payload_to_ocr_result,
     _run_windows_helper,
     _score_recognized_text,
     _windows_helper_command,
     get_recognizer,
+)
+from api.screen_recognition.item_titles import (
+    ItemTitleDetectionError,
+    detect_item_title_roi_v2,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -71,7 +82,11 @@ from api.screen_recognition.ocr_candidates import (
     select_price_candidate,
     select_quantity_candidate,
 )
-from api.screen_recognition.parser import normalize_item_name, parse_ocr_contract
+from api.screen_recognition.parser import (
+    normalize_item_name,
+    normalize_item_title_ocr,
+    parse_ocr_contract,
+)
 from api.screen_recognition.preprocessing import (
     DEFAULT_OCR_PREPROCESSING_VARIANTS,
     MAX_NORMALIZED_ROI_PIXELS,
@@ -1992,6 +2007,14 @@ def test_parser_ocr_zero_stays_at_ocr_layer_but_manual_zero_domain_rule_remains(
 
 def test_item_name_safe_normalization_and_no_edit_distance_match() -> None:
     assert normalize_item_name("测 试 Mk.3D （ 甲 国 ）") == "测试 Mk.3D(甲国)"
+    assert normalize_item_title_ocr("  War Thunder  Sd.Kfz. 234/1 （ 德 国 ）  ") == (
+        "Sd.Kfz. 234/1(德国)"
+    )
+    assert normalize_item_title_ocr("Sd.Kf 乙 234 / 4（德国）") == "Sd.Kfz. 234/4(德国)"
+    assert normalize_item_title_ocr("T-IOA（苏联）") == "T-10A(苏联)"
+    assert normalize_item_title_ocr("M551 / 76（美国 〗") == "M551/76(美国)"
+    assert normalize_item_title_ocr("攻击霸主 M k 88（英国）") == "攻击霸主 Mk 88(英国)"
+    assert normalize_item_title_ocr("米格 一 25PD（苏联）") == "米格-25PD(苏联)"
     expected = valid_row(item_name="Synthetic-10A（甲国）")
     recognized = normalize_item_name("Synthetic-IOA（甲国）")
     assert normalize_item_name(expected["item_name"]) != recognized
@@ -2463,6 +2486,7 @@ def test_private_ground_truth_template_uses_paired_fixtures_without_prefilling_t
     assert result.appended_row_count == 2
     assert len(rows) == 2
     assert {row["reviewed"] for row in rows} == {"false"}
+    assert all(row["expected_item_name"] == "" for row in rows)
     assert all(row["expected_best_bid"] == "" and row["expected_best_ask"] == "" for row in rows)
     assert all(not row["fixture_id"].endswith(".png") for row in rows)
 
@@ -2490,6 +2514,79 @@ def test_private_ground_truth_template_appends_without_overwriting_reviewed_rows
     rows_after = read_private_ground_truth_rows(output)
     assert rows_after[0]["expected_best_bid"] == "12.34"
     assert rows_after[1]["expected_best_bid"] == ""
+
+
+def test_private_item_name_accuracy_uses_safe_normalization() -> None:
+    comparison = _compare_item_name("米格-25PD（苏联）", "米格-25PD (苏联)")
+
+    assert comparison["exact_match"] is False
+    assert comparison["normalized_match"] is True
+    assert comparison["wrong_value"] is False
+    assert comparison["error"] is False
+
+
+def test_item_name_review_metric_ignores_unrelated_review_reasons() -> None:
+    assert not _item_name_review_required(
+        {
+            "warnings": ["decimal_separator_normalized"],
+            "errors": ["quantity_ocr_invalid"],
+        }
+    )
+    assert _item_name_review_required(
+        {
+            "warnings": [ITEM_TITLE_AMBIGUOUS_WARNING],
+            "errors": ["quantity_ocr_invalid"],
+        }
+    )
+    assert _item_name_review_required(
+        {
+            "warnings": [ITEM_TITLE_CANDIDATE_REVIEW_WARNING],
+            "errors": ["quantity_ocr_invalid"],
+        }
+    )
+    assert _item_name_review_required(
+        {
+            "warnings": [],
+            "errors": ["item_name_missing"],
+        }
+    )
+
+
+def test_private_ground_truth_keeps_expected_item_name_backward_compatible(tmp_path: Path) -> None:
+    path = tmp_path / "ground-truth.csv"
+    old_fields = [
+        "schema_version",
+        "fixture_id",
+        "browser",
+        "declared_zoom",
+        "sample_label",
+        "expected_best_bid",
+        "expected_best_ask",
+        "expected_bid_count",
+        "expected_ask_count",
+        "expected_top_bid_values",
+        "expected_top_ask_values",
+        "notes",
+        "reviewed",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=old_fields)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "schema_version": "screen-recognition-private-ground-truth/1.0.0",
+                "fixture_id": "fixture-known",
+                "browser": "edge",
+                "declared_zoom": "1",
+                "sample_label": "sample-a",
+                "reviewed": "true",
+            }
+        )
+
+    loaded = _load_private_ground_truth(path, {"fixture-known"})
+
+    assert loaded.errors == ()
+    assert loaded.rows["fixture-known"].expected_item_name is None
 
 
 def test_private_evaluation_help_does_not_initialize_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3348,6 +3445,30 @@ def _roi_overlaps_box(roi: object, box: tuple[int, int, int, int]) -> bool:
     )
 
 
+def _draw_synthetic_item_title_fixture(
+    path: Path,
+    *,
+    active_sell_button: bool = False,
+) -> dict[str, tuple[int, int, int, int]]:
+    image = Image.new("RGB", (1600, 1000), (39, 42, 46))
+    draw = ImageDraw.Draw(image)
+    sell_fill = (42, 130, 109) if active_sell_button else (69, 72, 76)
+    draw.rectangle((350, 600, 670, 680), fill=sell_fill)
+    draw.rectangle((900, 600, 1220, 680), fill=(191, 45, 54))
+    text_fill = (210, 214, 218)
+    draw.rectangle((250, 195, 285, 235), fill=text_fill)
+    draw.rectangle((305, 195, 450, 235), fill=text_fill)
+    draw.rectangle((470, 195, 610, 235), fill=text_fill)
+    draw.rectangle((630, 195, 760, 235), fill=text_fill)
+    draw.rectangle((800, 195, 830, 235), fill=text_fill)
+    image.save(path)
+    return {
+        "game_label": (305, 195, 450, 235),
+        "item_title": (470, 195, 760, 235),
+        "link_icon": (800, 195, 830, 235),
+    }
+
+
 def test_button_anchored_price_cells_extract_compact_price_regions(tmp_path: Path) -> None:
     image = tmp_path / "price-cells.png"
     expected = _draw_synthetic_price_cell_fixture(image)
@@ -3410,6 +3531,30 @@ def test_button_anchored_price_cells_v4_accepts_active_green_sell_button(tmp_pat
     assert _roi_contains_box(detection.rois["best_ask"], expected["best_ask_price"])
     assert detection.diagnostics["profile_version"] == "button-anchored-price-cells-v4"
     assert detection.diagnostics["anchor_detection"] == "button_fill_color_gray_or_active_green"
+
+
+def test_button_anchored_item_title_extracts_only_title_groups(tmp_path: Path) -> None:
+    image = tmp_path / "item-title.png"
+    expected = _draw_synthetic_item_title_fixture(image, active_sell_button=True)
+
+    detection = detect_item_title_roi_v2(image)
+
+    assert _roi_contains_box(detection.roi, expected["item_title"])
+    assert not _roi_overlaps_box(detection.roi, expected["game_label"])
+    assert not _roi_overlaps_box(detection.roi, expected["link_icon"])
+    assert detection.diagnostics["fallback_used"] is False
+    assert detection.diagnostics["group_selection"] == "between_game_label_and_link_icon"
+    assert detection.diagnostics["title_group_count"] == 2
+
+
+def test_button_anchored_item_title_fails_closed_without_buttons(tmp_path: Path) -> None:
+    image = tmp_path / "item-title-no-buttons.png"
+    Image.new("RGB", (1600, 1000), (39, 42, 46)).save(image)
+
+    with pytest.raises(ItemTitleDetectionError) as exc_info:
+        detect_item_title_roi_v2(image)
+
+    assert exc_info.value.code == "item_title_buy_button_not_detected"
 
 
 def test_button_anchored_price_cells_fail_closed_without_action_buttons(tmp_path: Path) -> None:
@@ -3483,6 +3628,25 @@ def test_price_cells_v4_is_production_default_and_candidates_stay_explicit() -> 
     }
 
 
+def test_item_title_candidate_is_explicit_and_adds_two_title_attempts() -> None:
+    default = get_recognizer("windows-ocr")
+    candidate = get_recognizer("candidate-item-title-v2")
+
+    assert isinstance(candidate, WindowsOcrRecognizer)
+    assert default.backend_version == "windows-media-ocr-price-cells-v4"
+    assert candidate.backend_version == "windows-media-ocr-price-cells-v4-item-title-v2"
+    assert candidate._price_cell_mode is True
+    assert candidate._item_title_mode is True
+    assert candidate._item_title_profile_version == "button-anchored-item-title-v2"
+    assert candidate._system_drawing_field_variant_plan == {
+        "best_bid": ("gray_3x", "binary_4x"),
+        "bid_levels": ("gray_3x", "binary_4x"),
+        "best_ask": ("gray_3x", "binary_4x"),
+        "ask_levels": ("gray_3x", "binary_4x"),
+        "item_name": ("gray_3x", "gray_autocontrast_4x"),
+    }
+
+
 def test_price_cell_anchor_fallback_warning_is_preserved_in_ocr_result(tmp_path: Path) -> None:
     from api.screen_recognition.ocr_backend import _batch_payload_to_ocr_result
 
@@ -3506,3 +3670,108 @@ def test_price_cell_anchor_fallback_warning_is_preserved_in_ocr_result(tmp_path:
 
     assert "price_cell_anchor_fallback" in result.warnings
     assert "buy_button_not_detected" in result.warnings
+
+
+def test_item_title_pipeline_agreement_returns_clean_title(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "item_name", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "item_name", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "warnings": ["ocr_confidence_unavailable"],
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "War Thunder Sd.Kfz. 234/1（德国）"),
+                batch_response("p2", "Sd.Kfz. 234/1 (德国)"),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v2",
+    )
+
+    assert result.fields["item_name"].raw_text == "Sd.Kfz. 234/1(德国)"
+    assert ITEM_TITLE_CANDIDATE_REVIEW_WARNING in result.warnings
+    assert ITEM_TITLE_AMBIGUOUS_WARNING not in result.warnings
+    assert ITEM_TITLE_SINGLE_PIPELINE_WARNING not in result.warnings
+
+
+def test_item_title_pipeline_disagreement_forces_review_warning(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "item_name", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "item_name", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "T-10A（苏联）"),
+                batch_response("p2", "T-10A（美国）"),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v2",
+    )
+
+    assert result.fields["item_name"].raw_text
+    assert ITEM_TITLE_AMBIGUOUS_WARNING in result.warnings
+    assert ITEM_TITLE_CANDIDATE_REVIEW_WARNING in result.warnings
+
+
+def test_item_title_word_boundary_disagreement_remains_ambiguous(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "item_name", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "item_name", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "AB（德国）"),
+                batch_response("p2", "A B（德国）"),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v2",
+    )
+
+    assert ITEM_TITLE_AMBIGUOUS_WARNING in result.warnings
+    assert ITEM_TITLE_CANDIDATE_REVIEW_WARNING in result.warnings
+
+
+def test_item_title_single_nonempty_pipeline_forces_review_warning(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "item_name", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "item_name", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "ELC 901（法国）"),
+                batch_response("p2", ""),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v2",
+    )
+
+    assert result.fields["item_name"].raw_text == "ELC 901(法国)"
+    assert ITEM_TITLE_SINGLE_PIPELINE_WARNING in result.warnings
+    assert ITEM_TITLE_CANDIDATE_REVIEW_WARNING in result.warnings

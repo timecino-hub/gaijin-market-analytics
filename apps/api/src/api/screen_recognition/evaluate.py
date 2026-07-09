@@ -29,14 +29,14 @@ from api.screen_recognition.ocr_backend import (
 from api.screen_recognition.ocr_candidates import (
     PRICE_SELECTION_POLICY_PRICE_CELLS_V3,
 )
-from api.screen_recognition.parser import parse_ocr_contract
+from api.screen_recognition.parser import normalize_item_name, parse_ocr_contract
 from api.screen_recognition.private_diagnostics import load_anonymous_diagnostics
 from api.screen_recognition.roi import RoiValidationError, resolve_roi_pixels
 
 
 PRIVATE_FIXTURE_MESSAGE = "no private evaluation fixtures found"
-SCHEMA_VERSION = "screen-recognition-private-evaluation/1.2.0"
-GROUND_TRUTH_SCHEMA_VERSION = "screen-recognition-private-ground-truth/1.0.0"
+SCHEMA_VERSION = "screen-recognition-private-evaluation/1.3.0"
+GROUND_TRUTH_SCHEMA_VERSION = "screen-recognition-private-ground-truth/1.1.0"
 DEFAULT_OCR_TIMEOUT_SECONDS = 60
 GROUND_TRUTH_FILENAME = "ground-truth.csv"
 DIAGNOSTICS_PRIVATE_REPORT_SUFFIX = ".private.json"
@@ -47,6 +47,7 @@ GROUND_TRUTH_FIELDS = [
     "browser",
     "declared_zoom",
     "sample_label",
+    "expected_item_name",
     "expected_best_bid",
     "expected_best_ask",
     "expected_bid_count",
@@ -56,10 +57,17 @@ GROUND_TRUTH_FIELDS = [
     "notes",
     "reviewed",
 ]
+OPTIONAL_GROUND_TRUTH_FIELDS = {"expected_item_name"}
 PRICE_STATUS_VALUES = {"not_visible", "not_applicable"}
 ACCURACY_METRICS = (
     "ground_truth_not_reviewed",
     "reviewed_count",
+    "item_name_exact_match",
+    "item_name_normalized_match",
+    "item_name_missing",
+    "item_name_wrong_value",
+    "item_name_review_required",
+    "item_name_review_false_negative",
     "best_bid_exact_match",
     "best_ask_exact_match",
     "both_exact_match",
@@ -69,6 +77,7 @@ ACCURACY_METRICS = (
     "ask_wrong_value",
     "false_confident_bid",
     "false_confident_ask",
+    "false_confident_item_name",
     "requires_review_true_positive",
     "requires_review_false_negative",
 )
@@ -128,6 +137,7 @@ class GroundTruthRow:
     browser: str | None
     declared_zoom: str | None
     sample_label: str | None
+    expected_item_name: str | None
     expected_best_bid: GroundTruthValue
     expected_best_ask: GroundTruthValue
     expected_bid_count: int | None
@@ -519,7 +529,11 @@ def create_private_ground_truth_template(*, input_dir: Path, output_path: Path) 
         with output_path.open("r", newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
             fieldnames = reader.fieldnames or []
-            missing = [field for field in GROUND_TRUTH_FIELDS if field not in fieldnames]
+            missing = [
+                field
+                for field in GROUND_TRUTH_FIELDS
+                if field not in fieldnames and field not in OPTIONAL_GROUND_TRUTH_FIELDS
+            ]
             if missing:
                 raise GroundTruthCsvError(f"ground_truth_invalid: missing columns {', '.join(missing)}")
             for row in reader:
@@ -606,12 +620,25 @@ def _evaluate_file(
             ocr_result = recognizer.recognize(OcrInvocation(item.path, profile, None))
             timings["ocr_ms"] = int((time.perf_counter() - ocr_started) * 1000)
             progress.detail(f"ocr: done {timings['ocr_ms']}ms")
+            title_detection = ocr_result.diagnostics.get("item_title_detection") or {}
+            title_roi = title_detection.get("roi") if isinstance(title_detection, dict) else None
+            if isinstance(title_roi, dict):
+                try:
+                    roi_pixels["item_name"] = (
+                        int(title_roi["x"]),
+                        int(title_roi["y"]),
+                        int(title_roi["width"]),
+                        int(title_roi["height"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    pass
 
             progress.detail("OCR output parsing: running")
             parse_started = time.perf_counter()
             if ocr_result.backend_version in {
                 WindowsOcrRecognizer.price_cells_v3_backend_version,
                 WindowsOcrRecognizer.price_cells_v4_backend_version,
+                WindowsOcrRecognizer.item_title_v2_backend_version,
             }:
                 contract, parse_warnings, parse_errors = parse_ocr_contract(
                     ocr_result.fields,
@@ -793,7 +820,11 @@ def _load_private_ground_truth(path: Path, known_fixture_ids: set[str]) -> Groun
     with path.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames or []
-        missing = [field for field in GROUND_TRUTH_FIELDS if field not in fieldnames]
+        missing = [
+            field
+            for field in GROUND_TRUTH_FIELDS
+            if field not in fieldnames and field not in OPTIONAL_GROUND_TRUTH_FIELDS
+        ]
         if missing:
             raise GroundTruthCsvError("ground_truth_invalid")
         for line_number, raw in enumerate(reader, start=2):
@@ -810,6 +841,7 @@ def _load_private_ground_truth(path: Path, known_fixture_ids: set[str]) -> Groun
                 browser=_blank_to_none(raw.get("browser")),
                 declared_zoom=_blank_to_none(raw.get("declared_zoom")),
                 sample_label=_blank_to_none(raw.get("sample_label")),
+                expected_item_name=_blank_to_none(raw.get("expected_item_name")),
                 expected_best_bid=_parse_ground_truth_price(raw.get("expected_best_bid"), line_number),
                 expected_best_ask=_parse_ground_truth_price(raw.get("expected_best_ask"), line_number),
                 expected_bid_count=_parse_optional_int(raw.get("expected_bid_count"), line_number),
@@ -848,13 +880,24 @@ def _apply_ground_truth(
         private_result["ground_truth_status"] = "not_reviewed"
         return
     recognized = private_result.get("recognized") or {}
+    actual_item_name = _blank_to_none(recognized.get("item_name"))
     actual_bid = _decimal_or_none(recognized.get("best_bid"))
     actual_ask = _decimal_or_none(recognized.get("best_ask"))
+    item_name = _compare_item_name(row.expected_item_name, actual_item_name)
     bid = _compare_price(row.expected_best_bid, actual_bid)
     ask = _compare_price(row.expected_best_ask, actual_ask)
-    any_error = bid["error"] or ask["error"]
+    any_error = item_name["error"] or bid["error"] or ask["error"]
     requires_review = bool(result["requires_review"])
+    item_name_review_required = _item_name_review_required(result)
     accuracy = {
+        "item_name_exact_match": item_name["exact_match"],
+        "item_name_normalized_match": item_name["normalized_match"],
+        "item_name_missing": item_name["missing"],
+        "item_name_wrong_value": item_name["wrong_value"],
+        "item_name_review_required": item_name_review_required,
+        "item_name_review_false_negative": (
+            item_name["error"] and not item_name_review_required
+        ),
         "best_bid_exact_match": bid["exact_match"],
         "best_ask_exact_match": ask["exact_match"],
         "both_exact_match": bid["exact_match"] is True and ask["exact_match"] is True,
@@ -864,6 +907,9 @@ def _apply_ground_truth(
         "ask_wrong_value": ask["wrong_value"],
         "false_confident_bid": bid["wrong_value"] and not requires_review,
         "false_confident_ask": ask["wrong_value"] and not requires_review,
+        "false_confident_item_name": (
+            item_name["wrong_value"] and not item_name_review_required
+        ),
         "requires_review_true_positive": any_error and requires_review,
         "requires_review_false_negative": any_error and not requires_review,
     }
@@ -872,6 +918,7 @@ def _apply_ground_truth(
     private_result["ground_truth_status"] = "reviewed"
     private_result["accuracy"] = {
         **accuracy,
+        "actual_item_name": actual_item_name,
         "actual_best_bid": None if actual_bid is None else str(actual_bid),
         "actual_best_ask": None if actual_ask is None else str(actual_ask),
     }
@@ -889,6 +936,44 @@ def _compare_price(expected: GroundTruthValue, actual: Decimal | None) -> dict[s
         return {"exact_match": False, "missing": True, "wrong_value": False, "error": True}
     exact = actual == expected.decimal
     return {"exact_match": exact, "missing": False, "wrong_value": not exact, "error": not exact}
+
+
+def _item_name_review_required(result: dict[str, Any]) -> bool:
+    warnings = tuple(str(code) for code in (result.get("warnings") or []))
+    errors = tuple(str(code) for code in (result.get("errors") or []))
+    return (
+        any(code.startswith("item_title_") for code in warnings)
+        or any(code.startswith("item_title_") for code in errors)
+        or any(code in {"item_name_missing", "item_name_ocr_empty"} for code in errors)
+    )
+
+
+def _compare_item_name(expected: str | None, actual: str | None) -> dict[str, bool | None]:
+    if expected is None:
+        return {
+            "exact_match": None,
+            "normalized_match": None,
+            "missing": False,
+            "wrong_value": False,
+            "error": False,
+        }
+    if actual is None:
+        return {
+            "exact_match": False,
+            "normalized_match": False,
+            "missing": True,
+            "wrong_value": False,
+            "error": True,
+        }
+    exact = actual == expected
+    normalized = normalize_item_name(actual) == normalize_item_name(expected)
+    return {
+        "exact_match": exact,
+        "normalized_match": normalized,
+        "missing": False,
+        "wrong_value": not normalized,
+        "error": not normalized,
+    }
 
 
 def _build_accuracy_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -945,6 +1030,7 @@ def _build_private_accuracy_details(private_results: list[dict[str, Any]]) -> li
                 "fixture_id": result["fixture_id"],
                 "expected": result.get("expected"),
                 "recognized": {
+                    "item_name": (result.get("recognized") or {}).get("item_name"),
                     "best_bid": (result.get("recognized") or {}).get("best_bid"),
                     "best_ask": (result.get("recognized") or {}).get("best_ask"),
                 },
@@ -1152,6 +1238,12 @@ def _write_diagnostics_html(
         result = entry["result"]
         anonymous_id = str(entry["anonymous_id"])
         image_path = entry["image_path"]
+        raw_ocr = result.get("raw_ocr") if isinstance(result, dict) else None
+        include_item_name_crop = (
+            isinstance(raw_ocr, dict)
+            and raw_ocr.get("backend_version")
+            == WindowsOcrRecognizer.item_title_v2_backend_version
+        )
         crop_links = _write_roi_crops(
             image_path=image_path,
             input_dir=input_dir,
@@ -1159,6 +1251,7 @@ def _write_diagnostics_html(
             crops_dir=crops_dir,
             anonymous_id=anonymous_id,
             roi_pixels=result.get("roi_pixels") if isinstance(result, dict) else None,
+            include_item_name=include_item_name_crop,
         )
         reviewed = str(result.get("ground_truth_status") == "reviewed").lower()
         status = str(result.get("status") or "unknown")
@@ -1183,7 +1276,8 @@ def _write_diagnostics_html(
             f"<p>expected_fields_filled={html.escape(str(expected_fields_filled).lower())} "
             f"exact_match={html.escape(_exact_match_label(accuracy))}</p>"
             f"<p>{_html_image(image_path, path.parent, 'fixture screenshot')}</p>"
-            f"<p>bid ROI: {_html_link(crop_links.get('best_bid'), path.parent)} "
+            f"<p>title ROI: {_html_link(crop_links.get('item_name'), path.parent)} "
+            f"bid ROI: {_html_link(crop_links.get('best_bid'), path.parent)} "
             f"ask ROI: {_html_link(crop_links.get('best_ask'), path.parent)}</p>"
             f"<pre>{html.escape(json.dumps(_diagnostic_result_summary(result), ensure_ascii=False, indent=2))}</pre>"
             "</section>"
@@ -1349,6 +1443,7 @@ def _write_roi_crops(
     crops_dir: Path,
     anonymous_id: str,
     roi_pixels: Any,
+    include_item_name: bool = False,
 ) -> dict[str, Path]:
     from PIL import Image
 
@@ -1359,7 +1454,10 @@ def _write_roi_crops(
         _validate_path_within(input_dir, image_path)
         info = read_image_info(image_path)
         with Image.open(image_path) as image:
-            for field in ("best_bid", "best_ask"):
+            fields = ("best_bid", "best_ask")
+            if include_item_name:
+                fields = ("item_name", *fields)
+            for field in fields:
                 resolved_pixels = _resolved_roi_pixels(field, roi_pixels, profile, info)
                 if resolved_pixels is None:
                     continue
@@ -1518,7 +1616,13 @@ def _string_or_none(value: Any) -> str | None:
 def _expected_fields_filled(expected: Any) -> bool:
     if not isinstance(expected, dict):
         return False
-    keys = ("expected_best_bid", "expected_best_ask", "expected_bid_count", "expected_ask_count")
+    keys = (
+        "expected_item_name",
+        "expected_best_bid",
+        "expected_best_ask",
+        "expected_bid_count",
+        "expected_ask_count",
+    )
     return any(expected.get(key) not in (None, "", []) for key in keys)
 
 
@@ -1593,6 +1697,7 @@ def _template_row(item: EvaluationFile, input_dir: Path) -> dict[str, str]:
         "browser": item.browser or "",
         "declared_zoom": item.declared_zoom or "",
         "sample_label": item.sample_label,
+        "expected_item_name": "",
         "expected_best_bid": "",
         "expected_best_ask": "",
         "expected_bid_count": "",
@@ -1812,6 +1917,7 @@ def _blank_to_none(value: str | None) -> str | None:
 def _ground_truth_row_to_private_json(row: GroundTruthRow) -> dict[str, Any]:
     return {
         "fixture_id": row.fixture_id,
+        "expected_item_name": row.expected_item_name,
         "expected_best_bid": _ground_truth_value_to_json(row.expected_best_bid),
         "expected_best_ask": _ground_truth_value_to_json(row.expected_best_ask),
         "expected_bid_count": row.expected_bid_count,

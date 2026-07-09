@@ -194,6 +194,7 @@ def _process_entry(
         if ocr_result.backend_version in {
             WindowsOcrRecognizer.price_cells_v3_backend_version,
             WindowsOcrRecognizer.price_cells_v4_backend_version,
+            WindowsOcrRecognizer.item_title_v2_backend_version,
         }:
             recognized, parse_warnings, parse_errors = parse_ocr_contract(
                 ocr_result.fields,
