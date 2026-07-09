@@ -23,8 +23,10 @@ from api.screen_recognition.contracts import (
 from api.screen_recognition.json_util import dump_json_file
 from api.screen_recognition.item_titles import (
     ITEM_TITLE_PROFILE_VERSION_V2,
+    ITEM_TITLE_PROFILE_VERSION_V3,
     ItemTitleDetectionError,
     detect_item_title_roi_v2,
+    detect_item_title_roi_v3,
 )
 from api.screen_recognition.ocr_batch import (
     BATCH_SCHEMA_VERSION,
@@ -54,6 +56,10 @@ SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
 }
 
 ITEM_TITLE_V2_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
+    **SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
+    "item_name": ("gray_3x", "gray_autocontrast_4x"),
+}
+ITEM_TITLE_V3_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
     **SYSTEM_DRAWING_CASCADE_V1_FIELD_VARIANTS,
     "item_name": ("gray_3x", "gray_autocontrast_4x"),
 }
@@ -138,6 +144,7 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     price_cells_v3_backend_version = "windows-media-ocr-price-cells-v3"
     price_cells_v4_backend_version = "windows-media-ocr-price-cells-v4"
     item_title_v2_backend_version = "windows-media-ocr-price-cells-v4-item-title-v2"
+    item_title_v3_backend_version = "windows-media-ocr-price-cells-v4-item-title-v3"
     test_scope = "end_to_end"
 
     def __init__(
@@ -164,7 +171,10 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         self._item_title_profile_version = item_title_profile_version
         if system_drawing_batch_mode:
             if price_cell_mode and item_title_mode:
-                self.backend_version = self.item_title_v2_backend_version
+                if item_title_profile_version == ITEM_TITLE_PROFILE_VERSION_V3:
+                    self.backend_version = self.item_title_v3_backend_version
+                else:
+                    self.backend_version = self.item_title_v2_backend_version
             elif price_cell_mode:
                 if price_cell_profile_version == PRICE_CELL_PROFILE_VERSION_V4:
                     self.backend_version = self.price_cells_v4_backend_version
@@ -274,7 +284,12 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                     f"{preprocessing_mode}+{self._item_title_profile_version}"
                 )
                 try:
-                    title_detection = detect_item_title_roi_v2(invocation.image_path)
+                    title_detector = (
+                        detect_item_title_roi_v3
+                        if self._item_title_profile_version == ITEM_TITLE_PROFILE_VERSION_V3
+                        else detect_item_title_roi_v2
+                    )
+                    title_detection = title_detector(invocation.image_path)
                 except ItemTitleDetectionError as exc:
                     preparation_warning_list.extend(
                         ("item_title_anchor_fallback", exc.code)
@@ -479,6 +494,17 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
             item_title_mode=True,
             item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V2,
+        )
+    if name == "candidate-item-title-v3":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=ITEM_TITLE_V3_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+            item_title_mode=True,
+            item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V3,
         )
     if name == "sidecar":
         return SidecarRecognizer()

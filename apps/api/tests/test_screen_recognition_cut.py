@@ -71,6 +71,7 @@ from api.screen_recognition.ocr_backend import (
 from api.screen_recognition.item_titles import (
     ItemTitleDetectionError,
     detect_item_title_roi_v2,
+    detect_item_title_roi_v3,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -2015,6 +2016,10 @@ def test_item_name_safe_normalization_and_no_edit_distance_match() -> None:
     assert normalize_item_title_ocr("M551 / 76（美国 〗") == "M551/76(美国)"
     assert normalize_item_title_ocr("攻击霸主 M k 88（英国）") == "攻击霸主 Mk 88(英国)"
     assert normalize_item_title_ocr("米格 一 25PD（苏联）") == "米格-25PD(苏联)"
+    assert normalize_item_title_ocr(", 攻击霸主 M k 88（英国）") == "攻击霸主 Mk 88(英国)"
+    assert normalize_item_title_ocr("EF 一 2000 ℃ yborg Tigeru") == "EF-2000 'Cyborg Tiger'"
+    assert normalize_item_title_ocr("负料头像一 \" 呼号 ' - 女 \" \"") == '资料头像--"呼号"雪女""'
+    assert normalize_item_title_ocr("（ 苏 联 〗") == ""
     expected = valid_row(item_name="Synthetic-10A（甲国）")
     recognized = normalize_item_name("Synthetic-IOA（甲国）")
     assert normalize_item_name(expected["item_name"]) != recognized
@@ -3631,13 +3636,17 @@ def test_price_cells_v4_is_production_default_and_candidates_stay_explicit() -> 
 def test_item_title_candidate_is_explicit_and_adds_two_title_attempts() -> None:
     default = get_recognizer("windows-ocr")
     candidate = get_recognizer("candidate-item-title-v2")
+    candidate_v3 = get_recognizer("candidate-item-title-v3")
 
     assert isinstance(candidate, WindowsOcrRecognizer)
     assert default.backend_version == "windows-media-ocr-price-cells-v4"
     assert candidate.backend_version == "windows-media-ocr-price-cells-v4-item-title-v2"
+    assert candidate_v3.backend_version == "windows-media-ocr-price-cells-v4-item-title-v3"
     assert candidate._price_cell_mode is True
     assert candidate._item_title_mode is True
     assert candidate._item_title_profile_version == "button-anchored-item-title-v2"
+    assert candidate_v3._item_title_mode is True
+    assert candidate_v3._item_title_profile_version == "button-anchored-item-title-v3"
     assert candidate._system_drawing_field_variant_plan == {
         "best_bid": ("gray_3x", "binary_4x"),
         "bid_levels": ("gray_3x", "binary_4x"),
@@ -3645,6 +3654,20 @@ def test_item_title_candidate_is_explicit_and_adds_two_title_attempts() -> None:
         "ask_levels": ("gray_3x", "binary_4x"),
         "item_name": ("gray_3x", "gray_autocontrast_4x"),
     }
+    assert candidate_v3._system_drawing_field_variant_plan == candidate._system_drawing_field_variant_plan
+
+
+def test_button_anchored_item_title_v3_uses_wider_safe_padding(tmp_path: Path) -> None:
+    image = tmp_path / "item-title-v3.png"
+    _draw_synthetic_item_title_fixture(image, active_sell_button=True)
+
+    detection_v2 = detect_item_title_roi_v2(image)
+    detection_v3 = detect_item_title_roi_v3(image)
+
+    assert detection_v3.diagnostics["profile_version"] == "button-anchored-item-title-v3"
+    assert detection_v3.roi.x <= detection_v2.roi.x
+    assert detection_v3.roi.width >= detection_v2.roi.width
+    assert detection_v3.diagnostics["fallback_used"] is False
 
 
 def test_price_cell_anchor_fallback_warning_is_preserved_in_ocr_result(tmp_path: Path) -> None:

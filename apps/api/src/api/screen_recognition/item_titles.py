@@ -17,6 +17,7 @@ from api.screen_recognition.roi import PixelRoi
 
 
 ITEM_TITLE_PROFILE_VERSION_V2 = "button-anchored-item-title-v2"
+ITEM_TITLE_PROFILE_VERSION_V3 = "button-anchored-item-title-v3"
 
 
 class ItemTitleDetectionError(ValueError):
@@ -34,6 +35,27 @@ class ItemTitleDetection:
 
 
 def detect_item_title_roi_v2(image_path: Path) -> ItemTitleDetection:
+    return _detect_item_title_roi(
+        image_path,
+        profile_version=ITEM_TITLE_PROFILE_VERSION_V2,
+        wider_padding=False,
+    )
+
+
+def detect_item_title_roi_v3(image_path: Path) -> ItemTitleDetection:
+    return _detect_item_title_roi(
+        image_path,
+        profile_version=ITEM_TITLE_PROFILE_VERSION_V3,
+        wider_padding=True,
+    )
+
+
+def _detect_item_title_roi(
+    image_path: Path,
+    *,
+    profile_version: str,
+    wider_padding: bool,
+) -> ItemTitleDetection:
     """Locate only the item-name text inside the market title bar.
 
     The detector reuses the already validated action-button geometry to infer the
@@ -139,8 +161,16 @@ def detect_item_title_roi_v2(image_path: Path) -> ItemTitleDetection:
     desired_pad_x = max(3, round(button_height * 0.06))
     left_gap = max(0, title_start - groups[1][1])
     right_gap = max(0, groups[-1][0] - title_end)
-    pad_left = min(desired_pad_x, max(2, left_gap // 2))
-    pad_right = min(desired_pad_x, max(2, right_gap // 2))
+    if wider_padding:
+        # Very short Latin titles such as ``BI`` are easy for Windows OCR to
+        # miss when the first glyph starts near the crop edge.  v3 keeps the
+        # same group-based boundaries, but spends more of the already-measured
+        # gap between the stable game label and link icon as OCR context.
+        pad_left = min(max(desired_pad_x, round(button_height * 0.14)), max(2, left_gap - 2))
+        pad_right = min(max(desired_pad_x, round(button_height * 0.10)), max(2, right_gap - 2))
+    else:
+        pad_left = min(desired_pad_x, max(2, left_gap // 2))
+        pad_right = min(desired_pad_x, max(2, right_gap // 2))
     pad_y = max(3, round(button_height * 0.08))
 
     x0 = max(0, title_start - pad_left)
@@ -155,7 +185,7 @@ def detect_item_title_roi_v2(image_path: Path) -> ItemTitleDetection:
 
     roi = PixelRoi(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
     diagnostics = {
-        "profile_version": ITEM_TITLE_PROFILE_VERSION_V2,
+        "profile_version": profile_version,
         "anchor_detection": "price_cell_action_buttons_v4",
         "row_detection": "neutral_text_projection",
         "group_selection": "between_game_label_and_link_icon",

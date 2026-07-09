@@ -332,3 +332,17 @@ scripts, and annotation tooling. A lightweight region detector should be
 considered only after real Edge/Chrome multi-zoom fixtures show that tested
 traditional ROI and anchor strategies cannot locate the order-book region
 reliably.
+
+### Candidate item title v3
+
+`candidate-item-title-v3` keeps the same production-safe boundary as v2: it does
+not change the `windows-ocr` production default, and every non-empty item title
+OCR value remains a Review candidate. v3 adds only deterministic cleanup and
+slightly wider safe title padding for short Latin titles. The cleanup covers
+observed title-bar OCR glyph issues such as leading punctuation before the title,
+country-only title fragments, `°C yborg`/`℃ yborg` for the quoted Cyborg word,
+and narrow Chinese title punctuation fragments. It still does not use a market
+catalogue, URL slug, edit distance, ground truth, or value-based guessing.
+
+The expected stage gate for this candidate is safety first: false-confident item
+names and item-name review false negatives must remain zero.

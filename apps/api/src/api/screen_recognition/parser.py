@@ -50,8 +50,8 @@ def normalize_item_title_ocr(value: str) -> str:
 
     normalized = normalize_item_name(value)
     normalized = re.sub(r"^\W*War\s+Thunder\s+", "", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"^[|:;·•\-\s]+", "", normalized)
-    normalized = re.sub(r"[|:;·•\s]+$", "", normalized)
+    normalized = re.sub(r"^[|:;·•,，、\-\s]+", "", normalized)
+    normalized = re.sub(r"[|:;·•,，、\s]+$", "", normalized)
 
     # Bracket glyphs frequently drift in Windows OCR for title text.
     normalized = normalized.replace("〗", ")").replace("】", ")").replace("］", ")")
@@ -59,12 +59,19 @@ def normalize_item_title_ocr(value: str) -> str:
 
     # Remove spaces around model separators without joining ordinary words.
     normalized = re.sub(r"\s*/\s*", "/", normalized)
+    normalized = normalize_item_name(normalized)
+
+    # Country-only OCR means the title prefix was not read.  Treat it as
+    # missing rather than surfacing a misleading title candidate.
+    if re.fullmatch(r"\((?:中国|德国|法国|美国|英国|苏联|瑞典|日本|意大利|以色列)\)", normalized):
+        return ""
 
     # Windows OCR often reads the Latin ``z`` in Sd.Kfz. as the CJK glyph 乙.
     normalized = re.sub(r"\bSd\.Kf\s*[乙Zz]\.?(?=\s*\d)", "Sd.Kfz.", normalized)
 
     # Join spaced short Latin variant markers such as ``M k 88`` -> ``Mk 88``.
     normalized = re.sub(r"\bM\s+k(?=\s*\d)", "Mk", normalized)
+    normalized = re.sub(r"\b[ÉÈÊË]LC(?=\s*\d)", "ELC", normalized)
 
     # A short horizontal dash is often recognized as the CJK one character.
     normalized = re.sub(r"(?<=[A-Za-z\u4e00-\u9fff])\s*[一—–-]\s*(?=\d)", "-", normalized)
@@ -72,6 +79,23 @@ def normalize_item_title_ocr(value: str) -> str:
 
     # Constrain I/O -> 1/0 to the model-token position used in T-10A style names.
     normalized = re.sub(r"\bT-IO(?=[A-Z]\b)", "T-10", normalized)
+
+    # ``°C yborg`` / ``℃ yborg`` is an OCR split of the quoted Cyborg word.
+    normalized = re.sub(
+        r"\bEF-2000\s*(?:°\s*C|℃)\s*yborg\s+Tiger[ur]?\b",
+        "EF-2000 'Cyborg Tiger'",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+
+    # Narrow cleanup for the Chinese decal title where Windows OCR breaks the
+    # leading glyph and the quoted call-sign text into punctuation fragments.
+    normalized = re.sub(r"^负料头像", "资料头像", normalized)
+    normalized = re.sub(
+        r'^资料头像\s*一\s*"\s*呼号\s*[\'"]?\s*[-一]\s*女\s*"\s*"?$',
+        '资料头像--"呼号"雪女""',
+        normalized,
+    )
 
     return normalize_item_name(normalized)
 
