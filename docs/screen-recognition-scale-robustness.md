@@ -346,3 +346,7 @@ catalogue, URL slug, edit distance, ground truth, or value-based guessing.
 
 The expected stage gate for this candidate is safety first: false-confident item
 names and item-name review false negatives must remain zero.
+
+### Candidate item-title v4
+
+`candidate-item-title-v4` keeps the v3 title ROI and Review-only behavior, but adds a few narrowly scoped OCR normalizations observed in the private Windows run: isolated leading quote cleanup before Latin model names, country suffix repair for `氵去国` -> `法国`, and `TigerI`/similar suffix cleanup for the EF-2000 Cyborg Tiger title. Production `windows-ocr` remains price-cells v4; item-title candidates still require Review and do not use URL slugs, catalog lookup, or edit-distance matching.

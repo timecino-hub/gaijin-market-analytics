@@ -640,6 +640,7 @@ def _evaluate_file(
                 WindowsOcrRecognizer.price_cells_v4_backend_version,
                 WindowsOcrRecognizer.item_title_v2_backend_version,
                 WindowsOcrRecognizer.item_title_v3_backend_version,
+                WindowsOcrRecognizer.item_title_v4_backend_version,
             }:
                 contract, parse_warnings, parse_errors = parse_ocr_contract(
                     ocr_result.fields,
@@ -1246,6 +1247,7 @@ def _write_diagnostics_html(
             in {
                 WindowsOcrRecognizer.item_title_v2_backend_version,
                 WindowsOcrRecognizer.item_title_v3_backend_version,
+                WindowsOcrRecognizer.item_title_v4_backend_version,
             }
         )
         crop_links = _write_roi_crops(

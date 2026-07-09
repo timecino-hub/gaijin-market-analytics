@@ -18,6 +18,7 @@ from api.screen_recognition.roi import PixelRoi
 
 ITEM_TITLE_PROFILE_VERSION_V2 = "button-anchored-item-title-v2"
 ITEM_TITLE_PROFILE_VERSION_V3 = "button-anchored-item-title-v3"
+ITEM_TITLE_PROFILE_VERSION_V4 = "button-anchored-item-title-v4"
 
 
 class ItemTitleDetectionError(ValueError):
@@ -46,6 +47,14 @@ def detect_item_title_roi_v3(image_path: Path) -> ItemTitleDetection:
     return _detect_item_title_roi(
         image_path,
         profile_version=ITEM_TITLE_PROFILE_VERSION_V3,
+        wider_padding=True,
+    )
+
+
+def detect_item_title_roi_v4(image_path: Path) -> ItemTitleDetection:
+    return _detect_item_title_roi(
+        image_path,
+        profile_version=ITEM_TITLE_PROFILE_VERSION_V4,
         wider_padding=True,
     )
 

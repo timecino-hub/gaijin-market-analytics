@@ -51,11 +51,19 @@ def normalize_item_title_ocr(value: str) -> str:
     normalized = normalize_item_name(value)
     normalized = re.sub(r"^\W*War\s+Thunder\s+", "", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"^[|:;·•,，、\-\s]+", "", normalized)
+    # Crops can include the left edge of a link/quote glyph before long Latin
+    # titles. Strip only isolated leading quote marks when the remaining token
+    # starts like a model name; keep internal quotes in decal names intact.
+    normalized = re.sub(r"^[\'\"](?=(?:Sd\.Kf|ELC|EF|T-|M\d|[A-Z]{2,}[-\s]?\d))", "", normalized)
     normalized = re.sub(r"[|:;·•,，、\s]+$", "", normalized)
 
     # Bracket glyphs frequently drift in Windows OCR for title text.
     normalized = normalized.replace("〗", ")").replace("】", ")").replace("］", ")")
     normalized = normalized.replace("〖", "(").replace("【", "(").replace("［", "(")
+
+    # ``法`` is sometimes segmented as the water radical plus ``去`` inside the
+    # country suffix. Keep this scoped to the exact country name in parentheses.
+    normalized = re.sub(r"\(\s*氵\s*去\s*国\s*\)", "(法国)", normalized)
 
     # Remove spaces around model separators without joining ordinary words.
     normalized = re.sub(r"\s*/\s*", "/", normalized)
@@ -82,7 +90,7 @@ def normalize_item_title_ocr(value: str) -> str:
 
     # ``°C yborg`` / ``℃ yborg`` is an OCR split of the quoted Cyborg word.
     normalized = re.sub(
-        r"\bEF-2000\s*(?:°\s*C|℃)\s*yborg\s+Tiger[ur]?\b",
+        r"\bEF-2000\s*(?:°\s*C|℃)\s*yborg\s+Tiger(?:[uril1])?\b",
         "EF-2000 'Cyborg Tiger'",
         normalized,
         flags=re.IGNORECASE,
