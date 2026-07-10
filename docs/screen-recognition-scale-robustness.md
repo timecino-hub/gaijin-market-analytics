@@ -350,3 +350,22 @@ names and item-name review false negatives must remain zero.
 ### Candidate item-title v4
 
 `candidate-item-title-v4` keeps the v3 title ROI and Review-only behavior, but adds a few narrowly scoped OCR normalizations observed in the private Windows run: isolated leading quote cleanup before Latin model names, country suffix repair for `氵去国` -> `法国`, and `TigerI`/similar suffix cleanup for the EF-2000 Cyborg Tiger title. Production `windows-ocr` remains price-cells v4; item-title candidates still require Review and do not use URL slugs, catalog lookup, or edit-distance matching.
+
+
+### Candidate order quantities v1
+
+`candidate-order-quantities-v1` is an explicit diagnostic backend that layers reviewed summary-quantity OCR on top of production price-cells v4 and `candidate-item-title-v4`. Production `windows-ocr` remains `windows-media-ocr-price-cells-v4`. The candidate detects the compact total bid and ask count groups from the same Buy/Sell button anchors used by price-cell v4; it does not use fixed wide table ROIs or infer quantities from prices.
+
+The candidate OCRs two additional fields, `total_bid_quantity` and `total_ask_quantity`, with two preprocessing pipelines each. A normal fixture therefore attempts 14 OCR requests: 8 price cells, 2 item-title crops, and 4 quantity crops. Anchor failures disable quantity OCR and force Review.
+
+All non-empty quantity OCR outputs are Review candidates. The backend emits `order_quantity_candidate_review` for every selected quantity value, `order_quantity_single_pipeline_review` when only one pipeline produces a count, and `order_quantity_ocr_ambiguous` when the two pipelines disagree after deterministic numeric normalization. Quantity values are not used to bypass Review, and the candidate does not use market catalogues, URL slugs, ground truth, account data, or value-based guessing.
+
+The private evaluation report tracks bid/ask count exact matches, missing and wrong count values, `quantity_review_required`, `quantity_review_false_negative`, and false-confident bid/ask quantity errors. A quantity false-confident error means a wrong count was produced while the fixture was not held for Review, and must remain zero before any production promotion can be considered.
+
+### Candidate order quantities v2
+
+`candidate-order-quantities-v2` keeps the v1 Review-only policy but improves recall for small one- and two-digit totals. The v1 Windows run showed that compact digit-only crops were safe but sometimes too tight for Windows OCR, especially for narrow counts such as single digits. v2 therefore widens the compact quantity padding and adds explicit label-anchored summary-line ROIs for `total_bid_quantity_summary` and `total_ask_quantity_summary`.
+
+The backend still uses the same Buy/Sell button anchors as price-cells v4 and does not change production `windows-ocr`, which remains `windows-media-ocr-price-cells-v4`. A normal v2 fixture attempts 18 OCR requests: 8 price cells, 2 item-title crops, 4 compact quantity crops, and 4 summary-line quantity crops. Anchor failures disable all quantity OCR and force Review.
+
+The summary-line crops are parsed only through explicit Chinese summary labels such as `正在购买` and `正在出售`. If compact and summary sources disagree, the parser fails closed with Review rather than choosing a count. All non-empty quantity results remain Review candidates; the candidate does not use market catalogues, URL slugs, ground truth, account data, price-derived inference, or value-based guessing.

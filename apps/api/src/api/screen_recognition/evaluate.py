@@ -68,6 +68,17 @@ ACCURACY_METRICS = (
     "item_name_wrong_value",
     "item_name_review_required",
     "item_name_review_false_negative",
+    "bid_count_exact_match",
+    "ask_count_exact_match",
+    "both_quantity_exact_match",
+    "bid_count_missing",
+    "ask_count_missing",
+    "bid_count_wrong_value",
+    "ask_count_wrong_value",
+    "quantity_review_required",
+    "quantity_review_false_negative",
+    "false_confident_bid_quantity",
+    "false_confident_ask_quantity",
     "best_bid_exact_match",
     "best_ask_exact_match",
     "both_exact_match",
@@ -641,6 +652,8 @@ def _evaluate_file(
                 WindowsOcrRecognizer.item_title_v2_backend_version,
                 WindowsOcrRecognizer.item_title_v3_backend_version,
                 WindowsOcrRecognizer.item_title_v4_backend_version,
+                WindowsOcrRecognizer.order_quantity_v1_backend_version,
+                WindowsOcrRecognizer.order_quantity_v2_backend_version,
             }:
                 contract, parse_warnings, parse_errors = parse_ocr_contract(
                     ocr_result.fields,
@@ -885,12 +898,23 @@ def _apply_ground_truth(
     actual_item_name = _blank_to_none(recognized.get("item_name"))
     actual_bid = _decimal_or_none(recognized.get("best_bid"))
     actual_ask = _decimal_or_none(recognized.get("best_ask"))
+    actual_bid_count = _int_or_none(recognized.get("total_bid_quantity"))
+    actual_ask_count = _int_or_none(recognized.get("total_ask_quantity"))
     item_name = _compare_item_name(row.expected_item_name, actual_item_name)
     bid = _compare_price(row.expected_best_bid, actual_bid)
     ask = _compare_price(row.expected_best_ask, actual_ask)
-    any_error = item_name["error"] or bid["error"] or ask["error"]
+    bid_count = _compare_optional_int(row.expected_bid_count, actual_bid_count)
+    ask_count = _compare_optional_int(row.expected_ask_count, actual_ask_count)
+    any_error = (
+        item_name["error"]
+        or bid["error"]
+        or ask["error"]
+        or bid_count["error"]
+        or ask_count["error"]
+    )
     requires_review = bool(result["requires_review"])
     item_name_review_required = _item_name_review_required(result)
+    quantity_review_required = _quantity_review_required(result)
     accuracy = {
         "item_name_exact_match": item_name["exact_match"],
         "item_name_normalized_match": item_name["normalized_match"],
@@ -899,6 +923,25 @@ def _apply_ground_truth(
         "item_name_review_required": item_name_review_required,
         "item_name_review_false_negative": (
             item_name["error"] and not item_name_review_required
+        ),
+        "bid_count_exact_match": bid_count["exact_match"],
+        "ask_count_exact_match": ask_count["exact_match"],
+        "both_quantity_exact_match": (
+            bid_count["exact_match"] is True and ask_count["exact_match"] is True
+        ),
+        "bid_count_missing": bid_count["missing"],
+        "ask_count_missing": ask_count["missing"],
+        "bid_count_wrong_value": bid_count["wrong_value"],
+        "ask_count_wrong_value": ask_count["wrong_value"],
+        "quantity_review_required": quantity_review_required,
+        "quantity_review_false_negative": (
+            (bid_count["error"] or ask_count["error"]) and not quantity_review_required
+        ),
+        "false_confident_bid_quantity": (
+            bid_count["wrong_value"] and not quantity_review_required
+        ),
+        "false_confident_ask_quantity": (
+            ask_count["wrong_value"] and not quantity_review_required
         ),
         "best_bid_exact_match": bid["exact_match"],
         "best_ask_exact_match": ask["exact_match"],
@@ -923,7 +966,33 @@ def _apply_ground_truth(
         "actual_item_name": actual_item_name,
         "actual_best_bid": None if actual_bid is None else str(actual_bid),
         "actual_best_ask": None if actual_ask is None else str(actual_ask),
+        "actual_bid_count": actual_bid_count,
+        "actual_ask_count": actual_ask_count,
     }
+
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compare_optional_int(expected: int | None, actual: int | None) -> dict[str, bool | None]:
+    if expected is None:
+        return {
+            "exact_match": None,
+            "missing": False,
+            "wrong_value": False,
+            "error": False,
+        }
+    if actual is None:
+        return {"exact_match": False, "missing": True, "wrong_value": False, "error": True}
+    exact = actual == expected
+    return {"exact_match": exact, "missing": False, "wrong_value": not exact, "error": not exact}
 
 
 def _compare_price(expected: GroundTruthValue, actual: Decimal | None) -> dict[str, bool | None]:
@@ -947,6 +1016,28 @@ def _item_name_review_required(result: dict[str, Any]) -> bool:
         any(code.startswith("item_title_") for code in warnings)
         or any(code.startswith("item_title_") for code in errors)
         or any(code in {"item_name_missing", "item_name_ocr_empty"} for code in errors)
+    )
+
+
+def _quantity_review_required(result: dict[str, Any]) -> bool:
+    warnings = tuple(str(code) for code in (result.get("warnings") or []))
+    errors = tuple(str(code) for code in (result.get("errors") or []))
+    return (
+        any(code.startswith("order_quantity_") for code in warnings)
+        or any(code.startswith("order_quantity_") for code in errors)
+        or any(
+            code
+            in {
+                "total_bid_quantity_missing",
+                "total_ask_quantity_missing",
+                "total_bid_quantity_mismatch",
+                "total_ask_quantity_mismatch",
+                "quantity_ocr_invalid",
+                "quantity_candidate_ambiguous",
+                "quantity_label_not_detected",
+            }
+            for code in errors
+        )
     )
 
 
@@ -1035,6 +1126,8 @@ def _build_private_accuracy_details(private_results: list[dict[str, Any]]) -> li
                     "item_name": (result.get("recognized") or {}).get("item_name"),
                     "best_bid": (result.get("recognized") or {}).get("best_bid"),
                     "best_ask": (result.get("recognized") or {}).get("best_ask"),
+                    "total_bid_quantity": (result.get("recognized") or {}).get("total_bid_quantity"),
+                    "total_ask_quantity": (result.get("recognized") or {}).get("total_ask_quantity"),
                 },
                 "accuracy": result.get("accuracy"),
             }

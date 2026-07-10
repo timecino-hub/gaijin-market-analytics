@@ -197,6 +197,8 @@ def _process_entry(
             WindowsOcrRecognizer.item_title_v2_backend_version,
             WindowsOcrRecognizer.item_title_v3_backend_version,
             WindowsOcrRecognizer.item_title_v4_backend_version,
+            WindowsOcrRecognizer.order_quantity_v1_backend_version,
+            WindowsOcrRecognizer.order_quantity_v2_backend_version,
         }:
             recognized, parse_warnings, parse_errors = parse_ocr_contract(
                 ocr_result.fields,

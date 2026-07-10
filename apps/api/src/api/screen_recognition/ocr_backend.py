@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,13 @@ from api.screen_recognition.item_titles import (
     detect_item_title_roi_v2,
     detect_item_title_roi_v3,
     detect_item_title_roi_v4,
+)
+from api.screen_recognition.order_quantities import (
+    ORDER_QUANTITY_PROFILE_VERSION_V1,
+    ORDER_QUANTITY_PROFILE_VERSION_V2,
+    OrderQuantityDetectionError,
+    detect_order_quantity_rois_v1,
+    detect_order_quantity_rois_v2,
 )
 from api.screen_recognition.ocr_batch import (
     BATCH_SCHEMA_VERSION,
@@ -67,9 +74,23 @@ ITEM_TITLE_V3_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
 }
 ITEM_TITLE_V4_FIELD_VARIANTS: dict[str, tuple[str, ...]] = ITEM_TITLE_V3_FIELD_VARIANTS
 
+ORDER_QUANTITY_V1_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
+    **ITEM_TITLE_V4_FIELD_VARIANTS,
+    "total_bid_quantity": ("gray_3x", "binary_4x", "gray_autocontrast_4x"),
+    "total_ask_quantity": ("gray_3x", "binary_4x", "gray_autocontrast_4x"),
+}
+ORDER_QUANTITY_V2_FIELD_VARIANTS: dict[str, tuple[str, ...]] = {
+    **ORDER_QUANTITY_V1_FIELD_VARIANTS,
+    "total_bid_quantity_summary": ("gray_3x", "gray_autocontrast_4x"),
+    "total_ask_quantity_summary": ("gray_3x", "gray_autocontrast_4x"),
+}
+
 ITEM_TITLE_AMBIGUOUS_WARNING = "item_title_ocr_ambiguous"
 ITEM_TITLE_SINGLE_PIPELINE_WARNING = "item_title_single_pipeline_review"
 ITEM_TITLE_CANDIDATE_REVIEW_WARNING = "item_title_candidate_review"
+ORDER_QUANTITY_AMBIGUOUS_WARNING = "order_quantity_ocr_ambiguous"
+ORDER_QUANTITY_SINGLE_PIPELINE_WARNING = "order_quantity_single_pipeline_review"
+ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING = "order_quantity_candidate_review"
 
 
 class OcrBackendError(RuntimeError):
@@ -149,6 +170,8 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
     item_title_v2_backend_version = "windows-media-ocr-price-cells-v4-item-title-v2"
     item_title_v3_backend_version = "windows-media-ocr-price-cells-v4-item-title-v3"
     item_title_v4_backend_version = "windows-media-ocr-price-cells-v4-item-title-v4"
+    order_quantity_v1_backend_version = "windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1"
+    order_quantity_v2_backend_version = "windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v2"
     test_scope = "end_to_end"
 
     def __init__(
@@ -163,6 +186,8 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         price_cell_profile_version: str = PRICE_CELL_PROFILE_VERSION,
         item_title_mode: bool = False,
         item_title_profile_version: str = ITEM_TITLE_PROFILE_VERSION_V2,
+        order_quantity_mode: bool = False,
+        order_quantity_profile_version: str = ORDER_QUANTITY_PROFILE_VERSION_V1,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._legacy_mode = legacy_mode
@@ -173,8 +198,16 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
         self._price_cell_profile_version = price_cell_profile_version
         self._item_title_mode = item_title_mode
         self._item_title_profile_version = item_title_profile_version
+        self._order_quantity_mode = order_quantity_mode
+        self._order_quantity_profile_version = order_quantity_profile_version
         if system_drawing_batch_mode:
-            if price_cell_mode and item_title_mode:
+            if price_cell_mode and item_title_mode and order_quantity_mode:
+                self.backend_version = (
+                    self.order_quantity_v2_backend_version
+                    if order_quantity_profile_version == ORDER_QUANTITY_PROFILE_VERSION_V2
+                    else self.order_quantity_v1_backend_version
+                )
+            elif price_cell_mode and item_title_mode:
                 if item_title_profile_version == ITEM_TITLE_PROFILE_VERSION_V4:
                     self.backend_version = self.item_title_v4_backend_version
                 elif item_title_profile_version == ITEM_TITLE_PROFILE_VERSION_V3:
@@ -316,6 +349,43 @@ class WindowsOcrRecognizer(ScreenshotRecognizer):
                     preparation_warning_list.extend(title_detection.warnings)
                     additional_diagnostics["item_title_detection"] = (
                         title_detection.diagnostics
+                    )
+            if self._order_quantity_mode:
+                preprocessing_mode = (
+                    f"{preprocessing_mode}+{self._order_quantity_profile_version}"
+                )
+                try:
+                    quantity_detector = (
+                        detect_order_quantity_rois_v2
+                        if self._order_quantity_profile_version == ORDER_QUANTITY_PROFILE_VERSION_V2
+                        else detect_order_quantity_rois_v1
+                    )
+                    quantity_detection = quantity_detector(invocation.image_path)
+                except OrderQuantityDetectionError as exc:
+                    preparation_warning_list.extend(
+                        ("order_quantity_anchor_fallback", exc.code)
+                    )
+                    additional_diagnostics["order_quantity_detection"] = {
+                        "profile_version": self._order_quantity_profile_version,
+                        "fallback_used": True,
+                        "error_code": exc.code,
+                    }
+                    if field_variant_plan is not None:
+                        field_variant_plan = dict(field_variant_plan)
+                        field_variant_plan["total_bid_quantity"] = ()
+                        field_variant_plan["total_ask_quantity"] = ()
+                        field_variant_plan["total_bid_quantity_summary"] = ()
+                        field_variant_plan["total_ask_quantity_summary"] = ()
+                else:
+                    pixel_rois.update(
+                        {
+                            field_name: roi.as_tuple()
+                            for field_name, roi in quantity_detection.rois.items()
+                        }
+                    )
+                    preparation_warning_list.extend(quantity_detection.warnings)
+                    additional_diagnostics["order_quantity_detection"] = (
+                        quantity_detection.diagnostics
                     )
             prepared = prepare_system_drawing_ocr_batch_manifest(
                 image_path=invocation.image_path,
@@ -524,6 +594,31 @@ def get_recognizer(name: str, *, timeout_seconds: int = 60) -> ScreenshotRecogni
             item_title_mode=True,
             item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V4,
         )
+    if name == "candidate-order-quantities-v1":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=ORDER_QUANTITY_V1_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+            item_title_mode=True,
+            item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V4,
+            order_quantity_mode=True,
+        )
+    if name == "candidate-order-quantities-v2":
+        return WindowsOcrRecognizer(
+            timeout_seconds=timeout_seconds,
+            system_drawing_batch_mode=True,
+            system_drawing_pixel_implementation="lockbits-v1",
+            system_drawing_field_variant_plan=ORDER_QUANTITY_V2_FIELD_VARIANTS,
+            price_cell_mode=True,
+            price_cell_profile_version=PRICE_CELL_PROFILE_VERSION_V4,
+            item_title_mode=True,
+            item_title_profile_version=ITEM_TITLE_PROFILE_VERSION_V4,
+            order_quantity_mode=True,
+            order_quantity_profile_version=ORDER_QUANTITY_PROFILE_VERSION_V2,
+        )
     if name == "sidecar":
         return SidecarRecognizer()
     if name in {"not-configured", "none"}:
@@ -647,12 +742,19 @@ def _batch_payload_to_ocr_result(
         title_candidates: list[
             tuple[PreparedOcrRequest, dict[str, Any], str]
         ] = []
+        quantity_candidates: list[
+            tuple[PreparedOcrRequest, dict[str, Any], str]
+        ] = []
         field_started = time.perf_counter()
         for request, result in request_results:
             text = str(result.get("raw_text") or "")
             if field_name == "item_name":
                 title_candidates.append(
                     (request, result, normalize_item_title_ocr(text))
+                )
+            if field_name in {"total_bid_quantity", "total_ask_quantity"}:
+                quantity_candidates.append(
+                    (request, result, _normalize_quantity_text(text))
                 )
             score = _score_recognized_text(field_name, text)
             if score > best_score:
@@ -729,6 +831,14 @@ def _batch_payload_to_ocr_result(
                 title_selection_warnings,
             ) = _select_item_title_result(title_candidates)
             warnings.update(title_selection_warnings)
+        if field_name in {"total_bid_quantity", "total_ask_quantity"} and quantity_candidates:
+            (
+                best_request,
+                best_result,
+                selected_text_override,
+                quantity_selection_warnings,
+            ) = _select_order_quantity_result(quantity_candidates)
+            warnings.update(quantity_selection_warnings)
         if best_request is None or best_result is None:
             continue
         for item in per_pipeline:
@@ -769,6 +879,12 @@ def _batch_payload_to_ocr_result(
         if helper_total_ms is not None
         else None
     )
+    compact_summary_suppressed = _prefer_compact_order_quantity_fields(fields)
+    for field_name in compact_summary_suppressed:
+        fields_diagnostics.setdefault(field_name, {})[
+            "suppressed_by_compact_order_quantity"
+        ] = True
+
     merged_diagnostics = {
         **python_diagnostics,
         **diagnostics,
@@ -782,6 +898,7 @@ def _batch_payload_to_ocr_result(
         "private_pipeline_attempts": private_pipeline_attempts,
         "batch_response_mapping": mapping_diagnostics,
         "early_exit_used": False,
+        "compact_summary_suppressed_fields": compact_summary_suppressed,
     }
     return OcrResult(
         backend_name=WindowsOcrRecognizer.backend_name,
@@ -951,6 +1068,137 @@ def _score_item_title(value: str) -> int:
     if normalized.count('"') % 2 == 0 and normalized.count("'") % 2 == 0:
         score += 2
     if "�" in normalized:
+        score -= 20
+    return score
+
+
+
+def _select_order_quantity_result(
+    candidates: list[tuple[PreparedOcrRequest, dict[str, Any], str]],
+) -> tuple[PreparedOcrRequest, dict[str, Any], str, tuple[str, ...]]:
+    """Select a compact quantity OCR result, but keep it Review-only.
+
+    Counts are less business-critical than prices but are still used to decide
+    whether a screenshot can leave manual Review.  This candidate therefore
+    surfaces a normalized count while adding an order-quantity Review warning for
+    every non-empty result.
+    """
+
+    first_request, first_result, _first_text = candidates[0]
+    non_empty = [candidate for candidate in candidates if candidate[2]]
+    if not non_empty:
+        return first_request, first_result, "", ()
+
+    warnings: set[str] = {ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING}
+    by_key: dict[str, list[tuple[PreparedOcrRequest, dict[str, Any], str]]] = {}
+    for candidate in non_empty:
+        by_key.setdefault(candidate[2], []).append(candidate)
+
+    if len(by_key) == 1:
+        agreeing = next(iter(by_key.values()))
+        selected = max(agreeing, key=lambda candidate: _score_order_quantity(candidate[2]))
+        if len(agreeing) == 1:
+            warnings.add(ORDER_QUANTITY_SINGLE_PIPELINE_WARNING)
+        return selected[0], selected[1], selected[2], tuple(sorted(warnings))
+
+    selected = max(non_empty, key=lambda candidate: _score_order_quantity(candidate[2]))
+    warnings.add(ORDER_QUANTITY_AMBIGUOUS_WARNING)
+    return selected[0], selected[1], selected[2], tuple(sorted(warnings))
+
+
+def _prefer_compact_order_quantity_fields(
+    fields: dict[str, OcrFieldEvidence],
+) -> tuple[str, ...]:
+    """Suppress noisy full-summary fields when the compact count is available.
+
+    The v2 backend keeps full summary OCR as a fallback for narrow compact crops.
+    When the compact field already normalized to a count, keeping the full summary
+    sentence can create false conflicts because Windows OCR often drops one digit
+    from the quantity but still reads the adjacent price.  Preserve the diagnostic
+    evidence in ``private_pipeline_attempts`` and blank only the parsed public
+    field so the parser uses the safer compact count.
+    """
+
+    suppressed: list[str] = []
+    for side in ("bid", "ask"):
+        compact_name = f"total_{side}_quantity"
+        summary_name = f"total_{side}_quantity_summary"
+        compact_field = fields.get(compact_name)
+        summary_field = fields.get(summary_name)
+        if compact_field is None or summary_field is None:
+            continue
+        if not _normalize_quantity_text(compact_field.raw_text):
+            continue
+        fields[summary_name] = replace(
+            summary_field,
+            raw_text="",
+            lines=(),
+            warnings=tuple(
+                dict.fromkeys(
+                    (
+                        *summary_field.warnings,
+                        "suppressed_by_compact_order_quantity",
+                    )
+                )
+            ),
+        )
+        suppressed.append(summary_name)
+    return tuple(suppressed)
+
+
+def _normalize_quantity_text(value: str) -> str:
+    contextual = _extract_contextual_quantity_text(value)
+    if contextual:
+        return contextual
+    normalized, _corrections, _contains_decimal = normalize_numeric_ocr_token(value)
+    if re.fullmatch(r"\d+(?:\.0+)?", normalized):
+        return normalized.split(".", 1)[0]
+    digits = re.findall(r"\d+", normalized)
+    if digits and re.fullmatch(r"[\d\s]+", normalized):
+        return "".join(digits)
+    return ""
+
+
+def _extract_contextual_quantity_text(value: str) -> str:
+    normalized = (
+        value.replace("：", ":")
+        .replace("·", ".")
+        .replace("，", " ")
+        .replace(",", " ")
+    )
+    patterns = (
+        r"(?:购\s*买|出\s*售|购买|出售|买|售|:)\s*([0-9０-９lI|]{1,6})(?=\s*(?:从|为|為|更|$))",
+        r"([0-9０-９lI|]{1,6})\s*(?=(?:从|为|為))",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if match is None:
+            continue
+        candidate = _normalize_contextual_quantity_token(match.group(1))
+        if candidate:
+            return candidate
+    return ""
+
+
+def _normalize_contextual_quantity_token(value: str) -> str:
+    normalized, _corrections, contains_decimal = normalize_numeric_ocr_token(value)
+    if contains_decimal:
+        return ""
+    digits = "".join(re.findall(r"\d", normalized))
+    if not digits or len(digits) > 6:
+        return ""
+    return digits
+
+
+def _score_order_quantity(value: str) -> int:
+    if not value:
+        return 0
+    score = 20
+    if re.fullmatch(r"\d+", value):
+        score += 40
+    if 1 <= len(value) <= 5:
+        score += 10
+    if len(value) > 6:
         score -= 20
     return score
 

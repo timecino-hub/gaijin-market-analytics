@@ -58,11 +58,15 @@ from api.screen_recognition.ocr_backend import (
     ITEM_TITLE_AMBIGUOUS_WARNING,
     ITEM_TITLE_CANDIDATE_REVIEW_WARNING,
     ITEM_TITLE_SINGLE_PIPELINE_WARNING,
+    ORDER_QUANTITY_AMBIGUOUS_WARNING,
+    ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING,
+    ORDER_QUANTITY_SINGLE_PIPELINE_WARNING,
     OcrBackendError,
     OcrBackendTimeoutError,
     OcrInvocation,
     WindowsOcrRecognizer,
     _batch_payload_to_ocr_result,
+    _normalize_quantity_text,
     _run_windows_helper,
     _score_recognized_text,
     _windows_helper_command,
@@ -73,6 +77,10 @@ from api.screen_recognition.item_titles import (
     detect_item_title_roi_v2,
     detect_item_title_roi_v3,
     detect_item_title_roi_v4,
+)
+from api.screen_recognition.order_quantities import (
+    detect_order_quantity_rois_v1,
+    detect_order_quantity_rois_v2,
 )
 from api.screen_recognition.ocr_candidates import (
     FIELD_OCR_PIPELINES,
@@ -3427,6 +3435,8 @@ def _draw_synthetic_price_cell_fixture(
         ask_summary_right = 892
     return {
         "best_bid_price": (bid_summary_left, 335, bid_summary_right, 349),
+        "bid_summary_quantity": (270, 335, 294, 349),
+        "ask_summary_quantity": (790, 335, 814, 349),
         "bid_quantity": (260, 420, 270, 434),
         "bid_level_price": (310, 420, 360, 434),
         "best_ask_price": (ask_summary_left, 335, ask_summary_right, 349),
@@ -3495,6 +3505,51 @@ def test_button_anchored_price_cells_extract_compact_price_regions(tmp_path: Pat
     assert detection.diagnostics["sides"]["bid"]["summary_leading_fragment_merged"] is False
     assert detection.diagnostics["sides"]["ask"]["summary_leading_fragment_merged"] is False
     assert detection.diagnostics["anchors"]["bid_button"]["x"] < detection.diagnostics["anchors"]["ask_button"]["x"]
+
+
+
+def test_button_anchored_order_quantities_extract_summary_counts(tmp_path: Path) -> None:
+    image = tmp_path / "order-quantities.png"
+    expected = _draw_synthetic_price_cell_fixture(image, active_sell_button=True)
+
+    detection = detect_order_quantity_rois_v1(image)
+
+    assert set(detection.rois) == {"total_bid_quantity", "total_ask_quantity"}
+    assert _roi_contains_box(detection.rois["total_bid_quantity"], expected["bid_summary_quantity"])
+    assert _roi_contains_box(detection.rois["total_ask_quantity"], expected["ask_summary_quantity"])
+    assert not _roi_overlaps_box(detection.rois["total_bid_quantity"], expected["best_bid_price"])
+    assert not _roi_overlaps_box(detection.rois["total_ask_quantity"], expected["best_ask_price"])
+    assert detection.diagnostics["fallback_used"] is False
+    assert detection.diagnostics["profile_version"] == "button-anchored-order-quantities-v1"
+
+
+def test_button_anchored_order_quantities_v2_adds_label_anchored_summary_rois(tmp_path: Path) -> None:
+    image = tmp_path / "order-quantities-v2.png"
+    expected = _draw_synthetic_price_cell_fixture(image, active_sell_button=True)
+
+    detection = detect_order_quantity_rois_v2(image)
+
+    assert set(detection.rois) == {
+        "total_bid_quantity",
+        "total_ask_quantity",
+        "total_bid_quantity_summary",
+        "total_ask_quantity_summary",
+    }
+    assert _roi_contains_box(detection.rois["total_bid_quantity"], expected["bid_summary_quantity"])
+    assert _roi_contains_box(detection.rois["total_ask_quantity"], expected["ask_summary_quantity"])
+    assert _roi_contains_box(
+        detection.rois["total_bid_quantity_summary"], expected["bid_summary_quantity"]
+    )
+    assert _roi_contains_box(
+        detection.rois["total_ask_quantity_summary"], expected["ask_summary_quantity"]
+    )
+    assert not _roi_overlaps_box(detection.rois["total_bid_quantity"], expected["best_bid_price"])
+    assert not _roi_overlaps_box(detection.rois["total_ask_quantity"], expected["best_ask_price"])
+    assert detection.rois["total_bid_quantity"].width > detect_order_quantity_rois_v1(
+        image
+    ).rois["total_bid_quantity"].width
+    assert detection.diagnostics["fallback_used"] is False
+    assert detection.diagnostics["profile_version"] == "button-anchored-order-quantities-v2"
 
 
 def test_button_anchored_price_cells_merge_detached_leading_digit(tmp_path: Path) -> None:
@@ -3810,3 +3865,248 @@ def test_item_title_single_nonempty_pipeline_forces_review_warning(tmp_path: Pat
     assert result.fields["item_name"].raw_text == "ELC 901(法国)"
     assert ITEM_TITLE_SINGLE_PIPELINE_WARNING in result.warnings
     assert ITEM_TITLE_CANDIDATE_REVIEW_WARNING in result.warnings
+
+
+
+def test_order_quantity_backend_is_reviewed_candidate_without_changing_default() -> None:
+    default = get_recognizer("windows-ocr")
+    v1 = get_recognizer("candidate-order-quantities-v1")
+    v2 = get_recognizer("candidate-order-quantities-v2")
+
+    assert default.backend_version == "windows-media-ocr-price-cells-v4"
+    assert v1.backend_version == (
+        "windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1"
+    )
+    assert v2.backend_version == (
+        "windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v2"
+    )
+    assert v1._system_drawing_field_variant_plan["total_bid_quantity"] == (
+        "gray_3x",
+        "binary_4x",
+        "gray_autocontrast_4x",
+    )
+    assert v1._system_drawing_field_variant_plan["total_ask_quantity"] == (
+        "gray_3x",
+        "binary_4x",
+        "gray_autocontrast_4x",
+    )
+    assert v2._system_drawing_field_variant_plan["total_bid_quantity_summary"] == (
+        "gray_3x",
+        "gray_autocontrast_4x",
+    )
+    assert v2._system_drawing_field_variant_plan["total_ask_quantity_summary"] == (
+        "gray_3x",
+        "gray_autocontrast_4x",
+    )
+
+
+def test_order_quantity_pipeline_agreement_normalizes_spaced_digits(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "total_bid_quantity", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "total_bid_quantity", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "1 136"),
+                batch_response("p2", "1136"),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1",
+    )
+
+    assert result.fields["total_bid_quantity"].raw_text == "1136"
+    assert ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING in result.warnings
+    assert ORDER_QUANTITY_AMBIGUOUS_WARNING not in result.warnings
+    assert ORDER_QUANTITY_SINGLE_PIPELINE_WARNING not in result.warnings
+
+
+def test_order_quantity_confusable_pipeline_agreement_still_forces_review(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "total_ask_quantity", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "total_ask_quantity", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", "201"), batch_response("p2", "20l")],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1",
+    )
+
+    assert result.fields["total_ask_quantity"].raw_text == "201"
+    assert ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING in result.warnings
+    assert ORDER_QUANTITY_AMBIGUOUS_WARNING not in result.warnings
+
+
+
+def test_order_quantity_pipeline_disagreement_remains_reviewed(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "total_ask_quantity", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "total_ask_quantity", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", "201"), batch_response("p2", "211")],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1",
+    )
+
+    assert result.fields["total_ask_quantity"].raw_text in {"201", "211"}
+    assert ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING in result.warnings
+    assert ORDER_QUANTITY_AMBIGUOUS_WARNING in result.warnings
+
+def test_order_quantity_single_pipeline_forces_review(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "total_ask_quantity", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "total_ask_quantity", "gray_autocontrast_4x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [batch_response("p1", ""), batch_response("p2", "68")],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v1",
+    )
+
+    assert result.fields["total_ask_quantity"].raw_text == "68"
+    assert ORDER_QUANTITY_SINGLE_PIPELINE_WARNING in result.warnings
+    assert ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING in result.warnings
+
+
+def test_order_quantity_contextual_phrase_normalizes_count_before_connector() -> None:
+    assert _normalize_quantity_text("正 在 购 买 ： 15 从 60 · 01") == "15"
+    assert _normalize_quantity_text("正 在 出 售 ： 更 高 70 为 77 · 00") == "70"
+    assert _normalize_quantity_text("正 在 购 买 ： 从 106 · 04 更 低") == ""
+
+
+def test_order_quantity_summary_is_suppressed_when_compact_count_exists(tmp_path: Path) -> None:
+    requests = (
+        batch_request(tmp_path, "r0001", "total_bid_quantity", "gray_3x", "p1"),
+        batch_request(tmp_path, "r0002", "total_bid_quantity_summary", "gray_3x", "p2"),
+    )
+    diagnostics = batch_python_diagnostics(requests)
+
+    result = _batch_payload_to_ocr_result(
+        {
+            "diagnostics": {"helper_total_duration_ms": 1},
+            "results": [
+                batch_response("p1", "42"),
+                batch_response("p2", "正 在 购 买 ： 2 从 2 更 低"),
+            ],
+        },
+        requests,
+        diagnostics,
+        helper_duration_ms=2,
+        backend_version="windows-media-ocr-price-cells-v4-item-title-v4-order-quantity-v2",
+    )
+
+    assert result.fields["total_bid_quantity"].raw_text == "42"
+    assert result.fields["total_bid_quantity_summary"].raw_text == ""
+    assert result.diagnostics["compact_summary_suppressed_fields"] == (
+        "total_bid_quantity_summary",
+    )
+    assert "suppressed_by_compact_order_quantity" in result.fields[
+        "total_bid_quantity_summary"
+    ].warnings
+
+
+def test_private_evaluation_tracks_quantity_review_false_negatives() -> None:
+    result = {"requires_review": False, "warnings": [], "errors": []}
+    private_result = {
+        "recognized": {
+            "item_name": None,
+            "best_bid": None,
+            "best_ask": None,
+            "total_bid_quantity": 41,
+            "total_ask_quantity": 201,
+        }
+    }
+    row = type(
+        "Row",
+        (),
+        {
+            "fixture_id": "fixture-test",
+            "reviewed": True,
+            "notes": "",
+            "expected_top_bid_values": (),
+            "expected_top_ask_values": (),
+            "expected_item_name": None,
+            "expected_best_bid": type("Price", (), {"decimal": None, "status": None})(),
+            "expected_best_ask": type("Price", (), {"decimal": None, "status": None})(),
+            "expected_bid_count": 42,
+            "expected_ask_count": 201,
+        },
+    )()
+
+    from api.screen_recognition.evaluate import _apply_ground_truth
+
+    _apply_ground_truth(result, private_result, row)
+
+    assert result["accuracy"]["bid_count_wrong_value"] is True
+    assert result["accuracy"]["ask_count_exact_match"] is True
+    assert result["accuracy"]["false_confident_bid_quantity"] is True
+    assert result["accuracy"]["quantity_review_false_negative"] is True
+
+
+def test_private_evaluation_treats_order_quantity_warning_as_review() -> None:
+    result = {
+        "requires_review": True,
+        "warnings": [ORDER_QUANTITY_CANDIDATE_REVIEW_WARNING],
+        "errors": [],
+    }
+    private_result = {
+        "recognized": {
+            "item_name": None,
+            "best_bid": None,
+            "best_ask": None,
+            "total_bid_quantity": 41,
+            "total_ask_quantity": 201,
+        }
+    }
+    row = type(
+        "Row",
+        (),
+        {
+            "fixture_id": "fixture-test",
+            "reviewed": True,
+            "notes": "",
+            "expected_top_bid_values": (),
+            "expected_top_ask_values": (),
+            "expected_item_name": None,
+            "expected_best_bid": type("Price", (), {"decimal": None, "status": None})(),
+            "expected_best_ask": type("Price", (), {"decimal": None, "status": None})(),
+            "expected_bid_count": 42,
+            "expected_ask_count": 201,
+        },
+    )()
+
+    from api.screen_recognition.evaluate import _apply_ground_truth
+
+    _apply_ground_truth(result, private_result, row)
+
+    assert result["accuracy"]["quantity_review_required"] is True
+    assert result["accuracy"]["false_confident_bid_quantity"] is False
+    assert result["accuracy"]["quantity_review_false_negative"] is False
