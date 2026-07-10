@@ -34,7 +34,9 @@ def test_capabilities_report_local_review_boundary(client: TestClient) -> None:
     assert body["max_image_pixels"] == 40_000_000
     assert body["store_capacity"] == 100
     assert body["store_ttl_seconds"] == 7200
-    assert body["database_written"] is False
+    assert body["database_written"] is True
+    assert body["confirmed_review_import_available"] is True
+    assert body["manual_item_creation_available"] is False
     assert body["handles_history_images"] is False
 
 
@@ -45,6 +47,7 @@ def test_openapi_exposes_local_review_and_extension_bridge_paths(client: TestCli
     paths = response.json()["paths"]
     assert "/api/v1/local-recognition/reviews" in paths
     assert "/api/v1/local-recognition/reviews/{review_id}/confirm" in paths
+    assert "/api/v1/local-recognition/reviews/{review_id}/import" in paths
     assert "/api/v1/local-recognition/reviews/{review_id}/unreadable" in paths
     assert "/api/v1/local-recognition/pairing-codes" in paths
     assert "/api/v1/local-recognition/pair" in paths

@@ -2,7 +2,9 @@
 
 This workflow is a local-only alpha path for manually reviewed current market
 screenshots. It does not access Gaijin Market, automate a browser, read cookies,
-write the database, generate CSV files, or perform trading actions.
+generate CSV files, or perform trading actions. A confirmed candidate can be
+explicitly imported into the local database as a market snapshot for an
+existing item; confirmation alone never writes the database.
 
 ## Scope
 
@@ -15,11 +17,13 @@ upload PNG/JPEG
 -> show OCR values and evidence
 -> manually confirm item identity, prices, quantities, and observed_at
 -> generate reviewed candidate JSON
+-> optionally click an explicit import action
+-> create one audited market snapshot for an existing item
 ```
 
 Deferred scope includes `_1` history screenshots, historical charts, tooltip
 recognition, browser extension source code, automatic screenshots, community
-submission, CSV generation, market snapshot writes, and any account or trading
+submission, CSV generation, automatic item creation, and any account or trading
 action. The in-repository Local Extension Bridge is documented separately in
 `docs/local-extension-bridge.md`; it accepts authenticated future extension
 uploads but does not implement the extension itself.
@@ -36,6 +40,8 @@ single-process local alpha environment.
 - PNG/JPEG only
 - records are lost when the API process restarts
 - terminal records also remain temporary
+- successful imports persist independently in `market_snapshots` and
+  `screen_review_imports`
 - source screenshots are deleted in the OCR task `finally` path
 - no screenshots, debug crops, overlays, or review data are written to the
   repository or a persistent data directory
@@ -56,6 +62,12 @@ The review API lives under:
 /api/v1/local-recognition
 ```
 
+Every route in this namespace rejects non-loopback clients. Manual browser
+uploads also reject an `Origin` header that is not in `CORS_ALLOWED_ORIGINS`;
+requests from local command-line tools may omit `Origin`. This prevents a
+remote client or an unrelated website from using the local OCR service as a
+resource-exhaustion target.
+
 Endpoints:
 
 ```text
@@ -66,6 +78,7 @@ DELETE /reviews?confirm=true
 GET    /reviews/{review_id}
 PATCH  /reviews/{review_id}
 POST   /reviews/{review_id}/confirm
+POST   /reviews/{review_id}/import
 POST   /reviews/{review_id}/reject
 POST   /reviews/{review_id}/unreadable
 DELETE /reviews/{review_id}
@@ -98,7 +111,8 @@ processing / pending_review -> expired
 ```
 
 Only `pending_review` can be patched, confirmed, rejected, or marked unreadable.
-Terminal and expired reviews cannot be edited.
+Only `confirmed` and `confirmed_with_edits` reviews can be imported. Terminal
+and expired reviews cannot be edited.
 
 ## Image Validation
 
@@ -158,15 +172,38 @@ Confirmation returns a candidate object with:
 - `candidate_version = screen_review_candidate_v1`
 - Decimal prices serialized as strings
 - `null` preserved as `null`
-- `imported = false`
-- `database_written = false`
-- `market_snapshot_created = false`
+- import-state flags initially set to `false`
+- database IDs and `imported_at` initially set to `null`
 - `quantity_semantics = screenshot_display_quantity`
 - `csv_quantity_mapping = not_mapped_to_ask_count_or_bid_count`
 
-The candidate is not a formal market snapshot and is not imported
-automatically. The web page can copy or download the single candidate JSON in
-the browser.
+The candidate is not imported automatically. The web page can copy or download
+the single candidate JSON, then explicitly call the import endpoint. A
+successful import updates the in-memory candidate flags and IDs.
+
+## Confirmed Review Import
+
+`POST /reviews/{review_id}/import` is an explicit, idempotent database action.
+It accepts only confirmed reviews and only an existing item whose id, key, and
+name still match the confirmed candidate.
+
+A successful import creates:
+
+- one `market_snapshots` row containing `best_bid`, `best_ask`, and
+  `observed_at`;
+- one `screen_review_imports` audit row containing the immutable candidate
+  payload hash, review status, displayed quantities, reviewer note, and safe
+  source metadata.
+
+The screenshot display quantities are not equivalent to the CSV fields
+`ask_count` and `bid_count`. Therefore the created market snapshot leaves
+`ask_count`, `bid_count`, `estimated_volume`, and `source_import_job_id` as
+`NULL`; the displayed totals exist only in the audit row.
+
+The import is idempotent by `review_id`. Repeating the same import returns the
+existing audit and snapshot IDs. A different candidate under the same review id
+is rejected, and an existing snapshot with the same `(item_id, observed_at)` is
+never overwritten.
 
 Candidate JSON remains minimal. It does not include pairing IDs, source URLs,
 tab titles, extension client names, or other browsing metadata.
@@ -191,6 +228,8 @@ It provides:
 - warnings/errors and collapsible OCR evidence
 - `识别置信度：不可用`
 - copy/download candidate JSON after confirmation
+- explicit database import for a confirmed candidate linked to an existing item
+- imported snapshot and audit IDs displayed after success
 - local extension pairing controls that copy a versioned payload:
 
 ```json
@@ -204,7 +243,8 @@ It provides:
 The future browser extension parses `pairing_code_id` and `pairing_code` from
 that payload, then submits them to `POST /api/v1/local-recognition/pair`.
 - capabilities, layout, OCR, privacy, and diagnostic panels
-- extension placeholders: `浏览器扩展：未连接` and `自动识别：下一阶段提供`
+- clear privacy text explaining that import is explicit and screenshot
+  quantities remain audit-only
 
 Polling uses HTTP polling, not WebSocket. The page avoids overlapping requests,
 backs off when hidden or failing, and does not overwrite dirty form fields with

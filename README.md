@@ -13,7 +13,7 @@ sources with explicit written authorization.
 - Python 3.12 managed with uv
 - FastAPI, Pydantic 2, SQLAlchemy 2, Alembic, psycopg 3
 - pytest for API tests
-- Node.js 22 LTS with pnpm
+- Node.js 24.18.0 with pnpm 11.7.0
 - Next.js and TypeScript
 - PostgreSQL through Docker Compose
 
@@ -187,10 +187,12 @@ selected current market screenshot, creates an in-memory review through
 task, and lets a reviewer confirm item identity, prices, quantities, and
 `observed_at` before generating a reviewed candidate JSON object. Reviews are
 kept only in the API process memory, expire after two hours, and are cleared on
-service restart. The candidate records `imported=false` and
-`database_written=false`; it is not a market snapshot, is not automatically
-imported, and does not generate CSV. See
-`docs/screen-recognition-review-workflow.md`.
+service restart. Confirmation does not write the database. A separate explicit
+button can import a confirmed candidate as one market snapshot for an existing
+item and creates a `screen_review_imports` audit record. Screenshot display
+quantities remain audit-only and are not mapped to CSV `ask_count` or
+`bid_count`. The flow does not automatically create unknown items or generate
+CSV. See `docs/screen-recognition-review-workflow.md`.
 
 The same page also creates local browser-extension pairing codes and copies a
 versioned pairing payload for the future extension:
@@ -388,8 +390,8 @@ Web routes:
   table with time range filters, plus the read-only RuleBasedV1 analysis panel
   for 7, 30, 90, and 180 day windows.
 - `/screen-recognition`: local-only manual review page for uploaded current
-  screenshots, reviewed candidate JSON generation, and versioned local
-  extension pairing payload copy.
+  screenshots, reviewed candidate JSON generation, explicit audited snapshot
+  import for existing items, and versioned local extension pairing payload copy.
 
 Example item list response:
 

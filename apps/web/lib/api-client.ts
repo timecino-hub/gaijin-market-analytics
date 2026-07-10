@@ -190,6 +190,16 @@ export async function confirmLocalRecognitionReview(
   );
 }
 
+export async function importLocalRecognitionReview(
+  reviewId: string
+): Promise<LocalRecognitionReview> {
+  return sendJson<LocalRecognitionReview>(
+    `/api/v1/local-recognition/reviews/${encodeURIComponent(reviewId)}/import`,
+    "POST",
+    {}
+  );
+}
+
 export async function rejectLocalRecognitionReview(
   reviewId: string,
   reviewerNote: string | null
@@ -430,6 +440,14 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
     recognition_failed: "本地 OCR 处理失败，请检查 Windows OCR 可用性。",
     item_identity_required: "确认前必须明确商品身份。",
     item_identity_conflict: "请选择已有商品或填写管理员身份，不能同时冲突。",
+    review_not_confirmed: "只有已确认的复核记录才能写入数据库。",
+    review_candidate_missing: "已确认的复核记录缺少 candidate，无法写入数据库。",
+    review_not_importable: "当前复核记录不能写入数据库。",
+    existing_item_required: "写入数据库前必须选择或预先创建已有商品。",
+    item_identity_changed: "商品身份在确认后发生变化，请重新确认后再写入。",
+    snapshot_already_exists: "该商品在同一观测时间已有市场快照，现有数据未被覆盖。",
+    review_import_conflict: "该 Review 已使用不同 candidate 写入，当前请求被拒绝。",
+    database_error: "数据库暂时无法完成 Review 导入，请检查服务状态后重试。",
     invalid_price_string: "价格必须以字符串传输，并满足市场价格规则。",
     price_out_of_market_range: "价格必须满足 0 < price <= 2000.00。",
     invalid_quantity: "数量必须是非负整数或留空。",

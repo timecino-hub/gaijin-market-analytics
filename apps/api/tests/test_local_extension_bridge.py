@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 import api.routers.local_recognition as local_recognition_router
 from api.screen_recognition.contracts import OcrFieldEvidence, OcrResult
-from api.routers.local_recognition import _require_loopback_request
+from api.routers.local_recognition import (
+    _require_allowed_browser_origin_if_present,
+    _require_loopback_request,
+    local_loopback_dependency,
+)
 from api.services.local_extension_pairing import (
     CaptureAlreadyReserved,
     LocalExtensionPairingStore,
@@ -435,6 +439,73 @@ def test_loopback_check_uses_request_client_host_and_not_forwarded_headers() -> 
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail["code"] == "extension_loopback_required"
+
+
+def test_local_recognition_router_enforces_loopback_for_every_route() -> None:
+    assert any(
+        dependency.dependency is local_loopback_dependency
+        for dependency in local_recognition_router.router.dependencies
+    )
+
+    app = FastAPI()
+    app.include_router(local_recognition_router.router)
+    with TestClient(app, client=("203.0.113.10", 54321)) as remote_client:
+        response = remote_client.get("/api/v1/local-recognition/capabilities")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "extension_loopback_required"
+
+
+def test_review_import_rejects_disallowed_browser_origin_before_database_access() -> None:
+    app = FastAPI()
+    app.include_router(local_recognition_router.router)
+    with TestClient(app) as local_client:
+        response = local_client.post(
+            "/api/v1/local-recognition/reviews/review_1/import",
+            headers={"Origin": "https://example.invalid"},
+            json={},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "local_management_origin_denied"
+
+
+def test_manual_browser_upload_rejects_disallowed_origin_before_ocr() -> None:
+    app = FastAPI()
+    app.include_router(local_recognition_router.router)
+    with TestClient(app) as local_client:
+        response = local_client.post(
+            "/api/v1/local-recognition/reviews",
+            headers={"Origin": "https://example.invalid"},
+            files={"file": ("sample.png", b"not-decoded", "image/png")},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "local_management_origin_denied"
+
+
+def test_manual_browser_origin_check_allows_cli_and_configured_web_origin() -> None:
+    cli_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/local-recognition/reviews",
+            "headers": [],
+            "client": ("127.0.0.1", 54321),
+        }
+    )
+    web_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/local-recognition/reviews",
+            "headers": [(b"origin", b"http://localhost:3000")],
+            "client": ("127.0.0.1", 54321),
+        }
+    )
+
+    _require_allowed_browser_origin_if_present(cli_request)
+    _require_allowed_browser_origin_if_present(web_request)
 
 
 def create_pairing_code(client: TestClient) -> dict[str, str]:

@@ -22,12 +22,16 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
     config = _alembic_config(test_database_url)
 
     command.upgrade(config, "head")
-    assert {"items", "import_jobs", "market_snapshots"}.issubset(_table_names(test_database_url))
+    assert {"items", "import_jobs", "market_snapshots", "screen_review_imports"}.issubset(
+        _table_names(test_database_url)
+    )
 
     command.downgrade(config, "base")
-    assert not {"items", "import_jobs", "market_snapshots"}.intersection(
+    assert not {"items", "import_jobs", "market_snapshots", "screen_review_imports"}.intersection(
         _table_names(test_database_url)
     )
 
     command.upgrade(config, "head")
-    assert {"items", "import_jobs", "market_snapshots"}.issubset(_table_names(test_database_url))
+    assert {"items", "import_jobs", "market_snapshots", "screen_review_imports"}.issubset(
+        _table_names(test_database_url)
+    )

@@ -10,6 +10,7 @@ import {
   getLocalRecognitionCapabilities,
   getLocalRecognitionReview,
   getLocalRecognitionReviews,
+  importLocalRecognitionReview,
   markLocalRecognitionReviewUnreadable,
   patchLocalRecognitionReview,
   rejectLocalRecognitionReview,
@@ -294,6 +295,23 @@ export function ScreenRecognitionWorkspace() {
     }
   }
 
+  async function importConfirmedReview() {
+    if (!selectedReview?.candidate || selectedReview.candidate.imported) {
+      return;
+    }
+    setActionMessage(null);
+    try {
+      const updated = await importLocalRecognitionReview(selectedReview.review_id);
+      setSelectedReview(updated);
+      setForm(formFromReview(updated));
+      setDirty(false);
+      setActionMessage("已写入正式市场快照；截图显示数量仅保存在审计记录中。");
+      await load();
+    } catch (error) {
+      setApiError(toDisplayError(error));
+    }
+  }
+
   async function rejectCurrentReview() {
     if (!selectedReview || !form) {
       return;
@@ -325,7 +343,7 @@ export function ScreenRecognitionWorkspace() {
   }
 
   async function clearAllReviews() {
-    if (!window.confirm("确认清空所有本地内存复核记录？服务端不会写数据库，但当前队列会被删除。")) {
+    if (!window.confirm("确认清空所有本地内存复核记录？已经写入数据库的市场快照不会删除，但当前队列会被删除。")) {
       return;
     }
     try {
@@ -433,6 +451,7 @@ export function ScreenRecognitionWorkspace() {
           itemSearch={itemSearch}
           items={items}
           onConfirm={confirmReview}
+          onImport={importConfirmedReview}
           onItemSearch={setItemSearch}
           onMarkUnreadable={markUnreadable}
           onReject={rejectCurrentReview}
@@ -617,6 +636,7 @@ function ReviewPanel({
   itemSearch,
   items,
   onConfirm,
+  onImport,
   onItemSearch,
   onMarkUnreadable,
   onReject,
@@ -634,6 +654,7 @@ function ReviewPanel({
   itemSearch: string;
   items: ItemSummary[];
   onConfirm: () => void;
+  onImport: () => void;
   onItemSearch: (value: string) => void;
   onMarkUnreadable: () => void;
   onReject: () => void;
@@ -742,7 +763,7 @@ function ReviewPanel({
         {dirty ? <span className="field-hint">有未保存修改</span> : null}
       </div>
 
-      <CandidatePanel review={review} />
+      <CandidatePanel onImport={onImport} review={review} />
     </section>
   );
 }
@@ -1034,8 +1055,15 @@ function ComparisonTable({
   );
 }
 
-function CandidatePanel({ review }: { review: LocalRecognitionReview }) {
+function CandidatePanel({
+  onImport,
+  review
+}: {
+  onImport: () => void;
+  review: LocalRecognitionReview;
+}) {
   const candidateText = review.candidate ? JSON.stringify(review.candidate, null, 2) : "";
+  const imported = review.candidate?.imported ?? false;
 
   function copyCandidate() {
     if (candidateText) {
@@ -1060,7 +1088,11 @@ function CandidatePanel({ review }: { review: LocalRecognitionReview }) {
       <div className="section-heading compact-heading">
         <div>
           <h3 id="candidate-heading">Reviewed candidate JSON</h3>
-          <p>candidate 尚未导入数据库，不等于正式 market snapshot。</p>
+          <p>
+            {imported
+              ? "该 candidate 已写入正式 market snapshot，并保留审计记录。"
+              : "确认结果后，可显式写入现有商品的正式 market snapshot。"}
+          </p>
         </div>
         <div className="form-actions">
           <button className="plain-button" type="button" disabled={!review.candidate} onClick={copyCandidate}>
@@ -1069,6 +1101,14 @@ function CandidatePanel({ review }: { review: LocalRecognitionReview }) {
           <button className="plain-button" type="button" disabled={!review.candidate} onClick={downloadCandidate}>
             下载JSON
           </button>
+          <button type="button" disabled={!review.candidate || imported} onClick={onImport}>
+            {imported ? "已写入数据库" : "写入数据库"}
+          </button>
+          {review.candidate?.database_item_id ? (
+            <a className="plain-button" href={`/items/${review.candidate.database_item_id}`}>
+              查看商品
+            </a>
+          ) : null}
         </div>
       </div>
       {review.candidate ? (
@@ -1076,15 +1116,23 @@ function CandidatePanel({ review }: { review: LocalRecognitionReview }) {
           <div className="detail-grid compact">
             <Info label="imported" value={String(review.candidate.imported)} />
             <Info label="database_written" value={String(review.candidate.database_written)} />
+            <Info label="market_snapshot_created" value={String(review.candidate.market_snapshot_created)} />
+            <Info label="database item" value={review.candidate.database_item_id?.toString() ?? "—"} />
+            <Info label="snapshot" value={review.candidate.market_snapshot_id?.toString() ?? "—"} />
+            <Info label="audit import" value={review.candidate.screen_review_import_id?.toString() ?? "—"} />
+            <Info label="imported at" value={review.candidate.imported_at ? formatDateTime(review.candidate.imported_at) : "—"} />
             <Info label="quantity semantics" value={review.candidate.quantity_semantics} />
             <Info label="CSV quantity mapping" value={review.candidate.csv_quantity_mapping} />
           </div>
+          <p className="field-hint">
+            截图中的买卖总数量只保存在 screen review 审计记录中，不会映射为 CSV 的 ask_count 或 bid_count。
+          </p>
           <pre className="json-panel">{candidateText}</pre>
         </>
       ) : (
         <div className="empty-state">
           <h3>尚未生成 candidate</h3>
-          <p>确认结果后会在浏览器中显示、复制和下载单条 JSON。</p>
+          <p>确认结果后会在浏览器中显示、复制、下载，并允许显式写入数据库。</p>
         </div>
       )}
     </section>
@@ -1113,6 +1161,7 @@ function DiagnosticsPanel({
           <Info label="config hash" value={capabilities?.config_sha256.slice(0, 12) ?? "—"} />
           <Info label="store" value={reviewList ? `${reviewList.store_count}/${reviewList.store_capacity}` : "—"} />
           <Info label="TTL" value={capabilities ? `${capabilities.store_ttl_seconds / 3600} 小时` : "—"} />
+          <Info label="确认后导入" value={capabilities?.confirmed_review_import_available ? "可用" : "不可用"} />
         </div>
       </section>
       <section id="布局配置" className="panel">
@@ -1134,9 +1183,10 @@ function DiagnosticsPanel({
         <ul className="privacy-list">
           <li>图片只在本机处理，原图识别后删除。</li>
           <li>不访问 Gaijin Market，不读取 Cookie。</li>
-          <li>不写数据库，不生成 CSV。</li>
+          <li>仅在点击“写入数据库”后创建价格快照；不会自动导入。</li>
+          <li>截图数量只进入审计记录，不映射 CSV 的订单计数字段。</li>
           <li>浏览器扩展：未连接。</li>
-          <li>自动识别：下一阶段提供。</li>
+          <li>未知商品不会自动创建，必须先选择数据库中已有商品。</li>
         </ul>
         <button className="plain-button" type="button" onClick={onClearAll}>
           清除全部内存Review

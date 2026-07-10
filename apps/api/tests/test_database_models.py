@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from sqlalchemy import DateTime, Numeric
 
-from api.db.models import ImportJob, Item, MarketSnapshot
+from api.db.models import ImportJob, Item, MarketSnapshot, ScreenReviewImport
 
 
 def test_item_model_columns_and_constraints() -> None:
@@ -52,3 +52,22 @@ def test_market_snapshot_model_uses_decimal_numeric_and_nullable_estimated_volum
     assert "ck_market_snapshots_best_ask_positive" in constraint_names
     assert "ck_market_snapshots_best_bid_non_negative" in constraint_names
     assert "ck_market_snapshots_estimated_volume_non_negative" in constraint_names
+
+
+def test_screen_review_import_model_is_auditable_and_keeps_quantities_separate() -> None:
+    table = ScreenReviewImport.__table__
+
+    assert table.c.review_id.unique
+    assert table.c.market_snapshot_id.unique
+    assert not table.c.candidate_payload.nullable
+    assert not table.c.source_metadata.nullable
+    assert table.c.total_bid_quantity.nullable
+    assert table.c.total_ask_quantity.nullable
+    assert table.c.imported_at.type.timezone
+
+    constraint_names = {constraint.name for constraint in table.constraints}
+    assert "ck_screen_review_imports_review_id_not_empty" in constraint_names
+    assert "ck_screen_review_imports_status_allowed" in constraint_names
+    assert "ck_screen_review_imports_candidate_sha256_hex" in constraint_names
+    assert "ck_screen_review_imports_bid_quantity_non_negative" in constraint_names
+    assert "ck_screen_review_imports_ask_quantity_non_negative" in constraint_names

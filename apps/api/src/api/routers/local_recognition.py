@@ -5,6 +5,7 @@ from typing import Annotated
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings, parse_cors_allowed_origins
@@ -54,10 +55,13 @@ from api.services.local_recognition import (
     process_review_image,
     validate_image_upload,
 )
+from api.services.local_recognition_import import ReviewImportError, import_confirmed_review
 from api.services.local_recognition_source import SourceMetadataError, extension_source_metadata
 from api.services.local_recognition_store import (
+    ReviewImportState,
     ReviewNotEditableError,
     ReviewNotFoundError,
+    ReviewNotImportableError,
     ReviewStoreFullError,
     review_store,
 )
@@ -379,6 +383,45 @@ async def confirm_review_endpoint(
         raise _business_error(status.HTTP_404_NOT_FOUND, "item_not_found", "The requested item was not found.") from exc
     except LocalRecognitionError as exc:
         raise _business_error(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
+
+
+@router.post(
+    "/reviews/{review_id}/import",
+    response_model=ReviewResponse,
+    dependencies=[Depends(local_browser_upload_dependency)],
+)
+async def import_review_endpoint(
+    review_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ReviewResponse:
+    try:
+        record = review_store.get(review_id)
+        result = await import_confirmed_review(session=session, record=record)
+        return review_store.mark_imported(
+            review_id,
+            import_state=ReviewImportState(
+                database_item_id=result.database_item_id,
+                screen_review_import_id=result.screen_review_import_id,
+                market_snapshot_id=result.market_snapshot_id,
+                imported_at=result.imported_at,
+            ),
+        ).to_response()
+    except ReviewNotFoundError as exc:
+        raise _business_error(
+            status.HTTP_404_NOT_FOUND,
+            "review_not_found",
+            "Review was not found.",
+        ) from exc
+    except (ReviewNotImportableError, ReviewImportError) as exc:
+        code = getattr(exc, "code", "review_not_importable")
+        message = getattr(exc, "message", str(exc))
+        raise _business_error(status.HTTP_409_CONFLICT, code, message) from exc
+    except SQLAlchemyError as exc:
+        raise _business_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "database_error",
+            "The confirmed review could not be imported due to a database error.",
+        ) from exc
 
 
 @router.post("/reviews/{review_id}/reject", response_model=ReviewResponse)

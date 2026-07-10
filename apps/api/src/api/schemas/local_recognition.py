@@ -148,13 +148,17 @@ class ReviewedCandidate(BaseModel):
     total_ask_quantity: int | None
     recognition: CandidateRecognition
     status: Literal["confirmed", "confirmed_with_edits"]
-    imported: Literal[False] = False
-    database_written: Literal[False] = False
+    imported: bool = False
+    database_written: bool = False
     quantity_semantics: Literal["screenshot_display_quantity"] = "screenshot_display_quantity"
     csv_quantity_mapping: Literal["not_mapped_to_ask_count_or_bid_count"] = (
         "not_mapped_to_ask_count_or_bid_count"
     )
-    market_snapshot_created: Literal[False] = False
+    market_snapshot_created: bool = False
+    database_item_id: int | None = None
+    screen_review_import_id: int | None = None
+    market_snapshot_id: int | None = None
+    imported_at: datetime | None = None
 
     @field_serializer("best_bid", "best_ask")
     def serialize_decimal(self, value: Decimal) -> str:
@@ -211,7 +215,9 @@ class ReviewCapabilitiesResponse(BaseModel):
     supported_image_formats: list[str]
     store_capacity: int
     store_ttl_seconds: int
-    database_written: Literal[False]
+    database_written: bool
+    confirmed_review_import_available: bool = True
+    manual_item_creation_available: Literal[False] = False
     handles_history_images: Literal[False]
     browser_extension_connected: Literal[False]
     automatic_recognition_available: Literal[False]

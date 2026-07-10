@@ -111,3 +111,46 @@ class MarketSnapshot(Base):
 
     item: Mapped[Item] = relationship(back_populates="snapshots")
     source_import_job: Mapped[ImportJob | None] = relationship(back_populates="snapshots")
+
+
+class ScreenReviewImport(Base):
+    __tablename__ = "screen_review_imports"
+    __table_args__ = (
+        CheckConstraint("review_id <> ''", name="ck_screen_review_imports_review_id_not_empty"),
+        CheckConstraint(
+            "review_status IN ('confirmed', 'confirmed_with_edits')",
+            name="ck_screen_review_imports_status_allowed",
+        ),
+        CheckConstraint(
+            "candidate_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_screen_review_imports_candidate_sha256_hex",
+        ),
+        CheckConstraint(
+            "total_ask_quantity IS NULL OR total_ask_quantity >= 0",
+            name="ck_screen_review_imports_ask_quantity_non_negative",
+        ),
+        CheckConstraint(
+            "total_bid_quantity IS NULL OR total_bid_quantity >= 0",
+            name="ck_screen_review_imports_bid_quantity_non_negative",
+        ),
+        Index("ix_screen_review_imports_item_id", "item_id"),
+        Index("ix_screen_review_imports_imported_at", "imported_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    market_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("market_snapshots.id"), nullable=False, unique=True
+    )
+    review_status: Mapped[str] = mapped_column(String, nullable=False)
+    candidate_version: Mapped[str] = mapped_column(String, nullable=False)
+    candidate_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    total_bid_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_ask_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    candidate_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    reviewer_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

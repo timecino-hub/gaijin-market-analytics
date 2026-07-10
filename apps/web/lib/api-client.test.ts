@@ -8,6 +8,7 @@ import {
   getLocalExtensionStatus,
   getItemAnalysis,
   getLocalRecognitionReview,
+  importLocalRecognitionReview,
   patchLocalRecognitionReview,
   revokeLocalExtensionPairing,
   toDisplayError,
@@ -388,7 +389,7 @@ test("local extension bridge client supports status, pairing code, and revoke", 
   }
 });
 
-test("local recognition client supports review detail patch and confirm", async () => {
+test("local recognition client supports review detail patch confirm and import", async () => {
   const originalFetch = globalThis.fetch;
   const captured: Array<{ url: string; init?: RequestInit }> = [];
 
@@ -404,6 +405,7 @@ test("local recognition client supports review detail patch and confirm", async 
       item_key: "manual-key",
       final_item_name: "Manual Name"
     });
+    await importLocalRecognitionReview("review/a");
 
     assert.equal(
       captured[0].url,
@@ -413,6 +415,38 @@ test("local recognition client supports review detail patch and confirm", async 
     assert.equal(captured[1].init?.body, JSON.stringify({ final_best_bid: "12.34" }));
     assert.equal(captured[2].init?.method, "POST");
     assert.match(captured[2].url, /\/confirm$/);
+    assert.equal(captured[3].init?.method, "POST");
+    assert.match(captured[3].url, /\/import$/);
+    assert.equal(captured[3].init?.body, JSON.stringify({}));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("review import errors map to actionable safe messages", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        detail: {
+          code: "snapshot_already_exists",
+          message: "A market snapshot already exists for this item and observed_at value."
+        }
+      },
+      { status: 409 }
+    );
+
+  try {
+    await assert.rejects(
+      importLocalRecognitionReview("review_1"),
+      (error) => {
+        assert.ok(error instanceof ApiRequestError);
+        assert.equal(error.error.code, "snapshot_already_exists");
+        assert.match(error.error.message, /已有市场快照/);
+        return true;
+      }
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

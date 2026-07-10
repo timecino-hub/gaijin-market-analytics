@@ -213,7 +213,9 @@ export type LocalRecognitionCapabilities = {
   supported_image_formats: string[];
   store_capacity: number;
   store_ttl_seconds: number;
-  database_written: false;
+  database_written: boolean;
+  confirmed_review_import_available: boolean;
+  manual_item_creation_available: false;
   handles_history_images: false;
   browser_extension_connected: false;
   automatic_recognition_available: false;
@@ -304,11 +306,15 @@ export type LocalRecognitionCandidate = {
     runner_version: string;
   };
   status: "confirmed" | "confirmed_with_edits";
-  imported: false;
-  database_written: false;
+  imported: boolean;
+  database_written: boolean;
   quantity_semantics: "screenshot_display_quantity";
   csv_quantity_mapping: "not_mapped_to_ask_count_or_bid_count";
-  market_snapshot_created: false;
+  market_snapshot_created: boolean;
+  database_item_id: number | null;
+  screen_review_import_id: number | null;
+  market_snapshot_id: number | null;
+  imported_at: string | null;
 };
 
 export type LocalRecognitionSourceMetadata = {

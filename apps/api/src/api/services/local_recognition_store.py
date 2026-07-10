@@ -37,6 +37,18 @@ class ReviewStoreFullError(RuntimeError):
     pass
 
 
+class ReviewNotImportableError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class ReviewImportState:
+    database_item_id: int
+    screen_review_import_id: int
+    market_snapshot_id: int
+    imported_at: datetime
+
+
 @dataclass(frozen=True)
 class ReviewRecord:
     review_id: str
@@ -214,6 +226,36 @@ class LocalReviewStore:
                 candidate=updated_candidate,
                 confirmed_at=confirmed_at,
             )
+            self._records[review_id] = updated
+            return copy.deepcopy(updated)
+
+    def mark_imported(
+        self,
+        review_id: str,
+        *,
+        import_state: ReviewImportState,
+    ) -> ReviewRecord:
+        with self._lock:
+            self._cleanup_locked(datetime.now(UTC), remove_expired_records=False)
+            record = self._records.get(review_id)
+            if record is None:
+                raise ReviewNotFoundError(review_id)
+            if record.status not in {ReviewStatus.CONFIRMED, ReviewStatus.CONFIRMED_WITH_EDITS}:
+                raise ReviewNotImportableError("Only confirmed reviews can be imported.")
+            if record.candidate is None:
+                raise ReviewNotImportableError("Confirmed review is missing its candidate payload.")
+            candidate = record.candidate.model_copy(
+                update={
+                    "imported": True,
+                    "database_written": True,
+                    "market_snapshot_created": True,
+                    "database_item_id": import_state.database_item_id,
+                    "screen_review_import_id": import_state.screen_review_import_id,
+                    "market_snapshot_id": import_state.market_snapshot_id,
+                    "imported_at": import_state.imported_at,
+                }
+            )
+            updated = replace(record, candidate=candidate)
             self._records[review_id] = updated
             return copy.deepcopy(updated)
 
