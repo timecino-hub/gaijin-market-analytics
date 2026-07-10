@@ -2,7 +2,8 @@
 
 The Local Extension Bridge lets a future browser extension submit a user-visible
 PNG/JPEG screenshot into the existing local screen-recognition review workflow.
-This repository does not implement the extension itself.
+The entire `/api/v1/local-recognition` namespace, including pairing, rejects
+non-loopback clients. This repository does not implement the extension itself.
 
 ## Scope
 

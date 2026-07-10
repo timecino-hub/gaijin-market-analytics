@@ -62,7 +62,21 @@ from api.services.local_recognition_store import (
     review_store,
 )
 
-router = APIRouter(prefix="/api/v1/local-recognition", tags=["local-recognition"])
+
+def local_loopback_dependency(request: Request) -> None:
+    _require_loopback_request(request)
+
+
+def local_browser_upload_dependency(request: Request) -> None:
+    _require_allowed_browser_origin_if_present(request)
+    _enforce_content_length(request)
+
+
+router = APIRouter(
+    prefix="/api/v1/local-recognition",
+    tags=["local-recognition"],
+    dependencies=[Depends(local_loopback_dependency)],
+)
 
 
 def local_management_dependency(request: Request) -> None:
@@ -148,6 +162,7 @@ def revoke_pairing(
     "/reviews",
     response_model=ReviewCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(local_browser_upload_dependency)],
 )
 async def create_review(
     background_tasks: BackgroundTasks,
@@ -469,8 +484,20 @@ def _require_loopback_request(request: Request) -> None:
     raise _business_error(
         status.HTTP_403_FORBIDDEN,
         "extension_loopback_required",
-        "Extension uploads are accepted only from loopback clients.",
+        "Local recognition requests are accepted only from loopback clients.",
     )
+
+
+def _require_allowed_browser_origin_if_present(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    if _normalize_origin(origin) not in _allowed_management_origins():
+        raise _business_error(
+            status.HTTP_403_FORBIDDEN,
+            "local_management_origin_denied",
+            "Local browser request Origin is not allowed.",
+        )
 
 
 def _require_local_management_request(request: Request) -> None:

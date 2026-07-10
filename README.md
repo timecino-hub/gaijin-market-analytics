@@ -127,8 +127,10 @@ Start the API on port 8000:
 make api-dev
 ```
 
-The API development entry point binds to `127.0.0.1` by default. Keep local
-bridge endpoints on loopback; do not expose them to the LAN.
+The API development entry point binds to `127.0.0.1` by default. Every
+`/api/v1/local-recognition` route also verifies the request client is loopback;
+do not place these endpoints behind a non-loopback proxy or expose them to the
+LAN. Manual browser uploads reject unapproved `Origin` headers.
 
 Start the web app on port 3000:
 
