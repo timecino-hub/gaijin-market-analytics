@@ -2,7 +2,13 @@ from decimal import Decimal
 
 from sqlalchemy import DateTime, Numeric
 
-from api.db.models import ImportJob, Item, MarketSnapshot, ScreenReviewImport
+from api.db.models import (
+    ImportJob,
+    Item,
+    MarketSnapshot,
+    OrderBookObservation,
+    ScreenReviewImport,
+)
 
 
 def test_item_model_columns_and_constraints() -> None:
@@ -71,3 +77,24 @@ def test_screen_review_import_model_is_auditable_and_keeps_quantities_separate()
     assert "ck_screen_review_imports_candidate_sha256_hex" in constraint_names
     assert "ck_screen_review_imports_bid_quantity_non_negative" in constraint_names
     assert "ck_screen_review_imports_ask_quantity_non_negative" in constraint_names
+
+
+def test_order_book_observation_model_has_explicit_quantity_semantics() -> None:
+    table = OrderBookObservation.__table__
+
+    assert table.c.market_snapshot_id.unique
+    assert table.c.screen_review_import_id.unique
+    assert table.c.observed_bid_quantity.nullable
+    assert table.c.observed_ask_quantity.nullable
+    assert not table.c.quantity_semantics.nullable
+    assert not table.c.source_type.nullable
+    assert not table.c.source_version.nullable
+    assert table.c.created_at.type.timezone
+
+    constraint_names = {constraint.name for constraint in table.constraints}
+    assert "ck_order_book_observations_bid_quantity_non_negative" in constraint_names
+    assert "ck_order_book_observations_ask_quantity_non_negative" in constraint_names
+    assert "ck_order_book_observations_quantity_semantics" in constraint_names
+    assert "ck_order_book_observations_source_type" in constraint_names
+    assert "ck_order_book_observations_source_version_not_empty" in constraint_names
+    assert "ck_order_book_observations_review_status_allowed" in constraint_names

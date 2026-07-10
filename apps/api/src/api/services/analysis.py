@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult
+from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon
 from gaijin_market_analytics.exceptions import AnalyticsError, ContractValidationError
 from gaijin_market_analytics.horizons import horizon_delta
@@ -10,9 +10,9 @@ from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.adapters.analytics import market_snapshots_to_observations
+from api.adapters.analytics import market_snapshot_rows_to_observations
 from api.config import Settings
-from api.db.models import Item, MarketSnapshot
+from api.db.models import Item, MarketSnapshot, OrderBookObservation
 from api.services.items import ItemNotFoundError
 
 
@@ -32,6 +32,7 @@ class StrategyUnavailableError(LookupError):
 class AnalysisServiceResult:
     item: Item
     result: AnalysisResult
+    observations: tuple[MarketObservation, ...]
     maximum_snapshot_age_hours: int
     minimum_snapshot_count: int
 
@@ -63,12 +64,12 @@ class ItemAnalysisService:
         minimum_snapshot_count = self._minimum_snapshot_count()
 
         window_start = as_of - horizon_delta(horizon)
-        snapshots = await self._list_snapshots(
+        observation_rows = await self._list_observation_rows(
             item_id=item_id,
             window_start=window_start,
             as_of=as_of,
         )
-        observations = market_snapshots_to_observations(snapshots)
+        observations = market_snapshot_rows_to_observations(observation_rows)
 
         try:
             request = AnalysisRequest(
@@ -97,6 +98,7 @@ class ItemAnalysisService:
         return AnalysisServiceResult(
             item=item,
             result=result,
+            observations=observations,
             maximum_snapshot_age_hours=maximum_snapshot_age_hours,
             minimum_snapshot_count=minimum_snapshot_count,
         )
@@ -108,15 +110,19 @@ class ItemAnalysisService:
             raise ItemNotFoundError(f"Item {item_id} was not found.")
         return item
 
-    async def _list_snapshots(
+    async def _list_observation_rows(
         self,
         *,
         item_id: int,
         window_start: datetime,
         as_of: datetime,
-    ) -> list[MarketSnapshot]:
+    ) -> list[tuple[MarketSnapshot, OrderBookObservation | None]]:
         statement = (
-            select(MarketSnapshot)
+            select(MarketSnapshot, OrderBookObservation)
+            .outerjoin(
+                OrderBookObservation,
+                OrderBookObservation.market_snapshot_id == MarketSnapshot.id,
+            )
             .where(
                 MarketSnapshot.item_id == item_id,
                 MarketSnapshot.observed_at >= window_start,
@@ -125,7 +131,7 @@ class ItemAnalysisService:
             .order_by(MarketSnapshot.observed_at.asc(), MarketSnapshot.id.asc())
         )
         result = await self._session.execute(statement)
-        return list(result.scalars().all())
+        return [(snapshot, observation) for snapshot, observation in result.all()]
 
     def _maximum_snapshot_age_hours(self) -> int:
         value = self._settings.analytics_maximum_snapshot_age_hours

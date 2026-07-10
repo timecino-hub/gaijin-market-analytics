@@ -403,6 +403,7 @@ async def import_review_endpoint(
                 database_item_id=result.database_item_id,
                 screen_review_import_id=result.screen_review_import_id,
                 market_snapshot_id=result.market_snapshot_id,
+                order_book_observation_id=result.order_book_observation_id,
                 imported_at=result.imported_at,
             ),
         ).to_response()

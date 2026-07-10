@@ -111,6 +111,10 @@ class MarketSnapshot(Base):
 
     item: Mapped[Item] = relationship(back_populates="snapshots")
     source_import_job: Mapped[ImportJob | None] = relationship(back_populates="snapshots")
+    order_book_observation: Mapped["OrderBookObservation | None"] = relationship(
+        back_populates="market_snapshot",
+        uselist=False,
+    )
 
 
 class ScreenReviewImport(Base):
@@ -153,4 +157,64 @@ class ScreenReviewImport(Base):
     reviewer_note: Mapped[str | None] = mapped_column(String, nullable=True)
     imported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    order_book_observation: Mapped["OrderBookObservation | None"] = relationship(
+        back_populates="screen_review_import",
+        uselist=False,
+    )
+
+
+class OrderBookObservation(Base):
+    __tablename__ = "order_book_observations"
+    __table_args__ = (
+        CheckConstraint(
+            "observed_bid_quantity IS NULL OR observed_bid_quantity >= 0",
+            name="ck_order_book_observations_bid_quantity_non_negative",
+        ),
+        CheckConstraint(
+            "observed_ask_quantity IS NULL OR observed_ask_quantity >= 0",
+            name="ck_order_book_observations_ask_quantity_non_negative",
+        ),
+        CheckConstraint(
+            "quantity_semantics = 'screenshot_display_quantity'",
+            name="ck_order_book_observations_quantity_semantics",
+        ),
+        CheckConstraint(
+            "source_type = 'screen_review'",
+            name="ck_order_book_observations_source_type",
+        ),
+        CheckConstraint(
+            "source_version <> ''",
+            name="ck_order_book_observations_source_version_not_empty",
+        ),
+        CheckConstraint(
+            "review_status IN ('confirmed', 'confirmed_with_edits')",
+            name="ck_order_book_observations_review_status_allowed",
+        ),
+        Index("ix_order_book_observations_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    market_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("market_snapshots.id"), nullable=False, unique=True
+    )
+    screen_review_import_id: Mapped[int] = mapped_column(
+        ForeignKey("screen_review_imports.id"), nullable=False, unique=True
+    )
+    observed_bid_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    observed_ask_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity_semantics: Mapped[str] = mapped_column(String, nullable=False)
+    source_type: Mapped[str] = mapped_column(String, nullable=False)
+    source_version: Mapped[str] = mapped_column(String, nullable=False)
+    review_status: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    market_snapshot: Mapped[MarketSnapshot] = relationship(
+        back_populates="order_book_observation"
+    )
+    screen_review_import: Mapped[ScreenReviewImport] = relationship(
+        back_populates="order_book_observation"
     )

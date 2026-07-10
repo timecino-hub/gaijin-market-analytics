@@ -51,12 +51,17 @@ def test_confirmed_review_import_creates_audited_snapshot_idempotently(
     assert first_candidate["database_item_id"] == item_id
     assert first_candidate["screen_review_import_id"] is not None
     assert first_candidate["market_snapshot_id"] is not None
+    assert first_candidate["order_book_observation_id"] is not None
     assert first_candidate["imported_at"] is not None
     assert (
         repeated_candidate["screen_review_import_id"]
         == first_candidate["screen_review_import_id"]
     )
     assert repeated_candidate["market_snapshot_id"] == first_candidate["market_snapshot_id"]
+    assert (
+        repeated_candidate["order_book_observation_id"]
+        == first_candidate["order_book_observation_id"]
+    )
 
     engine = create_engine(migrated_database)
     try:
@@ -77,9 +82,18 @@ def test_confirmed_review_import_creates_audited_snapshot_idempotently(
                         ms.bid_count,
                         ms.ask_count,
                         ms.estimated_volume,
-                        ms.source_import_job_id
+                        ms.source_import_job_id,
+                        obo.id AS observation_id,
+                        obo.observed_bid_quantity,
+                        obo.observed_ask_quantity,
+                        obo.quantity_semantics,
+                        obo.source_type,
+                        obo.source_version,
+                        obo.review_status
                     FROM screen_review_imports AS sri
                     JOIN market_snapshots AS ms ON ms.id = sri.market_snapshot_id
+                    JOIN order_book_observations AS obo
+                      ON obo.screen_review_import_id = sri.id
                     WHERE sri.review_id = :review_id
                     """
                 ),
@@ -92,6 +106,16 @@ def test_confirmed_review_import_creates_audited_snapshot_idempotently(
             snapshot_count = conn.execute(
                 text("SELECT count(*) FROM market_snapshots WHERE item_id = :item_id"),
                 {"item_id": item_id},
+            ).scalar_one()
+            observation_count = conn.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM order_book_observations
+                    WHERE screen_review_import_id = :screen_review_import_id
+                    """
+                ),
+                {"screen_review_import_id": first_candidate["screen_review_import_id"]},
             ).scalar_one()
     finally:
         engine.dispose()
@@ -110,8 +134,16 @@ def test_confirmed_review_import_creates_audited_snapshot_idempotently(
     assert row["ask_count"] is None
     assert row["estimated_volume"] is None
     assert row["source_import_job_id"] is None
+    assert row["observation_id"] == first_candidate["order_book_observation_id"]
+    assert row["observed_bid_quantity"] == 5
+    assert row["observed_ask_quantity"] == 7
+    assert row["quantity_semantics"] == "screenshot_display_quantity"
+    assert row["source_type"] == "screen_review"
+    assert row["source_version"] == "screen_review_candidate_v1"
+    assert row["review_status"] == "confirmed_with_edits"
     assert import_count == 1
     assert snapshot_count == 1
+    assert observation_count == 1
 
 
 def test_import_requires_confirmed_review(

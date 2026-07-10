@@ -20,15 +20,49 @@ class MarketObservation:
     bid_count: int | None
     estimated_volume: Decimal | None
     observation_key: str | None = None
+    observed_ask_quantity: int | None = None
+    observed_bid_quantity: int | None = None
+    quantity_semantics: str | None = None
+    source_type: str | None = None
+    review_status: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "observed_at", _require_aware_utc(self.observed_at, "observed_at"))
         for field_name in ("best_ask", "best_bid", "estimated_volume"):
             _require_decimal_or_none(getattr(self, field_name), field_name)
-        for field_name in ("ask_count", "bid_count"):
+        for field_name in (
+            "ask_count",
+            "bid_count",
+            "observed_ask_quantity",
+            "observed_bid_quantity",
+        ):
             value = getattr(self, field_name)
             if value is not None and value < 0:
                 raise ContractValidationError(f"{field_name} must be greater than or equal to 0.")
+        for field_name in ("quantity_semantics", "source_type", "review_status"):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, str) or value.strip() == ""):
+                raise ContractValidationError(
+                    f"{field_name} must be a non-empty string when provided."
+                )
+        has_observed_quantity = (
+            self.observed_ask_quantity is not None or self.observed_bid_quantity is not None
+        )
+        if has_observed_quantity and self.quantity_semantics is None:
+            raise ContractValidationError(
+                "quantity_semantics is required when observed quantities are provided."
+            )
+        if has_observed_quantity and self.source_type is None:
+            raise ContractValidationError(
+                "source_type is required when observed quantities are provided."
+            )
+        if self.source_type == "screen_review" and self.review_status not in {
+            "confirmed",
+            "confirmed_with_edits",
+        }:
+            raise ContractValidationError(
+                "screen_review observations require a confirmed review_status."
+            )
 
 
 @dataclass(frozen=True)
@@ -173,6 +207,15 @@ def observation_sort_key(observation: MarketObservation) -> tuple[object, ...]:
         _decimal_sort_value(observation.best_bid),
         observation.ask_count if observation.ask_count is not None else -1,
         observation.bid_count if observation.bid_count is not None else -1,
+        observation.observed_ask_quantity
+        if observation.observed_ask_quantity is not None
+        else -1,
+        observation.observed_bid_quantity
+        if observation.observed_bid_quantity is not None
+        else -1,
+        observation.quantity_semantics or "",
+        observation.source_type or "",
+        observation.review_status or "",
         _decimal_sort_value(observation.estimated_volume),
     )
 

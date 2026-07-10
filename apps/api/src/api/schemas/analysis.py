@@ -93,3 +93,58 @@ class AnalysisResponse(BaseModel):
     )
     def serialize_optional_decimal(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
+
+
+class OpportunityResponse(BaseModel):
+    item_id: int
+    external_key: str
+    item_name: str
+    effective_inputs: AnalysisEffectiveInputs
+    analysis_status: str
+    analysis_strategy_name: str
+    analysis_strategy_version: str
+    strategy_name: str
+    strategy_version: str
+    feature_version: str
+    eligible: bool
+    score: Decimal
+    raw_score: Decimal
+    profitability_score: Decimal
+    liquidity_score: Decimal
+    stability_score: Decimal
+    data_confidence_score: Decimal
+    freshness_score: Decimal
+    risk_penalty: Decimal
+    liquidity_source: Literal[
+        "reviewed_screenshot_quantity",
+        "snapshot_counts",
+        "unavailable",
+    ]
+    quantity_observation_count: int
+    latest_observed_bid_quantity: int | None
+    latest_observed_ask_quantity: int | None
+    current_ask: Decimal | None
+    current_bid: Decimal | None
+    reference_sell_price: Decimal | None
+    net_profit: Decimal | None
+    net_roi: Decimal | None
+    explanation_codes: list[str]
+    analysis_reason_codes: list[str]
+
+    @field_serializer(
+        "score",
+        "raw_score",
+        "profitability_score",
+        "liquidity_score",
+        "stability_score",
+        "data_confidence_score",
+        "freshness_score",
+        "risk_penalty",
+        "current_ask",
+        "current_bid",
+        "reference_sell_price",
+        "net_profit",
+        "net_roi",
+    )
+    def serialize_opportunity_decimal(self, value: Decimal | None) -> str | None:
+        return str(value) if value is not None else None

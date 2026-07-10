@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, inspect, text
 from api.analytics_registry import get_strategy_registry
 from api.clock import get_utc_clock
 from api.config import Settings, get_settings
-from api.db.models import MarketSnapshot
+from api.db.models import MarketSnapshot, OrderBookObservation
 
 
 def _insert_item(
@@ -92,6 +92,93 @@ def _insert_snapshot(
                         ),
                     },
                 ).scalar_one()
+            )
+    finally:
+        engine.dispose()
+
+
+def _insert_reviewed_order_book_observation(
+    database_url: str,
+    *,
+    item_id: int,
+    snapshot_id: int,
+    review_id: str,
+    observed_bid_quantity: int,
+    observed_ask_quantity: int,
+) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            screen_review_import_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO screen_review_imports (
+                        review_id,
+                        item_id,
+                        market_snapshot_id,
+                        review_status,
+                        candidate_version,
+                        candidate_sha256,
+                        total_bid_quantity,
+                        total_ask_quantity,
+                        candidate_payload,
+                        source_metadata
+                    )
+                    VALUES (
+                        :review_id,
+                        :item_id,
+                        :snapshot_id,
+                        'confirmed_with_edits',
+                        'screen_review_candidate_v1',
+                        :candidate_sha256,
+                        :observed_bid_quantity,
+                        :observed_ask_quantity,
+                        '{}'::jsonb,
+                        '{}'::jsonb
+                    )
+                    RETURNING id
+                    """
+                ),
+                {
+                    "review_id": review_id,
+                    "item_id": item_id,
+                    "snapshot_id": snapshot_id,
+                    "candidate_sha256": f"{snapshot_id:064x}"[-64:],
+                    "observed_bid_quantity": observed_bid_quantity,
+                    "observed_ask_quantity": observed_ask_quantity,
+                },
+            ).scalar_one()
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO order_book_observations (
+                        market_snapshot_id,
+                        screen_review_import_id,
+                        observed_bid_quantity,
+                        observed_ask_quantity,
+                        quantity_semantics,
+                        source_type,
+                        source_version,
+                        review_status
+                    )
+                    VALUES (
+                        :snapshot_id,
+                        :screen_review_import_id,
+                        :observed_bid_quantity,
+                        :observed_ask_quantity,
+                        'screenshot_display_quantity',
+                        'screen_review',
+                        'screen_review_candidate_v1',
+                        'confirmed_with_edits'
+                    )
+                    """
+                ),
+                {
+                    "snapshot_id": snapshot_id,
+                    "screen_review_import_id": screen_review_import_id,
+                    "observed_bid_quantity": observed_bid_quantity,
+                    "observed_ask_quantity": observed_ask_quantity,
+                },
             )
     finally:
         engine.dispose()
@@ -431,8 +518,10 @@ def test_no_valid_ask_strategy_result_returns_http_200(
     item_id = _insert_item(migrated_database, external_key="synthetic-no-ask", name="No Ask")
     _insert_snapshot(migrated_database, item_id=item_id, observed_at="2026-06-29T00:00:00Z")
 
-    def observations_without_ask(snapshots: list[MarketSnapshot]) -> tuple[MarketObservation, ...]:
-        snapshot = snapshots[0]
+    def observations_without_ask(
+        rows: list[tuple[MarketSnapshot, OrderBookObservation | None]],
+    ) -> tuple[MarketObservation, ...]:
+        snapshot = rows[0][0]
         return (
             MarketObservation(
                 observed_at=snapshot.observed_at,
@@ -446,7 +535,7 @@ def test_no_valid_ask_strategy_result_returns_http_200(
         )
 
     monkeypatch.setattr(
-        "api.services.analysis.market_snapshots_to_observations",
+        "api.services.analysis.market_snapshot_rows_to_observations",
         observations_without_ask,
     )
 
@@ -733,7 +822,9 @@ def test_contract_input_error_returns_stable_error(
     item_id = _insert_item(migrated_database, external_key="synthetic-contract-error", name="Contract")
     _insert_snapshot(migrated_database, item_id=item_id, observed_at="2026-06-29T00:00:00Z")
 
-    def future_observations(snapshots: list[MarketSnapshot]) -> tuple[MarketObservation, ...]:
+    def future_observations(
+        rows: list[tuple[MarketSnapshot, OrderBookObservation | None]],
+    ) -> tuple[MarketObservation, ...]:
         return (
             MarketObservation(
                 observed_at=datetime(2026, 6, 30, tzinfo=UTC),
@@ -746,7 +837,10 @@ def test_contract_input_error_returns_stable_error(
             ),
         )
 
-    monkeypatch.setattr("api.services.analysis.market_snapshots_to_observations", future_observations)
+    monkeypatch.setattr(
+        "api.services.analysis.market_snapshot_rows_to_observations",
+        future_observations,
+    )
 
     response = client.get(_analysis_url(item_id, as_of="2026-06-29T00:00:00Z"))
 
@@ -822,3 +916,68 @@ def test_fee_rate_rejection_helper_does_not_parse_user_value(client: TestClient)
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "fee_rate_not_configurable"
+
+
+def test_opportunity_endpoint_uses_reviewed_screenshot_quantities(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    as_of = datetime(2026, 6, 29, tzinfo=UTC)
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-opportunity-reviewed",
+        name="Synthetic Opportunity Reviewed",
+    )
+    rows = (
+        (as_of - timedelta(days=7), "11.000000", "10.000000", 20, 20),
+        (as_of - timedelta(days=3), "11.000000", "10.000000", 20, 20),
+        (as_of, "5.000000", "4.500000", 25, 15),
+    )
+    for index, (observed_at, ask, bid, ask_quantity, bid_quantity) in enumerate(rows):
+        snapshot_id = _insert_snapshot(
+            migrated_database,
+            item_id=item_id,
+            observed_at=observed_at.isoformat().replace("+00:00", "Z"),
+            best_ask=ask,
+            best_bid=bid,
+            ask_count=None,
+            bid_count=None,
+            estimated_volume=None,
+        )
+        _insert_reviewed_order_book_observation(
+            migrated_database,
+            item_id=item_id,
+            snapshot_id=snapshot_id,
+            review_id=f"opportunity-review-{index}",
+            observed_bid_quantity=bid_quantity,
+            observed_ask_quantity=ask_quantity,
+        )
+
+    response = client.get(
+        f"/api/v1/items/{item_id}/opportunity"
+        "?horizon=7&as_of=2026-06-29T00:00:00Z"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis_status"] == "ok"
+    assert body["strategy_name"] == "opportunity_score"
+    assert body["strategy_version"] == "1.0.0"
+    assert body["feature_version"] == "opportunity_features_v1"
+    assert body["eligible"] is True
+    assert body["liquidity_source"] == "reviewed_screenshot_quantity"
+    assert body["quantity_observation_count"] == 3
+    assert body["latest_observed_bid_quantity"] == 15
+    assert body["latest_observed_ask_quantity"] == 25
+    assert Decimal(body["score"]) > Decimal("80")
+    assert body["net_profit"] is not None
+    assert Decimal(body["net_profit"]) > Decimal("0")
+    assert "reviewed_screenshot_liquidity_proxy" in body["explanation_codes"]
+    assert "eligible_positive_after_fee_opportunity" in body["explanation_codes"]
+
+
+def test_opportunity_endpoint_reuses_analysis_input_validation(client: TestClient) -> None:
+    response = client.get("/api/v1/items/1/opportunity?horizon=14")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_horizon"

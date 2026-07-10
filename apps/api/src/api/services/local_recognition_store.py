@@ -46,6 +46,7 @@ class ReviewImportState:
     database_item_id: int
     screen_review_import_id: int
     market_snapshot_id: int
+    order_book_observation_id: int
     imported_at: datetime
 
 
@@ -252,6 +253,7 @@ class LocalReviewStore:
                     "database_item_id": import_state.database_item_id,
                     "screen_review_import_id": import_state.screen_review_import_id,
                     "market_snapshot_id": import_state.market_snapshot_id,
+                    "order_book_observation_id": import_state.order_book_observation_id,
                     "imported_at": import_state.imported_at,
                 }
             )

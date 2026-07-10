@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import Item, MarketSnapshot, ScreenReviewImport
+from api.db.models import Item, MarketSnapshot, OrderBookObservation, ScreenReviewImport
 from api.schemas.local_recognition import ReviewStatus, ReviewedCandidate
 from api.services.csv_import import advisory_lock_key_for_import
 from api.services.local_recognition_store import ReviewRecord
@@ -28,6 +28,7 @@ class ReviewImportResult:
     database_item_id: int
     screen_review_import_id: int
     market_snapshot_id: int
+    order_book_observation_id: int
     imported_at: datetime
     created: bool
 
@@ -65,10 +66,15 @@ async def import_confirmed_review(
                     "review_import_conflict",
                     "This review id was already imported with a different candidate payload.",
                 )
+            observation = await _get_or_create_observation(
+                session,
+                imported=existing_import,
+            )
             return ReviewImportResult(
                 database_item_id=existing_import.item_id,
                 screen_review_import_id=existing_import.id,
                 market_snapshot_id=existing_import.market_snapshot_id,
+                order_book_observation_id=observation.id,
                 imported_at=existing_import.imported_at,
                 created=False,
             )
@@ -120,10 +126,15 @@ async def import_confirmed_review(
         session.add(imported)
         await session.flush()
 
+        observation = _observation_from_import(imported)
+        session.add(observation)
+        await session.flush()
+
         return ReviewImportResult(
             database_item_id=item.id,
             screen_review_import_id=imported.id,
             market_snapshot_id=snapshot_id,
+            order_book_observation_id=observation.id,
             imported_at=imported_at,
             created=True,
         )
@@ -175,6 +186,39 @@ async def _acquire_snapshot_lock(
     await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
 
 
+async def _get_or_create_observation(
+    session: AsyncSession,
+    *,
+    imported: ScreenReviewImport,
+) -> OrderBookObservation:
+    observation = await session.scalar(
+        select(OrderBookObservation)
+        .where(OrderBookObservation.screen_review_import_id == imported.id)
+        .limit(1)
+    )
+    if observation is not None:
+        return observation
+
+    observation = _observation_from_import(imported)
+    session.add(observation)
+    await session.flush()
+    return observation
+
+
+def _observation_from_import(imported: ScreenReviewImport) -> OrderBookObservation:
+    return OrderBookObservation(
+        market_snapshot_id=imported.market_snapshot_id,
+        screen_review_import_id=imported.id,
+        observed_bid_quantity=imported.total_bid_quantity,
+        observed_ask_quantity=imported.total_ask_quantity,
+        quantity_semantics="screenshot_display_quantity",
+        source_type="screen_review",
+        source_version=imported.candidate_version,
+        review_status=imported.review_status,
+        created_at=imported.imported_at,
+    )
+
+
 def _candidate_audit_payload(candidate: ReviewedCandidate) -> dict[str, Any]:
     immutable_candidate = candidate.model_copy(
         update={
@@ -184,6 +228,7 @@ def _candidate_audit_payload(candidate: ReviewedCandidate) -> dict[str, Any]:
             "database_item_id": None,
             "screen_review_import_id": None,
             "market_snapshot_id": None,
+            "order_book_observation_id": None,
             "imported_at": None,
         }
     )

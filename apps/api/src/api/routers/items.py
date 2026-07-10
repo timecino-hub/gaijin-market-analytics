@@ -10,6 +10,7 @@ from api.schemas.items import (
     ItemDetailResponse,
     ItemListResponse,
     ItemSummary,
+    OrderBookObservationResponse,
     SnapshotResponse,
     SnapshotSummary,
     SortField,
@@ -20,6 +21,7 @@ from api.services.items import (
     ItemNotFoundError,
     ItemQueryService,
     ItemWithLatestSnapshot,
+    OrderBookObservationData,
     SnapshotData,
 )
 
@@ -120,6 +122,47 @@ async def list_item_snapshots(
             "The requested item was not found.",
         ) from exc
     return [_snapshot_response(snapshot) for snapshot in snapshots]
+
+
+@router.get(
+    "/{item_id}/order-book-observations",
+    response_model=list[OrderBookObservationResponse],
+)
+async def list_item_order_book_observations(
+    item_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    from_: Annotated[str | None, Query(alias="from")] = None,
+    to: str | None = None,
+    limit: str = "500",
+    order: str = "asc",
+) -> list[OrderBookObservationResponse]:
+    from_at = _parse_datetime_filter(from_, "from") if from_ is not None else None
+    to_at = _parse_datetime_filter(to, "to") if to is not None else None
+    if from_at is not None and to_at is not None and from_at > to_at:
+        raise _business_error(
+            status.HTTP_400_BAD_REQUEST,
+            "invalid_time_range",
+            "from must not be later than to.",
+        )
+
+    parsed_limit = _parse_positive_int(limit, "limit", maximum=2000)
+    parsed_order = _parse_order(order)
+    service = ItemQueryService(session)
+    try:
+        observations = await service.list_order_book_observations(
+            item_id=item_id,
+            from_at=from_at,
+            to_at=to_at,
+            limit=parsed_limit,
+            order=parsed_order,
+        )
+    except ItemNotFoundError as exc:
+        raise _business_error(
+            status.HTTP_404_NOT_FOUND,
+            "item_not_found",
+            "The requested item was not found.",
+        ) from exc
+    return [_order_book_observation_response(row) for row in observations]
 
 
 def _parse_positive_int(value: str, field: str, *, maximum: int | None) -> int:
@@ -234,6 +277,27 @@ def _snapshot_response(snapshot: MarketSnapshot) -> SnapshotResponse:
         estimated_volume=snapshot.estimated_volume,
         source_import_job_id=snapshot.source_import_job_id,
         created_at=snapshot.created_at,
+    )
+
+
+def _order_book_observation_response(
+    observation: OrderBookObservationData,
+) -> OrderBookObservationResponse:
+    return OrderBookObservationResponse(
+        id=observation.id,
+        item_id=observation.item_id,
+        market_snapshot_id=observation.market_snapshot_id,
+        screen_review_import_id=observation.screen_review_import_id,
+        observed_at=observation.observed_at,
+        best_ask=observation.best_ask,
+        best_bid=observation.best_bid,
+        observed_bid_quantity=observation.observed_bid_quantity,
+        observed_ask_quantity=observation.observed_ask_quantity,
+        quantity_semantics=observation.quantity_semantics,
+        source_type=observation.source_type,
+        source_version=observation.source_version,
+        review_status=observation.review_status,
+        created_at=observation.created_at,
     )
 
 

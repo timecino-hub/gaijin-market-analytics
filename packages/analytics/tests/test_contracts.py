@@ -184,3 +184,47 @@ def test_output_object_is_immutable_and_preserves_decimal_fields() -> None:
     assert isinstance(result.net_roi, Decimal)
     with pytest.raises(FrozenInstanceError):
         result.observation_count = 2  # type: ignore[misc]
+
+
+def test_observed_quantities_require_explicit_semantics_and_source() -> None:
+    with pytest.raises(ContractValidationError, match="quantity_semantics"):
+        MarketObservation(
+            observed_at=aware(0),
+            best_ask=Decimal("10"),
+            best_bid=Decimal("9"),
+            ask_count=None,
+            bid_count=None,
+            estimated_volume=None,
+            observed_ask_quantity=7,
+            observed_bid_quantity=5,
+        )
+
+
+def test_observation_provenance_fields_must_be_non_empty_strings() -> None:
+    with pytest.raises(ContractValidationError, match="non-empty string"):
+        MarketObservation(
+            observed_at=aware(0),
+            best_ask=Decimal("10"),
+            best_bid=Decimal("9"),
+            ask_count=None,
+            bid_count=None,
+            estimated_volume=None,
+            quantity_semantics=123,  # type: ignore[arg-type]
+        )
+
+
+def test_screen_review_quantity_requires_confirmed_review_status() -> None:
+    with pytest.raises(ContractValidationError, match="confirmed review_status"):
+        MarketObservation(
+            observed_at=aware(0),
+            best_ask=Decimal("10"),
+            best_bid=Decimal("9"),
+            ask_count=None,
+            bid_count=None,
+            estimated_volume=None,
+            observed_ask_quantity=7,
+            observed_bid_quantity=5,
+            quantity_semantics="screenshot_display_quantity",
+            source_type="screen_review",
+            review_status="pending_review",
+        )

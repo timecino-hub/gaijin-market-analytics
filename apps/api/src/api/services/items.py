@@ -2,12 +2,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, cast
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import Item, MarketSnapshot
+from api.db.models import Item, MarketSnapshot, OrderBookObservation
 from api.schemas.items import SortField, SortOrder
 
 
@@ -46,6 +46,24 @@ class ItemDetailData(ItemWithLatestSnapshot):
 class ItemListData:
     items: list[ItemWithLatestSnapshot]
     total: int
+
+
+@dataclass(frozen=True)
+class OrderBookObservationData:
+    id: int
+    item_id: int
+    market_snapshot_id: int
+    screen_review_import_id: int
+    observed_at: datetime
+    best_ask: Decimal
+    best_bid: Decimal | None
+    observed_bid_quantity: int | None
+    observed_ask_quantity: int | None
+    quantity_semantics: Literal["screenshot_display_quantity"]
+    source_type: Literal["screen_review"]
+    source_version: str
+    review_status: Literal["confirmed", "confirmed_with_edits"]
+    created_at: datetime
 
 
 class ItemQueryService:
@@ -160,6 +178,70 @@ class ItemQueryService:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_order_book_observations(
+        self,
+        *,
+        item_id: int,
+        from_at: datetime | None,
+        to_at: datetime | None,
+        limit: int,
+        order: Literal["asc", "desc"],
+    ) -> list[OrderBookObservationData]:
+        exists_statement = select(Item.id).where(Item.id == item_id).limit(1)
+        if await self._session.scalar(exists_statement) is None:
+            raise ItemNotFoundError(f"Item {item_id} was not found.")
+
+        filters = [MarketSnapshot.item_id == item_id]
+        if from_at is not None:
+            filters.append(MarketSnapshot.observed_at >= from_at)
+        if to_at is not None:
+            filters.append(MarketSnapshot.observed_at <= to_at)
+
+        observed_at_direction = (
+            MarketSnapshot.observed_at.asc
+            if order == "asc"
+            else MarketSnapshot.observed_at.desc
+        )
+        id_direction = (
+            OrderBookObservation.id.asc if order == "asc" else OrderBookObservation.id.desc
+        )
+        statement = (
+            select(OrderBookObservation, MarketSnapshot)
+            .join(
+                MarketSnapshot,
+                MarketSnapshot.id == OrderBookObservation.market_snapshot_id,
+            )
+            .where(*filters)
+            .order_by(observed_at_direction(), id_direction())
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return [
+            OrderBookObservationData(
+                id=observation.id,
+                item_id=snapshot.item_id,
+                market_snapshot_id=snapshot.id,
+                screen_review_import_id=observation.screen_review_import_id,
+                observed_at=snapshot.observed_at,
+                best_ask=snapshot.best_ask,
+                best_bid=snapshot.best_bid,
+                observed_bid_quantity=observation.observed_bid_quantity,
+                observed_ask_quantity=observation.observed_ask_quantity,
+                quantity_semantics=cast(
+                    Literal["screenshot_display_quantity"],
+                    observation.quantity_semantics,
+                ),
+                source_type=cast(Literal["screen_review"], observation.source_type),
+                source_version=observation.source_version,
+                review_status=cast(
+                    Literal["confirmed", "confirmed_with_edits"],
+                    observation.review_status,
+                ),
+                created_at=observation.created_at,
+            )
+            for observation, snapshot in result.all()
+        ]
 
 
 def _item_filters(

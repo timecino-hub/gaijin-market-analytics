@@ -15,6 +15,7 @@ from api.schemas.analysis import (
     AnalysisFeePolicy,
     AnalysisMarketRules,
     AnalysisResponse,
+    OpportunityResponse,
 )
 from api.services.analysis import (
     AnalysisInputError,
@@ -24,6 +25,7 @@ from api.services.analysis import (
     StrategyUnavailableError,
 )
 from api.services.items import ItemNotFoundError
+from api.services.opportunities import ItemOpportunityService, OpportunityServiceResult
 
 router = APIRouter(prefix="/api/v1/items", tags=["analysis"])
 
@@ -89,6 +91,62 @@ async def get_item_analysis(
         ) from exc
 
     return _analysis_response(result)
+
+
+@router.get("/{item_id}/opportunity", response_model=OpportunityResponse)
+async def get_item_opportunity(
+    item_id: int,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    registry: Annotated[StrategyRegistry, Depends(get_strategy_registry)],
+    clock: Annotated[UtcClock, Depends(get_utc_clock)],
+    horizon: str | None = None,
+    as_of: str | None = None,
+) -> OpportunityResponse:
+    _reject_fee_rate_query(request)
+    parsed_horizon = _parse_horizon(horizon)
+    parsed_as_of = _parse_as_of(as_of, clock)
+
+    service = ItemOpportunityService(session, settings, registry)
+    try:
+        result = await service.score_item(
+            item_id=item_id,
+            horizon=parsed_horizon,
+            as_of=parsed_as_of,
+        )
+    except ItemNotFoundError as exc:
+        raise _business_error(
+            status.HTTP_404_NOT_FOUND,
+            "item_not_found",
+            "The requested item was not found.",
+        ) from exc
+    except AnalysisInputError as exc:
+        raise _business_error(
+            status.HTTP_400_BAD_REQUEST,
+            "analysis_input_error",
+            "The opportunity input contract was invalid.",
+        ) from exc
+    except StrategyUnavailableError as exc:
+        raise _business_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "strategy_not_available",
+            "The configured analysis strategy is not available.",
+        ) from exc
+    except InvalidAnalyticsConfigurationError as exc:
+        raise _business_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "invalid_analytics_configuration",
+            "The analytics configuration is invalid.",
+        ) from exc
+    except Exception as exc:
+        raise _business_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "opportunity_unavailable",
+            "Opportunity scoring is temporarily unavailable.",
+        ) from exc
+
+    return _opportunity_response(result)
 
 
 def _parse_horizon(value: str | None) -> AnalysisHorizon:
@@ -158,26 +216,7 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
         item_id=item.id,
         external_key=item.external_key,
         item_name=item.name,
-        effective_inputs=AnalysisEffectiveInputs(
-            horizon=result.horizon.value,
-            as_of=result.as_of,
-            maximum_snapshot_age_seconds=data.maximum_snapshot_age_seconds,
-            minimum_snapshot_count=data.minimum_snapshot_count,
-            fee_policy=AnalysisFeePolicy(
-                name=result.fee_policy_name,
-                version=result.fee_policy_version,
-                nominal_fee_rate=result.nominal_fee_rate,
-                currency_quantum=result.currency_quantum,
-                proceeds_rounding=result.proceeds_rounding,
-            ),
-            market_rules=AnalysisMarketRules(
-                name=result.market_rules_name,
-                version=result.market_rules_version,
-                maximum_listing_price=result.maximum_listing_price,
-                maximum_sale_proceeds=result.maximum_sale_proceeds,
-                currency_quantum=result.currency_quantum,
-            ),
-        ),
+        effective_inputs=_effective_inputs(data),
         status=result.status.value,
         strategy_name=result.strategy_name,
         strategy_version=result.strategy_version,
@@ -205,6 +244,69 @@ def _analysis_response(data: AnalysisServiceResult) -> AnalysisResponse:
         risk_score=result.risk_score,
         confidence_score=result.confidence_score,
         reason_codes=[reason_code.value for reason_code in result.reason_codes],
+    )
+
+
+def _opportunity_response(data: OpportunityServiceResult) -> OpportunityResponse:
+    analysis_data = data.analysis
+    analysis = analysis_data.result
+    opportunity = data.opportunity
+    item = analysis_data.item
+    return OpportunityResponse(
+        item_id=item.id,
+        external_key=item.external_key,
+        item_name=item.name,
+        effective_inputs=_effective_inputs(analysis_data),
+        analysis_status=analysis.status.value,
+        analysis_strategy_name=analysis.strategy_name,
+        analysis_strategy_version=analysis.strategy_version,
+        strategy_name=opportunity.strategy_name,
+        strategy_version=opportunity.strategy_version,
+        feature_version=opportunity.feature_version,
+        eligible=opportunity.eligible,
+        score=opportunity.score,
+        raw_score=opportunity.raw_score,
+        profitability_score=opportunity.profitability_score,
+        liquidity_score=opportunity.liquidity_score,
+        stability_score=opportunity.stability_score,
+        data_confidence_score=opportunity.data_confidence_score,
+        freshness_score=opportunity.freshness_score,
+        risk_penalty=opportunity.risk_penalty,
+        liquidity_source=opportunity.liquidity_source,
+        quantity_observation_count=opportunity.quantity_observation_count,
+        latest_observed_bid_quantity=opportunity.latest_observed_bid_quantity,
+        latest_observed_ask_quantity=opportunity.latest_observed_ask_quantity,
+        current_ask=analysis.current_ask,
+        current_bid=analysis.current_bid,
+        reference_sell_price=analysis.reference_sell_price,
+        net_profit=analysis.net_profit,
+        net_roi=analysis.net_roi,
+        explanation_codes=list(opportunity.explanation_codes),
+        analysis_reason_codes=[reason_code.value for reason_code in analysis.reason_codes],
+    )
+
+
+def _effective_inputs(data: AnalysisServiceResult) -> AnalysisEffectiveInputs:
+    result = data.result
+    return AnalysisEffectiveInputs(
+        horizon=result.horizon.value,
+        as_of=result.as_of,
+        maximum_snapshot_age_seconds=data.maximum_snapshot_age_seconds,
+        minimum_snapshot_count=data.minimum_snapshot_count,
+        fee_policy=AnalysisFeePolicy(
+            name=result.fee_policy_name,
+            version=result.fee_policy_version,
+            nominal_fee_rate=result.nominal_fee_rate,
+            currency_quantum=result.currency_quantum,
+            proceeds_rounding=result.proceeds_rounding,
+        ),
+        market_rules=AnalysisMarketRules(
+            name=result.market_rules_name,
+            version=result.market_rules_version,
+            maximum_listing_price=result.maximum_listing_price,
+            maximum_sale_proceeds=result.maximum_sale_proceeds,
+            currency_quantum=result.currency_quantum,
+        ),
     )
 
 

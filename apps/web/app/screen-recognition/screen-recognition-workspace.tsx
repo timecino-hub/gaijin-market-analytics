@@ -1120,6 +1120,10 @@ function CandidatePanel({
             <Info label="database item" value={review.candidate.database_item_id?.toString() ?? "—"} />
             <Info label="snapshot" value={review.candidate.market_snapshot_id?.toString() ?? "—"} />
             <Info label="audit import" value={review.candidate.screen_review_import_id?.toString() ?? "—"} />
+            <Info
+              label="order-book observation"
+              value={review.candidate.order_book_observation_id?.toString() ?? "—"}
+            />
             <Info label="imported at" value={review.candidate.imported_at ? formatDateTime(review.candidate.imported_at) : "—"} />
             <Info label="quantity semantics" value={review.candidate.quantity_semantics} />
             <Info label="CSV quantity mapping" value={review.candidate.csv_quantity_mapping} />

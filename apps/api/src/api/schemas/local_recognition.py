@@ -158,6 +158,7 @@ class ReviewedCandidate(BaseModel):
     database_item_id: int | None = None
     screen_review_import_id: int | None = None
     market_snapshot_id: int | None = None
+    order_book_observation_id: int | None = None
     imported_at: datetime | None = None
 
     @field_serializer("best_bid", "best_ask")

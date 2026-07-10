@@ -26,6 +26,7 @@ packages/analytics/
 |   +-- market_rules.py
 |   +-- horizons.py
 |   +-- statistics.py
+|   +-- opportunities.py
 |   +-- registry.py
 |   +-- strategies/
 |       +-- base.py
@@ -37,6 +38,9 @@ packages/analytics/
 
 `MarketObservation` contains `observed_at`, `best_ask`, `best_bid`,
 `ask_count`, `bid_count`, `estimated_volume`, and optional `observation_key`.
+It can also carry explicitly named reviewed display quantities and their
+quantity semantics, source type, and review status. These fields do not replace
+or reinterpret the legacy CSV count fields.
 `AnalysisRequest` contains item ID, horizon, explicit `as_of`, immutable
 observations, marketplace fee policy, fixed market rules, maximum snapshot age,
 and minimum snapshot count.
@@ -215,6 +219,21 @@ low liquidity, large spread, and invalid non-positive prices in market data.
 Contract violations such as naive datetimes, future observations, invalid fee
 rates, and invalid item IDs raise stable analytics exceptions.
 
+## OpportunityScoreV1
+
+`OpportunityScoreV1` is the first deterministic opportunity-ranking baseline.
+It consumes the exact observations and `AnalysisResult` produced for one item
+and returns eligibility, a `0..100` score, component scores, a risk penalty,
+liquidity provenance, and explanation codes. It does not predict future prices
+or describe a score as a success probability.
+
+The weighted components are profitability after the fixed fee (35%), liquidity
+proxy (25%), robust price stability (15%), evidence confidence (15%), and data
+freshness (10%), followed by a maximum 15-point risk subtraction. Reviewed
+screenshot quantities are preferred as the liquidity proxy; legacy CSV counts
+are only a fallback. Full definitions and versioning rules are in
+`docs/opportunity-scoring-v1.md`.
+
 ## Registry
 
 `StrategyRegistry` is explicit and test-isolated. It does not use import side
@@ -234,10 +253,11 @@ The FastAPI service depends on `packages/analytics` through a local uv path
 dependency. The API does not copy analytics source files and does not inject
 runtime paths with `sys.path`.
 
-The read-only endpoint is:
+The read-only analysis endpoints are:
 
 ```text
 GET /api/v1/items/{item_id}/analysis
+GET /api/v1/items/{item_id}/opportunity
 ```
 
 Query parameters:

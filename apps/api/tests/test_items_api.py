@@ -119,6 +119,105 @@ def _insert_snapshot(
         engine.dispose()
 
 
+def _insert_order_book_observation(
+    database_url: str,
+    *,
+    item_id: int,
+    snapshot_id: int,
+    review_id: str,
+    observed_bid_quantity: int | None,
+    observed_ask_quantity: int | None,
+    source_version: str = "screen_review_candidate_v1",
+    review_status: str = "confirmed",
+) -> tuple[int, int]:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            screen_review_import_id = int(
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO screen_review_imports (
+                            review_id,
+                            item_id,
+                            market_snapshot_id,
+                            review_status,
+                            candidate_version,
+                            candidate_sha256,
+                            total_bid_quantity,
+                            total_ask_quantity,
+                            candidate_payload,
+                            source_metadata
+                        )
+                        VALUES (
+                            :review_id,
+                            :item_id,
+                            :snapshot_id,
+                            :review_status,
+                            :source_version,
+                            :candidate_sha256,
+                            :observed_bid_quantity,
+                            :observed_ask_quantity,
+                            '{}'::jsonb,
+                            '{}'::jsonb
+                        )
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "review_id": review_id,
+                        "item_id": item_id,
+                        "snapshot_id": snapshot_id,
+                        "review_status": review_status,
+                        "source_version": source_version,
+                        "candidate_sha256": f"{snapshot_id:064x}"[-64:],
+                        "observed_bid_quantity": observed_bid_quantity,
+                        "observed_ask_quantity": observed_ask_quantity,
+                    },
+                ).scalar_one()
+            )
+            observation_id = int(
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO order_book_observations (
+                            market_snapshot_id,
+                            screen_review_import_id,
+                            observed_bid_quantity,
+                            observed_ask_quantity,
+                            quantity_semantics,
+                            source_type,
+                            source_version,
+                            review_status
+                        )
+                        VALUES (
+                            :snapshot_id,
+                            :screen_review_import_id,
+                            :observed_bid_quantity,
+                            :observed_ask_quantity,
+                            'screenshot_display_quantity',
+                            'screen_review',
+                            :source_version,
+                            :review_status
+                        )
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "snapshot_id": snapshot_id,
+                        "screen_review_import_id": screen_review_import_id,
+                        "observed_bid_quantity": observed_bid_quantity,
+                        "observed_ask_quantity": observed_ask_quantity,
+                        "source_version": source_version,
+                        "review_status": review_status,
+                    },
+                ).scalar_one()
+            )
+            return screen_review_import_id, observation_id
+    finally:
+        engine.dispose()
+
+
 def test_empty_database_item_list(client: TestClient) -> None:
     response = client.get("/api/v1/items")
 
@@ -515,3 +614,120 @@ def _item_with_three_snapshots(database_url: str) -> int:
             best_ask=ask,
         )
     return item_id
+
+
+def test_order_book_observations_return_normalized_algorithm_inputs(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-order-book",
+        name="Order Book",
+    )
+    snapshot_id = _insert_snapshot(
+        migrated_database,
+        item_id=item_id,
+        observed_at="2026-06-27T00:00:00Z",
+        best_ask="13.000000",
+        best_bid="12.340000",
+        ask_count=None,
+        bid_count=None,
+        estimated_volume=None,
+    )
+    audit_id, observation_id = _insert_order_book_observation(
+        migrated_database,
+        item_id=item_id,
+        snapshot_id=snapshot_id,
+        review_id="review-order-book-1",
+        observed_bid_quantity=5,
+        observed_ask_quantity=7,
+        review_status="confirmed_with_edits",
+    )
+
+    response = client.get(f"/api/v1/items/{item_id}/order-book-observations")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": observation_id,
+            "item_id": item_id,
+            "market_snapshot_id": snapshot_id,
+            "screen_review_import_id": audit_id,
+            "observed_at": "2026-06-27T00:00:00Z",
+            "best_ask": "13.000000",
+            "best_bid": "12.340000",
+            "observed_bid_quantity": 5,
+            "observed_ask_quantity": 7,
+            "quantity_semantics": "screenshot_display_quantity",
+            "source_type": "screen_review",
+            "source_version": "screen_review_candidate_v1",
+            "review_status": "confirmed_with_edits",
+            "created_at": response.json()[0]["created_at"],
+        }
+    ]
+
+
+def test_order_book_observations_support_time_filters_order_and_limit(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-order-book-history",
+        name="Order Book History",
+    )
+    for index, hour in enumerate((0, 1, 2), start=1):
+        snapshot_id = _insert_snapshot(
+            migrated_database,
+            item_id=item_id,
+            observed_at=f"2026-06-27T0{hour}:00:00Z",
+            best_ask=f"{10 + index}.000000",
+            best_bid=f"{9 + index}.000000",
+            ask_count=None,
+            bid_count=None,
+            estimated_volume=None,
+        )
+        _insert_order_book_observation(
+            migrated_database,
+            item_id=item_id,
+            snapshot_id=snapshot_id,
+            review_id=f"review-order-book-{index + 1}",
+            observed_bid_quantity=index,
+            observed_ask_quantity=index + 10,
+        )
+
+    response = client.get(
+        f"/api/v1/items/{item_id}/order-book-observations"
+        "?from=2026-06-27T01:00:00Z&order=desc&limit=1"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["observed_at"] == "2026-06-27T02:00:00Z"
+    assert body[0]["observed_bid_quantity"] == 3
+    assert body[0]["observed_ask_quantity"] == 13
+
+
+def test_order_book_observations_empty_history_returns_empty_array(
+    client: TestClient,
+    migrated_database: str,
+) -> None:
+    item_id = _insert_item(
+        migrated_database,
+        external_key="synthetic-order-book-empty",
+        name="Order Book Empty",
+    )
+
+    response = client.get(f"/api/v1/items/{item_id}/order-book-observations")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_missing_item_order_book_observations_returns_404(client: TestClient) -> None:
+    response = client.get("/api/v1/items/999999/order-book-observations")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "item_not_found"

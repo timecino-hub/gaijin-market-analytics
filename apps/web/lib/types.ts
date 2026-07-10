@@ -314,6 +314,7 @@ export type LocalRecognitionCandidate = {
   database_item_id: number | null;
   screen_review_import_id: number | null;
   market_snapshot_id: number | null;
+  order_book_observation_id: number | null;
   imported_at: string | null;
 };
 
