@@ -412,3 +412,16 @@ The API endpoint `GET /api/v1/opportunities` performs a bounded two-query batch
 load rather than issuing analysis queries per item. Full endpoint filters,
 ordering, pagination, versioning, and safety constraints are documented in
 `docs/opportunity-ranking-v1.md`.
+
+
+## Historical trade buckets
+
+Round 5B adds normalized server-reported trade-history buckets. They are distinct from
+`MarketSnapshot` and `OrderBookObservation`:
+
+- order-book data describes current quoted prices and displayed quantities;
+- historical trade buckets describe server-aggregated historical VWAP and reported volume.
+
+OpportunityScoreV1 is unchanged. Historical buckets are stored for later calibration and
+market-regime features. A VWAP bucket must not be interpreted as proof that any exact price
+inside the bucket traded.

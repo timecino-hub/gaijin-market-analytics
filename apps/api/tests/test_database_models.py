@@ -3,6 +3,8 @@ from decimal import Decimal
 from sqlalchemy import DateTime, Numeric
 
 from api.db.models import (
+    HistoricalTradeBucket,
+    HistoricalTradeImport,
     ImportJob,
     Item,
     MarketSnapshot,
@@ -98,3 +100,24 @@ def test_order_book_observation_model_has_explicit_quantity_semantics() -> None:
     assert "ck_order_book_observations_source_type" in constraint_names
     assert "ck_order_book_observations_source_version_not_empty" in constraint_names
     assert "ck_order_book_observations_review_status_allowed" in constraint_names
+
+
+def test_historical_trade_models_preserve_source_semantics() -> None:
+    imports = HistoricalTradeImport.__table__
+    buckets = HistoricalTradeBucket.__table__
+
+    assert imports.c.source_series_sha256.type.length == 64
+    assert imports.c.source_url_safe.type.length == 2048
+    assert imports.c.imported_at.type.timezone
+    assert buckets.c.bucket_start_utc.type.timezone
+    assert buckets.c.reported_vwap_price.type.precision == 18
+    assert buckets.c.reported_vwap_price.type.scale == 4
+    assert not buckets.c.reported_trade_volume.nullable
+
+    import_constraints = {constraint.name for constraint in imports.constraints}
+    bucket_constraints = {constraint.name for constraint in buckets.constraints}
+    assert "uq_historical_trade_imports_item_hash" in import_constraints
+    assert "ck_historical_trade_imports_sha256" in import_constraints
+    assert "uq_historical_trade_buckets_item_granularity_start" in bucket_constraints
+    assert "ck_historical_trade_buckets_price_semantics" in bucket_constraints
+    assert "ck_historical_trade_buckets_volume_semantics" in bucket_constraints

@@ -28,6 +28,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "market_snapshots",
         "screen_review_imports",
         "order_book_observations",
+        "historical_trade_imports",
+        "historical_trade_buckets",
     }.issubset(_table_names(test_database_url))
 
     command.downgrade(config, "base")
@@ -37,6 +39,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "market_snapshots",
         "screen_review_imports",
         "order_book_observations",
+        "historical_trade_imports",
+        "historical_trade_buckets",
     }.intersection(_table_names(test_database_url))
 
     command.upgrade(config, "head")
@@ -46,6 +50,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "market_snapshots",
         "screen_review_imports",
         "order_book_observations",
+        "historical_trade_imports",
+        "historical_trade_buckets",
     }.issubset(_table_names(test_database_url))
 
 

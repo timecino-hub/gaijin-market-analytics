@@ -387,6 +387,8 @@ def capabilities_payload() -> dict[str, Any]:
         "store_ttl_seconds": review_store.ttl_seconds,
         "database_written": True,
         "confirmed_review_import_available": True,
+        "historical_trade_import_available": True,
+        "historical_trade_schema_version": "gaijin_trade_history_v1",
         "manual_item_creation_available": False,
         "handles_history_images": False,
         "browser_extension_connected": False,

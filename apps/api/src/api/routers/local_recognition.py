@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings, parse_cors_allowed_origins
 from api.db.session import get_session
+from api.schemas.historical_trades import (
+    HistoricalTradeImportRequest,
+    HistoricalTradeImportResponse,
+)
 from api.schemas.local_recognition import (
     ExtensionPairingSummary,
     ExtensionReviewCreateResponse,
@@ -55,6 +59,10 @@ from api.services.local_recognition import (
     process_review_image,
     validate_image_upload,
 )
+from api.services.historical_trades import (
+    HistoricalTradeImportError,
+    import_historical_trades,
+)
 from api.services.local_recognition_import import ReviewImportError, import_confirmed_review
 from api.services.local_recognition_source import SourceMetadataError, extension_source_metadata
 from api.services.local_recognition_store import (
@@ -74,6 +82,11 @@ def local_loopback_dependency(request: Request) -> None:
 def local_browser_upload_dependency(request: Request) -> None:
     _require_allowed_browser_origin_if_present(request)
     _enforce_content_length(request)
+
+
+def local_history_import_dependency(request: Request) -> None:
+    _require_loopback_request(request)
+    _enforce_history_content_length(request)
 
 
 router = APIRouter(
@@ -303,6 +316,62 @@ async def create_extension_review(
         created_at=record.created_at,
         expires_at=record.expires_at,
         deduplicated=False,
+    )
+
+
+@router.post(
+    "/extension-history-imports",
+    response_model=HistoricalTradeImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(local_history_import_dependency)],
+)
+async def create_extension_history_import(
+    payload: HistoricalTradeImportRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> HistoricalTradeImportResponse:
+    try:
+        token = _bearer_token(authorization)
+        pairing = pairing_store.authenticate_token(token)
+        pairing_store.consume_upload_token(pairing.pairing_id)
+        result = await import_historical_trades(
+            session=session,
+            request=payload,
+            pairing_id=pairing.pairing_id,
+            extension_version=pairing.extension_version,
+        )
+    except PairingError as exc:
+        raise _pairing_business_error(exc) from exc
+    except HistoricalTradeImportError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if exc.code in {"historical_trade_item_not_found", "item_not_found"}
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise _business_error(status_code, exc.code, exc.message) from exc
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise _business_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "database_error",
+            "Historical trade data could not be imported due to a database error.",
+        ) from exc
+
+    record = result.import_record
+    return HistoricalTradeImportResponse(
+        import_id=record.id,
+        item_id=result.item.id,
+        item_key=result.item.external_key,
+        source_series_sha256=record.source_series_sha256,
+        point_count_1h=record.point_count_1h,
+        point_count_1d=record.point_count_1d,
+        inserted_count=result.inserted_count,
+        updated_count=result.updated_count,
+        unchanged_count=result.unchanged_count,
+        overlap_day_count=record.overlap_day_count,
+        overlap_mismatch_count=record.overlap_mismatch_count,
+        deduplicated=result.deduplicated,
+        imported_at=record.imported_at,
     )
 
 
@@ -593,6 +662,25 @@ def _replace_origin_host(parsed: object, host: str) -> str:
 
 def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+
+MAX_HISTORY_IMPORT_BODY_BYTES = 2_500_000
+
+
+def _enforce_history_content_length(request: Request) -> None:
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return
+    try:
+        length = int(raw)
+    except ValueError:
+        return
+    if length > MAX_HISTORY_IMPORT_BODY_BYTES:
+        raise _business_error(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            "historical_trade_payload_too_large",
+            "Historical trade import exceeds the local bridge limit.",
+        )
 
 
 def _enforce_content_length(request: Request) -> None:

@@ -43,6 +43,12 @@ class Item(Base):
     )
 
     snapshots: Mapped[list["MarketSnapshot"]] = relationship(back_populates="item")
+    historical_trade_imports: Mapped[list["HistoricalTradeImport"]] = relationship(
+        back_populates="item"
+    )
+    historical_trade_buckets: Mapped[list["HistoricalTradeBucket"]] = relationship(
+        back_populates="item"
+    )
 
 
 class ImportJob(Base):
@@ -218,3 +224,92 @@ class OrderBookObservation(Base):
     screen_review_import: Mapped[ScreenReviewImport] = relationship(
         back_populates="order_book_observation"
     )
+
+
+class HistoricalTradeImport(Base):
+    __tablename__ = "historical_trade_imports"
+    __table_args__ = (
+        CheckConstraint("source_series_sha256 ~ '^[0-9a-f]{64}$'", name="ck_historical_trade_imports_sha256"),
+        CheckConstraint("source_schema_version <> ''", name="ck_historical_trade_imports_schema_version"),
+        CheckConstraint("point_count_1h >= 0", name="ck_historical_trade_imports_1h_count_non_negative"),
+        CheckConstraint("point_count_1d >= 0", name="ck_historical_trade_imports_1d_count_non_negative"),
+        CheckConstraint("inserted_count >= 0", name="ck_historical_trade_imports_inserted_non_negative"),
+        CheckConstraint("updated_count >= 0", name="ck_historical_trade_imports_updated_non_negative"),
+        CheckConstraint("unchanged_count >= 0", name="ck_historical_trade_imports_unchanged_non_negative"),
+        Index("ix_historical_trade_imports_item_id", "item_id"),
+        Index("ix_historical_trade_imports_imported_at", "imported_at"),
+        UniqueConstraint("item_id", "source_series_sha256", name="uq_historical_trade_imports_item_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    pairing_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_url_safe: Mapped[str] = mapped_column(String(2048), nullable=False)
+    source_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    extension_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_series_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    point_count_1h: Mapped[int] = mapped_column(Integer, nullable=False)
+    point_count_1d: Mapped[int] = mapped_column(Integer, nullable=False)
+    inserted_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    overlap_day_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    overlap_mismatch_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    item: Mapped[Item] = relationship(back_populates="historical_trade_imports")
+    buckets: Mapped[list["HistoricalTradeBucket"]] = relationship(back_populates="source_import")
+
+
+class HistoricalTradeBucket(Base):
+    __tablename__ = "historical_trade_buckets"
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id", "granularity", "bucket_start_utc",
+            name="uq_historical_trade_buckets_item_granularity_start",
+        ),
+        CheckConstraint("granularity IN ('1h', '1d')", name="ck_historical_trade_buckets_granularity"),
+        CheckConstraint("bucket_duration_seconds IN (3600, 86400)", name="ck_historical_trade_buckets_duration"),
+        CheckConstraint("vwap_price_raw > 0", name="ck_historical_trade_buckets_price_raw_positive"),
+        CheckConstraint("price_scale = 10000", name="ck_historical_trade_buckets_price_scale"),
+        CheckConstraint("reported_vwap_price > 0", name="ck_historical_trade_buckets_price_positive"),
+        CheckConstraint("reported_trade_volume > 0", name="ck_historical_trade_buckets_volume_positive"),
+        CheckConstraint(
+            "price_semantics = 'bucket_volume_weighted_average_trade_price'",
+            name="ck_historical_trade_buckets_price_semantics",
+        ),
+        CheckConstraint(
+            "volume_semantics = 'reported_trade_volume_unknown_unit'",
+            name="ck_historical_trade_buckets_volume_semantics",
+        ),
+        Index("ix_historical_trade_buckets_item_start", "item_id", "bucket_start_utc"),
+        Index("ix_historical_trade_buckets_granularity_start", "granularity", "bucket_start_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    source_import_id: Mapped[int] = mapped_column(
+        ForeignKey("historical_trade_imports.id"), nullable=False
+    )
+    granularity: Mapped[str] = mapped_column(String(2), nullable=False)
+    bucket_start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    bucket_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    vwap_price_raw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    price_scale: Mapped[int] = mapped_column(Integer, nullable=False, server_default="10000")
+    reported_vwap_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    reported_trade_volume: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_semantics: Mapped[str] = mapped_column(String, nullable=False)
+    volume_semantics: Mapped[str] = mapped_column(String, nullable=False)
+    source_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    item: Mapped[Item] = relationship(back_populates="historical_trade_buckets")
+    source_import: Mapped[HistoricalTradeImport] = relationship(back_populates="buckets")

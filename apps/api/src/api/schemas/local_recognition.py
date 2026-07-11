@@ -218,6 +218,8 @@ class ReviewCapabilitiesResponse(BaseModel):
     store_ttl_seconds: int
     database_written: bool
     confirmed_review_import_available: bool = True
+    historical_trade_import_available: bool = True
+    historical_trade_schema_version: Literal["gaijin_trade_history_v1"] = "gaijin_trade_history_v1"
     manual_item_creation_available: Literal[False] = False
     handles_history_images: Literal[False]
     browser_extension_connected: Literal[False]

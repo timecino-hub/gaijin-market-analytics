@@ -6,6 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models import MarketSnapshot
 from api.db.session import get_session
+from api.schemas.historical_trades import (
+    HistoricalTradeBucketListResponse,
+    HistoricalTradeBucketResponse,
+)
 from api.schemas.items import (
     ItemDetailResponse,
     ItemListResponse,
@@ -15,6 +19,10 @@ from api.schemas.items import (
     SnapshotSummary,
     SortField,
     SortOrder,
+)
+from api.services.historical_trades import (
+    HistoricalTradeImportError,
+    list_historical_trade_buckets,
 )
 from api.services.items import (
     ItemDetailData,
@@ -66,6 +74,67 @@ async def list_items(
         page_size=parsed_page_size,
         total=result.total,
         total_pages=total_pages,
+    )
+
+
+@router.get(
+    "/{item_id}/historical-trades",
+    response_model=HistoricalTradeBucketListResponse,
+)
+async def list_item_historical_trades(
+    item_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    granularity: Annotated[str, Query(pattern="^(1h|1d)$")] = "1d",
+    from_: Annotated[str | None, Query(alias="from")] = None,
+    to: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+) -> HistoricalTradeBucketListResponse:
+    from_at = _parse_datetime_filter(from_, "from") if from_ is not None else None
+    to_at = _parse_datetime_filter(to, "to") if to is not None else None
+    if from_at is not None and to_at is not None and from_at > to_at:
+        raise _business_error(
+            status.HTTP_400_BAD_REQUEST,
+            "invalid_time_range",
+            "from must not be after to.",
+        )
+    try:
+        buckets = await list_historical_trade_buckets(
+            session=session,
+            item_id=item_id,
+            granularity=granularity,
+            start_at=from_at,
+            end_at=to_at,
+            limit=limit,
+        )
+    except HistoricalTradeImportError as exc:
+        raise _business_error(
+            status.HTTP_404_NOT_FOUND,
+            exc.code,
+            exc.message,
+        ) from exc
+    return HistoricalTradeBucketListResponse(
+        item_id=item_id,
+        granularity=granularity,
+        total=len(buckets),
+        buckets=[
+            HistoricalTradeBucketResponse(
+                id=bucket.id,
+                item_id=bucket.item_id,
+                granularity=bucket.granularity,
+                bucket_start_utc=bucket.bucket_start_utc,
+                bucket_duration_seconds=bucket.bucket_duration_seconds,
+                vwap_price_raw=bucket.vwap_price_raw,
+                price_scale=bucket.price_scale,
+                reported_vwap_price=bucket.reported_vwap_price,
+                reported_trade_volume=bucket.reported_trade_volume,
+                price_semantics=bucket.price_semantics,
+                volume_semantics=bucket.volume_semantics,
+                source_schema_version=bucket.source_schema_version,
+                first_seen_at=bucket.first_seen_at,
+                last_seen_at=bucket.last_seen_at,
+            )
+            for bucket in buckets
+        ],
     )
 
 
