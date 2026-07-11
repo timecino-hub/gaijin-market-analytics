@@ -234,6 +234,17 @@ screenshot quantities are preferred as the liquidity proxy; legacy CSV counts
 are only a fallback. Full definitions and versioning rules are in
 `docs/opportunity-scoring-v1.md`.
 
+## Opportunity calibration backtest
+
+The pure package also provides `run_opportunity_calibration`, a versioned
+walk-forward evaluator for `OpportunityScoreV1`. It preserves a strict
+point-in-time boundary, applies repeated-quote entry and exit proxies, uses the
+fixed fee and rounding rules, evaluates multiple holding horizons, labels
+time-ordered train/validation/test cutoffs, and reports score-bin calibration,
+rank correlations, eligible-only portfolio metrics, and drawdown. It does not
+change V1 weights or claim real fills. See
+`docs/opportunity-calibration-v1.md`.
+
 ## Registry
 
 `StrategyRegistry` is explicit and test-isolated. It does not use import side

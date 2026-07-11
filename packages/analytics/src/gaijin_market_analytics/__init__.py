@@ -1,5 +1,21 @@
 """Pure analytics package for imported or explicitly authorized market data."""
 
+from gaijin_market_analytics.backtesting import (
+    CalibrationCaseStatus,
+    CalibrationCohortSummary,
+    CalibrationExitReason,
+    CalibrationSkipReason,
+    CalibrationSplit,
+    ComponentCorrelation,
+    ItemMarketHistory,
+    OpportunityCalibrationCase,
+    OpportunityCalibrationConfig,
+    OpportunityCalibrationResult,
+    ScoreBinSummary,
+    TemporalSplitConfig,
+    generate_calibration_cutoffs,
+    run_opportunity_calibration,
+)
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus, ReasonCode
 from gaijin_market_analytics.fees import GAIJIN_MARKET_FEE_POLICY_V1, FeePolicy
@@ -18,17 +34,31 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResult",
     "AnalysisStatus",
+    "CalibrationCaseStatus",
+    "CalibrationCohortSummary",
+    "CalibrationExitReason",
+    "CalibrationSkipReason",
+    "CalibrationSplit",
+    "ComponentCorrelation",
     "FeePolicy",
     "GAIJIN_MARKET_FEE_POLICY_V1",
     "GAIJIN_MARKET_RULES_V1",
+    "ItemMarketHistory",
     "MarketRules",
     "MarketObservation",
+    "OpportunityCalibrationCase",
+    "OpportunityCalibrationConfig",
+    "OpportunityCalibrationResult",
     "OpportunityScoreConfig",
     "OpportunityScoreResult",
     "OpportunityScoreV1",
     "RankedOpportunityScore",
     "rank_opportunity_scores",
+    "run_opportunity_calibration",
     "ReasonCode",
+    "ScoreBinSummary",
+    "TemporalSplitConfig",
+    "generate_calibration_cutoffs",
     "RuleBasedV1",
     "RuleBasedV1Config",
 ]

@@ -253,7 +253,12 @@ uv run python -m api.backtesting_cli \
 
 Backtesting separates the analysis lookback window from the future snapshot
 evaluation window. Future `best_bid` values are evaluation proxies, not evidence
-of executed trades or profit guarantees. See `docs/backtesting.md`.
+of executed trades or profit guarantees. The pure analytics package also
+contains a versioned OpportunityScoreV1 calibration engine with repeated-quote
+entry/exit proxies, time-ordered train/validation/test labels, multiple holding
+horizons, score-bin diagnostics, rank correlations, and eligible-only portfolio
+metrics. See `docs/backtesting.md` and
+`docs/opportunity-calibration-v1.md`.
 
 Developer screen-recognition acceptance is available as a local-only CLI. It is
 for Screen Recognition CUT-20 on user-provided PNG/JPEG screenshots and
