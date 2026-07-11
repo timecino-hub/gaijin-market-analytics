@@ -140,6 +140,15 @@ These statistics diagnose the current `35/25/15/15/10` weights; they do not
 automatically change them. A new score or feature version is required for any
 weight or eligibility change.
 
+## Optional historical-trade evidence
+
+Round 5C can attach `TradeEvidenceCalibrationResult` diagnostics to
+the unchanged quote-only result. Completed `1h` buckets are preferred and
+completed `1d` buckets are used only as a non-overlapping fallback. The
+diagnostic reports quote-only, trade-supported, and combined evidence views; it
+never treats bucket VWAP as proof of a user's fill. See
+`docs/historical-trade-calibration-v1.md`.
+
 ## Interpretation limits
 
 - Quote persistence is not proof of execution.

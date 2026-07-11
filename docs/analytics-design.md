@@ -425,3 +425,13 @@ Round 5B adds normalized server-reported trade-history buckets. They are distinc
 OpportunityScoreV1 is unchanged. Historical buckets are stored for later calibration and
 market-regime features. A VWAP bucket must not be interpreted as proof that any exact price
 inside the bucket traded.
+
+### Historical trade evidence calibration
+
+The optional Round 5C evidence layer consumes normalized `1h`/`1d` historical
+trade buckets without changing `OpportunityScoreV1` or the quote-only
+calibration. It admits only fully completed post-cutoff buckets, prefers hourly
+data over daily fallback for each UTC day, and reports quote-only, trade-VWAP,
+trade-volume, and combined support separately. Historical trade dataset and
+configuration fingerprints are separate from the original baseline hashes.
+See `historical-trade-calibration-v1.md`.

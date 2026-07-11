@@ -4,10 +4,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 from gaijin_market_analytics.contracts import MarketObservation, observation_sort_key
 from gaijin_market_analytics.enums import AnalysisStatus
 from gaijin_market_analytics.exceptions import ContractValidationError
+
+if TYPE_CHECKING:
+    from gaijin_market_analytics.backtesting.trade_evidence_contracts import (
+        TradeEvidenceCalibrationResult,
+    )
+else:
+    TradeEvidenceCalibrationResult = Any
 
 
 SUPPORTED_CALIBRATION_HORIZON_DAYS = frozenset({7, 30, 90, 180})
@@ -320,6 +328,7 @@ class OpportunityCalibrationResult:
     cohorts: tuple[CalibrationCohortSummary, ...]
     score_bins: tuple[ScoreBinSummary, ...]
     component_correlations: tuple[ComponentCorrelation, ...]
+    trade_evidence: TradeEvidenceCalibrationResult | None = None
 
 
 def _require_aware_utc(value: datetime, field_name: str) -> datetime:

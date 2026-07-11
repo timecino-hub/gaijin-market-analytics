@@ -21,6 +21,13 @@ from gaijin_market_analytics.backtesting.calibration_fingerprints import (
 from gaijin_market_analytics.backtesting.calibration_statistics import (
     build_calibration_statistics,
 )
+from gaijin_market_analytics.backtesting.trade_evidence import (
+    build_trade_evidence_calibration,
+)
+from gaijin_market_analytics.backtesting.trade_evidence_contracts import (
+    ItemHistoricalTradeHistory,
+    TradeEvidenceConfig,
+)
 from gaijin_market_analytics.contracts import AnalysisRequest, AnalysisResult, MarketObservation
 from gaijin_market_analytics.enums import AnalysisHorizon, AnalysisStatus
 from gaijin_market_analytics.exceptions import ContractValidationError
@@ -62,6 +69,8 @@ def run_opportunity_calibration(
     market_rules: MarketRules,
     analysis_strategy: AnalysisStrategy,
     opportunity_scorer: OpportunityScoreV1 | None = None,
+    historical_trade_histories: tuple[ItemHistoricalTradeHistory, ...] = (),
+    trade_evidence_config: TradeEvidenceConfig | None = None,
 ) -> OpportunityCalibrationResult:
     """Walk forward through item histories and calibrate OpportunityScoreV1.
 
@@ -159,6 +168,25 @@ def run_opportunity_calibration(
         case_results,
         config,
     )
+    base_dataset_sha256 = dataset_sha256(histories)
+    base_configuration_sha256 = configuration_sha256(
+        config=config,
+        analysis_strategy=analysis_strategy,
+        opportunity_scorer=scorer,
+        fee_policy=fee_policy,
+        market_rules=market_rules,
+    )
+    evidence = None
+    if historical_trade_histories or trade_evidence_config is not None:
+        evidence = build_trade_evidence_calibration(
+            market_histories=histories,
+            trade_histories=historical_trade_histories,
+            cases=case_results,
+            calibration_config=config,
+            trade_evidence_config=trade_evidence_config or TradeEvidenceConfig(),
+            fee_policy=fee_policy,
+            base_configuration_sha256=base_configuration_sha256,
+        )
     return OpportunityCalibrationResult(
         config=config,
         engine_name=CALIBRATION_ENGINE_NAME,
@@ -169,18 +197,13 @@ def run_opportunity_calibration(
         fee_policy_version=fee_policy.version,
         market_rules_name=market_rules.name,
         market_rules_version=market_rules.version,
-        dataset_sha256=dataset_sha256(histories),
-        configuration_sha256=configuration_sha256(
-            config=config,
-            analysis_strategy=analysis_strategy,
-            opportunity_scorer=scorer,
-            fee_policy=fee_policy,
-            market_rules=market_rules,
-        ),
+        dataset_sha256=base_dataset_sha256,
+        configuration_sha256=base_configuration_sha256,
         cases=case_results,
         cohorts=cohorts,
         score_bins=score_bins,
         component_correlations=correlations,
+        trade_evidence=evidence,
     )
 
 
