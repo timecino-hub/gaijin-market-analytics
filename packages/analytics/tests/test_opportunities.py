@@ -243,3 +243,78 @@ def test_invalid_opportunity_config_is_rejected() -> None:
 
     with pytest.raises(ContractValidationError, match="finite Decimal"):
         OpportunityScoreConfig(full_profitability_roi=0.20)  # type: ignore[arg-type]
+
+
+def _rankable_result(
+    *,
+    item_id: int,
+    score: str,
+    eligible: bool = True,
+    profitability: str = "50",
+    liquidity: str = "50",
+    freshness: str = "50",
+    confidence: str = "50",
+):
+    from dataclasses import replace
+
+    observations = profitable_reviewed_observations()
+    base = OpportunityScoreV1().score(
+        analysis=analysis_for(observations),
+        observations=observations,
+        maximum_snapshot_age=timedelta(days=2),
+        minimum_snapshot_count=3,
+    )
+    return replace(
+        base,
+        item_id=item_id,
+        score=Decimal(score),
+        eligible=eligible,
+        profitability_score=Decimal(profitability),
+        liquidity_score=Decimal(liquidity),
+        freshness_score=Decimal(freshness),
+        data_confidence_score=Decimal(confidence),
+    )
+
+
+def test_cross_item_ranking_is_deterministic_and_eligible_first() -> None:
+    from gaijin_market_analytics.opportunities import rank_opportunity_scores
+
+    ranked = rank_opportunity_scores(
+        (
+            _rankable_result(item_id=9, score="80", profitability="60"),
+            _rankable_result(item_id=3, score="80", profitability="70"),
+            _rankable_result(item_id=1, score="99", eligible=False),
+            _rankable_result(item_id=2, score="75"),
+        ),
+        eligible_only=False,
+    )
+
+    assert [entry.rank for entry in ranked] == [1, 2, 3, 4]
+    assert [entry.opportunity.item_id for entry in ranked] == [3, 9, 2, 1]
+
+
+def test_cross_item_ranking_filters_ineligible_and_minimum_score() -> None:
+    from gaijin_market_analytics.opportunities import rank_opportunity_scores
+
+    ranked = rank_opportunity_scores(
+        (
+            _rankable_result(item_id=1, score="90", eligible=False),
+            _rankable_result(item_id=2, score="79.99"),
+            _rankable_result(item_id=3, score="80.00"),
+        ),
+        eligible_only=True,
+        minimum_score=Decimal("80"),
+    )
+
+    assert [entry.opportunity.item_id for entry in ranked] == [3]
+
+
+def test_cross_item_ranking_rejects_duplicate_items_and_invalid_thresholds() -> None:
+    from gaijin_market_analytics.opportunities import rank_opportunity_scores
+
+    duplicate = _rankable_result(item_id=1, score="80")
+    with pytest.raises(ContractValidationError, match="unique item_id"):
+        rank_opportunity_scores((duplicate, duplicate))
+
+    with pytest.raises(ContractValidationError, match="0 <= value <= 100"):
+        rank_opportunity_scores((duplicate,), minimum_score=Decimal("101"))

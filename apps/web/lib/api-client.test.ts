@@ -7,6 +7,7 @@ import {
   createLocalExtensionPairingCode,
   getLocalExtensionStatus,
   getItemAnalysis,
+  getOpportunities,
   getLocalRecognitionReview,
   importLocalRecognitionReview,
   patchLocalRecognitionReview,
@@ -607,3 +608,74 @@ function localReviewResponse() {
     rejected_at: null
   };
 }
+
+
+test("getOpportunities constructs a filtered reproducible ranking request", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured: { url: string; init?: RequestInit } | undefined;
+
+  globalThis.fetch = async (url, init) => {
+    captured = { url: String(url), init };
+    return Response.json({
+      items: [],
+      page: 1,
+      page_size: 25,
+      total: 0,
+      total_pages: 0,
+      evaluated_total: 0,
+      eligible_total: 0,
+      effective_inputs: {
+        horizon: 30,
+        as_of: "2026-06-29T00:00:00Z",
+        maximum_snapshot_age_seconds: 86400,
+        minimum_snapshot_count: 3,
+        fee_policy: {
+          name: "gaijin_market",
+          version: "1.0.0",
+          nominal_fee_rate: "0.15",
+          currency_quantum: "0.01",
+          proceeds_rounding: "seller_proceeds_round_down"
+        },
+        market_rules: {
+          name: "gaijin_market",
+          version: "1.0.0",
+          maximum_listing_price: "2000.00",
+          maximum_sale_proceeds: "1700.00",
+          currency_quantum: "0.01"
+        }
+      },
+      strategy_name: "opportunity_score",
+      strategy_version: "1.0.0",
+      feature_version: "opportunity_features_v1",
+      filters: {
+        eligible_only: true,
+        minimum_score: "50.00",
+        search: "Alpha",
+        category: null,
+        rarity: null,
+        include_inactive: false
+      }
+    });
+  };
+
+  try {
+    await getOpportunities({
+      horizon: "30",
+      as_of: "2026-06-29T00:00:00Z",
+      page: "1",
+      page_size: "25",
+      eligible_only: "true",
+      min_score: "50",
+      search: "Alpha",
+      include_inactive: "false"
+    });
+
+    assert.equal(
+      captured?.url,
+      "http://localhost:8000/api/v1/opportunities?horizon=30&as_of=2026-06-29T00%3A00%3A00Z&page=1&page_size=25&eligible_only=true&min_score=50&search=Alpha&include_inactive=false"
+    );
+    assert.equal(captured?.init?.cache, "no-store");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -180,6 +180,13 @@ type, and selection state, then upload it with the "上传 CSV" button. The
 browser applies the same default 10 MB size limit as a user-experience
 precheck, but the API remains the trusted validator.
 
+The web app exposes the deterministic, read-only opportunity leaderboard at
+`http://localhost:3000/opportunities`. It compares imported items under one
+shared `as_of`, horizon, fixed fee policy, and `OpportunityScoreV1` version;
+filters and pagination are encoded in the URL. Scores are explainable screening
+signals, not forecasts, probabilities, or trading advice. See
+`docs/opportunity-ranking-v1.md`.
+
 The web app also exposes the local screen-recognition review flow at
 `http://localhost:3000/screen-recognition`. This alpha page accepts a manually
 selected current market screenshot, creates an in-memory review through
@@ -226,6 +233,8 @@ Read-only market query endpoints:
 - `GET /api/v1/items/{item_id}`
 - `GET /api/v1/items/{item_id}/snapshots`
 - `GET /api/v1/items/{item_id}/analysis`
+- `GET /api/v1/items/{item_id}/opportunity`
+- `GET /api/v1/opportunities`
 
 Developer backtesting is available only as a read-only CLI. It does not add a
 public HTTP route, web page, result table, or background job:

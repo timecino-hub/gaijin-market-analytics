@@ -148,3 +148,87 @@ class OpportunityResponse(BaseModel):
     )
     def serialize_opportunity_decimal(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
+
+
+class OpportunityRankingFilters(BaseModel):
+    eligible_only: bool
+    minimum_score: Decimal
+    search: str | None
+    category: str | None
+    rarity: str | None
+    include_inactive: bool
+
+    @field_serializer("minimum_score")
+    def serialize_minimum_score(self, value: Decimal) -> str:
+        return str(value)
+
+
+class OpportunityRankingItem(BaseModel):
+    rank: int
+    item_id: int
+    external_key: str
+    item_name: str
+    category: str
+    rarity: str | None
+    is_active: bool
+    analysis_status: str
+    observation_count: int
+    first_observation_at: datetime | None
+    last_observation_at: datetime | None
+    eligible: bool
+    score: Decimal
+    raw_score: Decimal
+    profitability_score: Decimal
+    liquidity_score: Decimal
+    stability_score: Decimal
+    data_confidence_score: Decimal
+    freshness_score: Decimal
+    risk_penalty: Decimal
+    liquidity_source: Literal[
+        "reviewed_screenshot_quantity",
+        "snapshot_counts",
+        "unavailable",
+    ]
+    quantity_observation_count: int
+    latest_observed_bid_quantity: int | None
+    latest_observed_ask_quantity: int | None
+    current_ask: Decimal | None
+    current_bid: Decimal | None
+    reference_sell_price: Decimal | None
+    net_profit: Decimal | None
+    net_roi: Decimal | None
+    explanation_codes: list[str]
+    analysis_reason_codes: list[str]
+
+    @field_serializer(
+        "score",
+        "raw_score",
+        "profitability_score",
+        "liquidity_score",
+        "stability_score",
+        "data_confidence_score",
+        "freshness_score",
+        "risk_penalty",
+        "current_ask",
+        "current_bid",
+        "reference_sell_price",
+        "net_profit",
+        "net_roi",
+    )
+    def serialize_ranking_decimal(self, value: Decimal | None) -> str | None:
+        return str(value) if value is not None else None
+
+
+class OpportunityRankingResponse(BaseModel):
+    items: list[OpportunityRankingItem]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    evaluated_total: int
+    eligible_total: int
+    effective_inputs: AnalysisEffectiveInputs
+    strategy_name: str
+    strategy_version: str
+    feature_version: str
+    filters: OpportunityRankingFilters

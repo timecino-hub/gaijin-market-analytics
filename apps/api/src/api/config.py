@@ -26,6 +26,11 @@ class Settings(BaseSettings):
         gt=0,
         alias="ANALYTICS_MINIMUM_SNAPSHOT_COUNT",
     )
+    analytics_opportunity_max_candidates: int = Field(
+        default=2000,
+        gt=0,
+        alias="ANALYTICS_OPPORTUNITY_MAX_CANDIDATES",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

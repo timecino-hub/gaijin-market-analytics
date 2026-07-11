@@ -16,6 +16,9 @@ export default function Home() {
           <Link className="primary-link" href="/items">
             浏览商品数据
           </Link>
+          <Link className="primary-link" href="/opportunities">
+            机会排行榜
+          </Link>
           <Link className="primary-link" href="/screen-recognition">
             屏幕识别复核
           </Link>
@@ -27,7 +30,7 @@ export default function Home() {
           本项目只提供数据分析参考，不构成收益保证；不会访问 Gaijin Market、不会自动登录、
           不会执行买卖、撤单、支付或账户控制。
         </p>
-        <p>收益与风险分析功能将在后续阶段加入。</p>
+        <p>机会评分使用可解释的确定性基线，不预测价格，也不代表成交或盈利概率。</p>
       </section>
       <section className="status" aria-label="项目状态">
         <div>

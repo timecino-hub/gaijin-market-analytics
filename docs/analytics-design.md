@@ -386,3 +386,18 @@ Current screenshot quantities `total_bid_quantity` and `total_ask_quantity`
 represent displayed item quantities. They are not automatically mapped to the
 CSV import fields `bid_count` and `ask_count`; that mapping requires a separate
 contract decision.
+
+## Cross-Item Opportunity Ranking
+
+`rank_opportunity_scores` is the pure cross-item ordering layer for
+`OpportunityScoreV1`. The API must score every candidate with one shared
+`as_of`, horizon, configuration, fee policy, and market-rules version before
+calling it. The function validates a finite Decimal minimum score and unique
+item IDs, filters by eligibility and minimum score, applies deterministic
+component tie-breakers, and returns global ranks. It does not read a database,
+paginate, or recalculate item scores.
+
+The API endpoint `GET /api/v1/opportunities` performs a bounded two-query batch
+load rather than issuing analysis queries per item. Full endpoint filters,
+ordering, pagination, versioning, and safety constraints are documented in
+`docs/opportunity-ranking-v1.md`.

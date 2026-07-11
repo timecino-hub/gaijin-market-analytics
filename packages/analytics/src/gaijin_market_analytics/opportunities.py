@@ -371,3 +371,56 @@ def _timedelta_seconds(value: timedelta) -> Decimal:
         + Decimal(value.seconds)
         + Decimal(value.microseconds) / Decimal("1000000")
     )
+
+
+@dataclass(frozen=True)
+class RankedOpportunityScore:
+    rank: int
+    opportunity: OpportunityScoreResult
+
+
+def rank_opportunity_scores(
+    opportunities: tuple[OpportunityScoreResult, ...],
+    *,
+    eligible_only: bool = True,
+    minimum_score: Decimal = Decimal("0"),
+) -> tuple[RankedOpportunityScore, ...]:
+    """Return a deterministic cross-item ranking without changing score semantics.
+
+    Ranking happens only after each item has been scored at the same ``as_of`` and
+    horizon by the caller. Eligible opportunities are always ordered before
+    ineligible diagnostics when ``eligible_only`` is false. Equal scores use
+    component scores and finally ``item_id`` as stable tie-breakers.
+    """
+
+    if not isinstance(minimum_score, Decimal) or not minimum_score.is_finite():
+        raise ContractValidationError("minimum_score must be a finite Decimal.")
+    if not Decimal("0") <= minimum_score <= Decimal("100"):
+        raise ContractValidationError("minimum_score must satisfy 0 <= value <= 100.")
+
+    item_ids = [opportunity.item_id for opportunity in opportunities]
+    if len(item_ids) != len(set(item_ids)):
+        raise ContractValidationError("Opportunity rankings require unique item_id values.")
+
+    filtered = tuple(
+        opportunity
+        for opportunity in opportunities
+        if opportunity.score >= minimum_score
+        and (opportunity.eligible or not eligible_only)
+    )
+    ordered = sorted(
+        filtered,
+        key=lambda opportunity: (
+            0 if opportunity.eligible else 1,
+            -opportunity.score,
+            -opportunity.profitability_score,
+            -opportunity.liquidity_score,
+            -opportunity.freshness_score,
+            -opportunity.data_confidence_score,
+            opportunity.item_id,
+        ),
+    )
+    return tuple(
+        RankedOpportunityScore(rank=index, opportunity=opportunity)
+        for index, opportunity in enumerate(ordered, start=1)
+    )

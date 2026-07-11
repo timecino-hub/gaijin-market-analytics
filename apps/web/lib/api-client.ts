@@ -6,6 +6,8 @@ import type {
   ItemAnalysisResponse,
   ItemDetail,
   ItemListQuery,
+  OpportunityRankingQuery,
+  OpportunityRankingResponse,
   LocalExtensionPairingCode,
   LocalExtensionStatus,
   LocalRecognitionCapabilities,
@@ -32,6 +34,12 @@ const DEFAULT_API_BASE_URL = "http://localhost:8000";
 
 export async function getItems(query: ItemListQuery): Promise<PaginatedItemsResponse> {
   return fetchJson<PaginatedItemsResponse>("/api/v1/items", query);
+}
+
+export async function getOpportunities(
+  query: OpportunityRankingQuery
+): Promise<OpportunityRankingResponse> {
+  return fetchJson<OpportunityRankingResponse>("/api/v1/opportunities", query);
 }
 
 export async function getItem(itemId: string): Promise<ItemDetail> {
@@ -418,6 +426,22 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
 
   if (code === "invalid_analytics_configuration") {
     return "分析配置无效，请检查后端运行配置。";
+  }
+
+  if (code === "opportunity_scope_too_large") {
+    return "候选商品过多，请通过名称、分类或稀有度缩小排行榜范围。";
+  }
+
+  if (code === "invalid_min_score") {
+    return "最低综合分必须是 0 到 100 之间的数字。";
+  }
+
+  if (code === "invalid_boolean" || code === "invalid_filter") {
+    return "排行榜筛选条件无效，请检查后重试。";
+  }
+
+  if (code === "opportunity_ranking_unavailable") {
+    return "机会排行榜暂时不可用，请检查 API 和数据库状态。";
   }
 
   if (status === 413 || code === "file_too_large") {

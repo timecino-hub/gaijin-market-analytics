@@ -8,6 +8,8 @@ from gaijin_market_analytics.opportunities import (
     OpportunityScoreConfig,
     OpportunityScoreResult,
     OpportunityScoreV1,
+    RankedOpportunityScore,
+    rank_opportunity_scores,
 )
 from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1, RuleBasedV1Config
 
@@ -24,6 +26,8 @@ __all__ = [
     "OpportunityScoreConfig",
     "OpportunityScoreResult",
     "OpportunityScoreV1",
+    "RankedOpportunityScore",
+    "rank_opportunity_scores",
     "ReasonCode",
     "RuleBasedV1",
     "RuleBasedV1Config",

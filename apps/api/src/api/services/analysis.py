@@ -69,8 +69,47 @@ class ItemAnalysisService:
             window_start=window_start,
             as_of=as_of,
         )
-        observations = market_snapshot_rows_to_observations(observation_rows)
+        return self.analyze_loaded_rows(
+            item=item,
+            horizon=horizon,
+            as_of=as_of,
+            observation_rows=observation_rows,
+            maximum_snapshot_age_hours=maximum_snapshot_age_hours,
+            minimum_snapshot_count=minimum_snapshot_count,
+        )
 
+    def analyze_loaded_rows(
+        self,
+        *,
+        item: Item,
+        horizon: AnalysisHorizon,
+        as_of: datetime,
+        observation_rows: list[tuple[MarketSnapshot, OrderBookObservation | None]],
+        maximum_snapshot_age_hours: int | None = None,
+        minimum_snapshot_count: int | None = None,
+    ) -> AnalysisServiceResult:
+        """Analyze preloaded rows so cross-item ranking avoids per-item DB queries."""
+
+        resolved_maximum_age = (
+            self._maximum_snapshot_age_hours()
+            if maximum_snapshot_age_hours is None
+            else maximum_snapshot_age_hours
+        )
+        resolved_minimum_count = (
+            self._minimum_snapshot_count()
+            if minimum_snapshot_count is None
+            else minimum_snapshot_count
+        )
+        if resolved_maximum_age <= 0:
+            raise InvalidAnalyticsConfigurationError(
+                "ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS must be greater than 0."
+            )
+        if resolved_minimum_count <= 0:
+            raise InvalidAnalyticsConfigurationError(
+                "ANALYTICS_MINIMUM_SNAPSHOT_COUNT must be greater than 0."
+            )
+
+        observations = market_snapshot_rows_to_observations(observation_rows)
         try:
             request = AnalysisRequest(
                 item_id=item.id,
@@ -79,8 +118,8 @@ class ItemAnalysisService:
                 observations=observations,
                 fee_policy=GAIJIN_MARKET_RULES_V1.fee_policy,
                 market_rules=GAIJIN_MARKET_RULES_V1,
-                maximum_snapshot_age=timedelta(hours=maximum_snapshot_age_hours),
-                minimum_snapshot_count=minimum_snapshot_count,
+                maximum_snapshot_age=timedelta(hours=resolved_maximum_age),
+                minimum_snapshot_count=resolved_minimum_count,
             )
         except ContractValidationError as exc:
             raise AnalysisInputError("The analysis input contract was invalid.") from exc
@@ -99,8 +138,8 @@ class ItemAnalysisService:
             item=item,
             result=result,
             observations=observations,
-            maximum_snapshot_age_hours=maximum_snapshot_age_hours,
-            minimum_snapshot_count=minimum_snapshot_count,
+            maximum_snapshot_age_hours=resolved_maximum_age,
+            minimum_snapshot_count=resolved_minimum_count,
         )
 
     async def _get_item(self, item_id: int) -> Item:

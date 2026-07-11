@@ -170,6 +170,82 @@ export type ItemAnalysisQuery = {
   as_of?: string;
 };
 
+export type OpportunityLiquiditySource =
+  | "reviewed_screenshot_quantity"
+  | "snapshot_counts"
+  | "unavailable";
+
+export type OpportunityRankingQuery = {
+  horizon: AnalysisHorizonParam;
+  as_of?: string;
+  page?: string;
+  page_size?: string;
+  eligible_only?: string;
+  min_score?: string;
+  search?: string;
+  category?: string;
+  rarity?: string;
+  include_inactive?: string;
+};
+
+export type OpportunityRankingFilters = {
+  eligible_only: boolean;
+  minimum_score: string;
+  search: string | null;
+  category: string | null;
+  rarity: string | null;
+  include_inactive: boolean;
+};
+
+export type OpportunityRankingItem = {
+  rank: number;
+  item_id: number;
+  external_key: string;
+  item_name: string;
+  category: string;
+  rarity: string | null;
+  is_active: boolean;
+  analysis_status: string;
+  observation_count: number;
+  first_observation_at: string | null;
+  last_observation_at: string | null;
+  eligible: boolean;
+  score: string;
+  raw_score: string;
+  profitability_score: string;
+  liquidity_score: string;
+  stability_score: string;
+  data_confidence_score: string;
+  freshness_score: string;
+  risk_penalty: string;
+  liquidity_source: OpportunityLiquiditySource;
+  quantity_observation_count: number;
+  latest_observed_bid_quantity: number | null;
+  latest_observed_ask_quantity: number | null;
+  current_ask: string | null;
+  current_bid: string | null;
+  reference_sell_price: string | null;
+  net_profit: string | null;
+  net_roi: string | null;
+  explanation_codes: string[];
+  analysis_reason_codes: string[];
+};
+
+export type OpportunityRankingResponse = {
+  items: OpportunityRankingItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  evaluated_total: number;
+  eligible_total: number;
+  effective_inputs: AnalysisEffectiveInputs;
+  strategy_name: string;
+  strategy_version: string;
+  feature_version: string;
+  filters: OpportunityRankingFilters;
+};
+
 export type ItemListQuery = {
   page?: string;
   page_size?: string;

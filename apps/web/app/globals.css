@@ -770,3 +770,247 @@ td {
     flex: 1 1 160px;
   }
 }
+
+.opportunity-page {
+  max-width: 1320px;
+}
+
+.opportunity-toolbar {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.opportunity-toolbar .field-hint {
+  max-width: 32rem;
+}
+
+.opportunity-filter-actions {
+  align-items: stretch;
+  align-self: end;
+  flex-wrap: wrap;
+}
+
+.opportunity-summary {
+  border-left: 4px solid var(--accent);
+}
+
+.opportunity-list {
+  display: grid;
+  gap: 18px;
+}
+
+.opportunity-card {
+  display: grid;
+  gap: 18px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.opportunity-card.eligible {
+  border-top: 4px solid var(--accent);
+}
+
+.opportunity-card.diagnostic {
+  border-top: 4px solid #b8821d;
+}
+
+.opportunity-card-heading {
+  align-items: stretch;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 20px 20px 0;
+}
+
+.rank-block,
+.score-block {
+  align-content: center;
+  background: var(--empty-bg);
+  display: grid;
+  gap: 4px;
+  min-width: 92px;
+  padding: 12px;
+  text-align: center;
+}
+
+.rank-block span,
+.score-block span,
+.score-block small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.rank-block strong,
+.score-block strong {
+  font-size: 1.65rem;
+}
+
+.opportunity-title {
+  align-content: center;
+  min-width: 0;
+}
+
+.opportunity-title h3,
+.opportunity-title p {
+  margin-bottom: 0;
+}
+
+.opportunity-title p {
+  color: var(--muted);
+  line-height: 1.55;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.opportunity-title-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.status-badge {
+  border: 1px solid var(--line);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.status-badge.eligible {
+  background: #eef8f3;
+  border-color: #b7dccb;
+  color: var(--accent-strong);
+}
+
+.status-badge.diagnostic {
+  background: #fff8e8;
+  border-color: #ead28a;
+  color: #725211;
+}
+
+.opportunity-financial-grid,
+.opportunity-components,
+.opportunity-evidence-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  padding: 0 20px;
+}
+
+.opportunity-metric {
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.opportunity-metric span,
+.score-component span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.opportunity-metric strong {
+  overflow-wrap: anywhere;
+}
+
+.score-component {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.score-component > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.score-track {
+  background: #e8ecf1;
+  height: 6px;
+  overflow: hidden;
+}
+
+.score-track span {
+  background: var(--accent);
+  display: block;
+  height: 100%;
+}
+
+.opportunity-explanations {
+  background: #fafbfc;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px 20px;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tag-list li {
+  background: var(--empty-bg);
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+  padding: 5px 8px;
+}
+
+.opportunity-bottom-pagination {
+  align-items: center;
+  justify-content: center;
+}
+
+.pagination-status {
+  color: var(--muted);
+  padding: 8px;
+}
+
+@media (max-width: 720px) {
+  .opportunity-card-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .score-block {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, auto);
+    justify-content: center;
+  }
+
+  .opportunity-financial-grid,
+  .opportunity-components,
+  .opportunity-evidence-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .opportunity-bottom-pagination {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .opportunity-card-heading,
+  .opportunity-financial-grid,
+  .opportunity-components,
+  .opportunity-evidence-grid,
+  .opportunity-explanations {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .opportunity-financial-grid,
+  .opportunity-components,
+  .opportunity-evidence-grid {
+    grid-template-columns: 1fr;
+  }
+}
