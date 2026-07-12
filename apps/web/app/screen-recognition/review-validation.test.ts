@@ -60,6 +60,16 @@ test("validateReviewForm does not treat OCR suggested name as confirmed manual i
   assert.equal(validateReviewForm(form).ok, true);
 });
 
+test("missing quantities require an explicit non-default acknowledgement", () => {
+  const form = formFromReview(reviewFixture({ total_bid_quantity: null }));
+  form.identityMode = "existing";
+  form.selectedItemId = 1;
+  assert.equal(validateReviewForm(form).ok, false);
+  form.acknowledgeIncompleteQuantities = true;
+  assert.equal(validateReviewForm(form).ok, true);
+  assert.equal(payloadFromForm(form).acknowledge_incomplete_quantities, true);
+});
+
 test("payloadFromForm omits unconfirmed OCR final name for manual identity", () => {
   const form = formFromReview(reviewFixture({}));
   form.itemKey = "manual-key";
@@ -195,7 +205,8 @@ function reviewFixture(overrides: Partial<LocalRecognitionReview["ocr_candidate"
       final_total_ask_quantity: askQuantity,
       observed_at: "2026-07-01T00:00:00Z",
       observed_at_source: "review_created_default",
-      reviewer_note: null
+      reviewer_note: null,
+      acknowledge_incomplete_quantities: false
     },
     ocr_evidence_summary: {
       fields: {},
@@ -208,7 +219,14 @@ function reviewFixture(overrides: Partial<LocalRecognitionReview["ocr_candidate"
       source_url_safe: null,
       source_tab_title: null,
       capture_sha256: null,
-      pairing_id: null
+      pairing_id: null,
+      capture_schema_version: "legacy_v1",
+      client_capture_id: null,
+      capture_started_at: null,
+      captured_at: null,
+      capture_duration_ms: null,
+      page_identity: null,
+      observation_time_semantics: "legacy_server_time"
     },
     warnings: [],
     errors: [],

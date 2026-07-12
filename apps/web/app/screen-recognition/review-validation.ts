@@ -18,7 +18,9 @@ export type ReviewFormState = {
   finalTotalBidQuantity: string;
   finalTotalAskQuantity: string;
   observedAtLocal: string;
+  originalObservedAt: string;
   reviewerNote: string;
+  acknowledgeIncompleteQuantities: boolean;
 };
 
 export type ClientValidationResult =
@@ -63,7 +65,9 @@ export function formFromReview(review: LocalRecognitionReview): ReviewFormState 
     finalTotalAskQuantity:
       review.draft.final_total_ask_quantity === null ? "" : String(review.draft.final_total_ask_quantity),
     observedAtLocal: toDatetimeLocal(review.draft.observed_at ?? review.suggested_observed_at),
-    reviewerNote: review.draft.reviewer_note ?? ""
+    originalObservedAt: review.draft.observed_at ?? review.suggested_observed_at,
+    reviewerNote: review.draft.reviewer_note ?? "",
+    acknowledgeIncompleteQuantities: review.draft.acknowledge_incomplete_quantities
   };
 }
 
@@ -74,9 +78,13 @@ export function payloadFromForm(form: ReviewFormState): LocalRecognitionDraftPay
     final_best_ask: form.finalBestAsk.trim() || null,
     final_total_bid_quantity: parseOptionalQuantity(form.finalTotalBidQuantity),
     final_total_ask_quantity: parseOptionalQuantity(form.finalTotalAskQuantity),
-    observed_at: fromDatetimeLocal(form.observedAtLocal),
-    reviewer_note: form.reviewerNote.trim() || null
+    reviewer_note: form.reviewerNote.trim() || null,
+    acknowledge_incomplete_quantities: form.acknowledgeIncompleteQuantities
   };
+  const observedAt = fromDatetimeLocal(form.observedAtLocal);
+  if (observedAt !== null && new Date(observedAt).getTime() !== new Date(form.originalObservedAt).getTime()) {
+    payload.observed_at = observedAt;
+  }
   if (form.identityMode === "existing") {
     payload.selected_item_id = form.selectedItemId;
     payload.item_key = null;
@@ -150,6 +158,9 @@ export function validateReviewForm(form: ReviewFormState): ClientValidationResul
   }
   if (!form.observedAtLocal) {
     return { ok: false, code: "observed_at_required", message: "请填写观测时间。" };
+  }
+  if ((!form.finalTotalBidQuantity.trim() || !form.finalTotalAskQuantity.trim()) && !form.acknowledgeIncompleteQuantities) {
+    return { ok: false, code: "incomplete_quantities_acknowledgement_required", message: "数量缺失时必须显式确认已知晓数据不完整。" };
   }
   return { ok: true };
 }
@@ -229,7 +240,7 @@ export function toDatetimeLocal(value: string): string {
     return "";
   }
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 23);
 }
 
 export function fromDatetimeLocal(value: string): string | null {

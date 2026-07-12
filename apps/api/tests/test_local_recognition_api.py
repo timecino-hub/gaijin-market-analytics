@@ -234,6 +234,7 @@ def test_confirm_manual_identity_computes_edits_and_candidate_flags(
             "final_best_ask": "13.01",
             "final_total_bid_quantity": None,
             "final_total_ask_quantity": 0,
+            "acknowledge_incomplete_quantities": True,
         },
     )
 

@@ -21,6 +21,7 @@ MAX_ACTIVE_PAIRINGS = 10
 UPLOAD_RATE_LIMIT_CAPACITY = 3
 UPLOAD_RATE_LIMIT_REFILL_PER_MINUTE = 6
 CAPTURE_DEDUP_WINDOW_SECONDS = 20
+CAPTURE_ID_RETENTION_SECONDS = 7200
 
 
 class PairingError(ValueError):
@@ -37,6 +38,10 @@ class RateLimitExceeded(PairingError):
 
 
 class CaptureAlreadyReserved(PairingError):
+    pass
+
+
+class CaptureConflict(PairingError):
     pass
 
 
@@ -86,6 +91,7 @@ class CaptureReservation:
     capture_sha256: str
     expires_at: datetime
     review_id: str | None = None
+    provenance_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,7 @@ class LocalExtensionPairingStore:
         self._pair_attempt_buckets: dict[str, TokenBucket] = {}
         self._upload_buckets: dict[str, TokenBucket] = {}
         self._captures: dict[tuple[str, str], CaptureReservation] = {}
+        self._capture_ids: dict[tuple[str, str], CaptureReservation] = {}
         self._condition = threading.Condition(threading.RLock())
 
     def create_pairing_code(self, *, now: datetime | None = None) -> PairingCodeCreated:
@@ -270,6 +277,66 @@ class LocalExtensionPairingStore:
             )
             return CaptureReserveResult(reserved=True, review_id=None)
 
+    def reserve_client_capture(
+        self,
+        *,
+        pairing_id: str,
+        client_capture_id: str,
+        provenance_sha256: str,
+        now: datetime | None = None,
+    ) -> CaptureReserveResult:
+        now = now or datetime.now(UTC)
+        key = (pairing_id, client_capture_id)
+        with self._condition:
+            self._cleanup_locked(now)
+            existing = self._capture_ids.get(key)
+            if existing is not None:
+                if existing.provenance_sha256 != provenance_sha256:
+                    raise CaptureConflict("capture_id_conflict", "client_capture_id was reused with different capture data.")
+                if existing.review_id is not None:
+                    return CaptureReserveResult(reserved=False, review_id=existing.review_id)
+                raise CaptureAlreadyReserved("capture_pending", "Capture is already being processed.")
+            self._capture_ids[key] = CaptureReservation(
+                pairing_id=pairing_id,
+                capture_sha256=provenance_sha256,
+                provenance_sha256=provenance_sha256,
+                expires_at=now + timedelta(seconds=CAPTURE_ID_RETENTION_SECONDS),
+            )
+            return CaptureReserveResult(reserved=True, review_id=None)
+
+    def bind_client_capture(self, *, pairing_id: str, client_capture_id: str, review_id: str) -> None:
+        with self._condition:
+            existing = self._capture_ids.get((pairing_id, client_capture_id))
+            if existing is not None:
+                existing.review_id = review_id
+                self._condition.notify_all()
+
+    def rollback_client_capture(self, *, pairing_id: str, client_capture_id: str) -> None:
+        with self._condition:
+            self._capture_ids.pop((pairing_id, client_capture_id), None)
+            self._condition.notify_all()
+
+    def wait_for_client_capture_review(
+        self,
+        *,
+        pairing_id: str,
+        client_capture_id: str,
+        timeout_seconds: float = 2.0,
+    ) -> str | None:
+        key = (pairing_id, client_capture_id)
+        deadline = time.monotonic() + timeout_seconds
+        with self._condition:
+            while True:
+                existing = self._capture_ids.get(key)
+                if existing is None:
+                    return None
+                if existing.review_id is not None:
+                    return existing.review_id
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+
     def bind_capture(self, *, pairing_id: str, capture_sha256: str, review_id: str) -> None:
         key = (pairing_id, capture_sha256)
         with self._condition:
@@ -327,6 +394,7 @@ class LocalExtensionPairingStore:
             self._pair_attempt_buckets.clear()
             self._upload_buckets.clear()
             self._captures.clear()
+            self._capture_ids.clear()
             self._condition.notify_all()
 
     def token_hashes_for_testing(self) -> list[str]:
@@ -361,6 +429,9 @@ class LocalExtensionPairingStore:
         for key, capture in list(self._captures.items()):
             if now >= capture.expires_at:
                 self._captures.pop(key, None)
+        for key, capture in list(self._capture_ids.items()):
+            if now >= capture.expires_at:
+                self._capture_ids.pop(key, None)
 
     def _digest(self, value: str) -> str:
         return hmac.new(self._process_secret, value.encode("utf-8"), hashlib.sha256).hexdigest()

@@ -274,7 +274,7 @@ export type ReviewStatus =
   | "failed"
   | "expired";
 
-export type ObservedAtSource = "review_created_default" | "user_edited";
+export type ObservedAtSource = "review_created_default" | "browser_capture" | "user_edited";
 export type IdentityFieldSource = "ocr_initial" | "user_draft" | "confirm_request" | "canonical_item";
 
 export type LocalRecognitionCapabilities = {
@@ -356,6 +356,7 @@ export type LocalRecognitionDraft = {
   observed_at: string | null;
   observed_at_source: ObservedAtSource;
   reviewer_note: string | null;
+  acknowledge_incomplete_quantities: boolean;
 };
 
 export type LocalRecognitionCandidate = {
@@ -372,6 +373,7 @@ export type LocalRecognitionCandidate = {
   best_ask: string;
   total_bid_quantity: number | null;
   total_ask_quantity: number | null;
+  acknowledge_incomplete_quantities: boolean;
   recognition: {
     layout_name: string;
     layout_version: string;
@@ -401,6 +403,13 @@ export type LocalRecognitionSourceMetadata = {
   source_tab_title: string | null;
   capture_sha256: string | null;
   pairing_id: string | null;
+  capture_schema_version: "legacy_v1" | "point_in_time_capture_v1";
+  client_capture_id: string | null;
+  capture_started_at: string | null;
+  captured_at: string | null;
+  capture_duration_ms: number | null;
+  page_identity: { origin: string; market_path: string; item_key: string | null } | null;
+  observation_time_semantics: "legacy_server_time" | "browser_captured_at";
 };
 
 export type LocalRecognitionReview = {
@@ -472,4 +481,5 @@ export type LocalRecognitionDraftPayload = {
   final_total_ask_quantity?: number | null;
   observed_at?: string | null;
   reviewer_note?: string | null;
+  acknowledge_incomplete_quantities?: boolean;
 };

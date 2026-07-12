@@ -31,6 +31,7 @@ TERMINAL_REVIEW_STATUSES = {
 
 class ObservedAtSource(str, Enum):
     REVIEW_CREATED_DEFAULT = "review_created_default"
+    BROWSER_CAPTURE = "browser_capture"
     USER_EDITED = "user_edited"
 
 
@@ -99,6 +100,7 @@ class ReviewDraft(BaseModel):
     observed_at: datetime | None = None
     observed_at_source: ObservedAtSource = ObservedAtSource.REVIEW_CREATED_DEFAULT
     reviewer_note: str | None = None
+    acknowledge_incomplete_quantities: bool = False
 
     @field_serializer("final_best_bid", "final_best_ask")
     def serialize_optional_decimal(self, value: Decimal | None) -> str | None:
@@ -111,6 +113,12 @@ class OcrEvidenceSummary(BaseModel):
     confidence_available: bool = False
 
 
+class SafePageIdentity(BaseModel):
+    origin: Literal["https://trade.gaijin.net"]
+    market_path: str = Field(min_length=1, max_length=1024)
+    item_key: str | None = Field(default=None, max_length=512)
+
+
 class ReviewSourceMetadata(BaseModel):
     source: Literal["manual_upload", "browser_extension"]
     extension_version: str | None = None
@@ -118,6 +126,15 @@ class ReviewSourceMetadata(BaseModel):
     source_tab_title: str | None = None
     capture_sha256: str | None = None
     pairing_id: str | None = None
+    capture_schema_version: Literal["legacy_v1", "point_in_time_capture_v1"] = "legacy_v1"
+    client_capture_id: str | None = None
+    capture_started_at: datetime | None = None
+    captured_at: datetime | None = None
+    capture_duration_ms: int | None = None
+    page_identity: SafePageIdentity | None = None
+    observation_time_semantics: Literal["legacy_server_time", "browser_captured_at"] = (
+        "legacy_server_time"
+    )
 
 
 class ItemIdentity(BaseModel):
@@ -146,6 +163,7 @@ class ReviewedCandidate(BaseModel):
     best_ask: Decimal
     total_bid_quantity: int | None
     total_ask_quantity: int | None
+    acknowledge_incomplete_quantities: bool = False
     recognition: CandidateRecognition
     status: Literal["confirmed", "confirmed_with_edits"]
     imported: bool = False
@@ -317,7 +335,7 @@ class ReviewPatchRequest(BaseModel):
 
 
 class ReviewConfirmRequest(ReviewPatchRequest):
-    pass
+    acknowledge_incomplete_quantities: bool | None = None
 
 
 class ReviewRejectRequest(BaseModel):

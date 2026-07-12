@@ -40,6 +40,7 @@ from api.services.local_extension_pairing import (
     UPLOAD_RATE_LIMIT_CAPACITY,
     UPLOAD_RATE_LIMIT_REFILL_PER_MINUTE,
     CaptureAlreadyReserved,
+    CaptureConflict,
     PairingError,
     RateLimitExceeded,
     capture_sha256,
@@ -223,6 +224,10 @@ async def create_extension_review(
     source_url: Annotated[str | None, Form()] = None,
     source_tab_title: Annotated[str | None, Form()] = None,
     extension_version: Annotated[str | None, Form()] = None,
+    client_capture_id: Annotated[str | None, Form()] = None,
+    capture_started_at: Annotated[str | None, Form()] = None,
+    captured_at: Annotated[str | None, Form()] = None,
+    page_identity: Annotated[str | None, Form()] = None,
 ) -> ExtensionReviewCreateResponse:
     _require_loopback_request(request)
     _enforce_content_length(request)
@@ -235,7 +240,8 @@ async def create_extension_review(
 
     content = await file.read(MAX_IMAGE_BYTES + 1)
     temp_path = None
-    reserved_capture = False
+    reserved_client_capture = False
+    reserved_image_capture = False
     try:
         image, temp_path = validate_image_upload(filename=file.filename, content=content)
         image_hash = capture_sha256(content)
@@ -245,22 +251,75 @@ async def create_extension_review(
             extension_version=extension_version or pairing.extension_version,
             source_url=source_url,
             source_tab_title=source_tab_title,
+            client_capture_id=client_capture_id,
+            capture_started_at=capture_started_at,
+            captured_at=captured_at,
+            page_identity=page_identity,
+        )
+        image_dedup_hash = (
+            capture_sha256(content + metadata.page_identity.model_dump_json().encode("utf-8"))
+            if metadata.page_identity is not None
+            else image_hash
+        )
+        provenance_hash = (
+            capture_sha256(content + metadata.model_dump_json(exclude={"pairing_id"}).encode("utf-8"))
+            if metadata.client_capture_id is not None
+            else image_hash
         )
         try:
-            reservation = pairing_store.reserve_capture(
-                pairing_id=pairing.pairing_id,
-                capture_sha256=image_hash,
-            )
+            if metadata.client_capture_id is not None:
+                reservation = pairing_store.reserve_client_capture(
+                    pairing_id=pairing.pairing_id,
+                    client_capture_id=metadata.client_capture_id,
+                    provenance_sha256=provenance_hash,
+                )
+                reserved_client_capture = reservation.reserved
+                if reservation.reserved:
+                    image_reservation = pairing_store.reserve_capture(
+                        pairing_id=pairing.pairing_id,
+                        capture_sha256=image_dedup_hash,
+                    )
+                    reserved_image_capture = image_reservation.reserved
+                    if not image_reservation.reserved and image_reservation.review_id is not None:
+                        pairing_store.bind_client_capture(
+                            pairing_id=pairing.pairing_id,
+                            client_capture_id=metadata.client_capture_id,
+                            review_id=image_reservation.review_id,
+                        )
+                        reservation = image_reservation
+            else:
+                reservation = pairing_store.reserve_capture(
+                    pairing_id=pairing.pairing_id,
+                    capture_sha256=image_hash,
+                )
+                reserved_image_capture = reservation.reserved
         except CaptureAlreadyReserved:
-            existing_review_id = pairing_store.wait_for_capture_review(
-                pairing_id=pairing.pairing_id,
-                capture_sha256=image_hash,
-            )
+            if metadata.client_capture_id is not None and not reserved_client_capture:
+                existing_review_id = pairing_store.wait_for_client_capture_review(
+                    pairing_id=pairing.pairing_id,
+                    client_capture_id=metadata.client_capture_id,
+                )
+            else:
+                existing_review_id = pairing_store.wait_for_capture_review(
+                    pairing_id=pairing.pairing_id,
+                    capture_sha256=image_dedup_hash,
+                )
             if existing_review_id is None:
+                if reserved_client_capture and metadata.client_capture_id is not None:
+                    pairing_store.rollback_client_capture(
+                        pairing_id=pairing.pairing_id,
+                        client_capture_id=metadata.client_capture_id,
+                    )
                 raise _business_error(
                     status.HTTP_409_CONFLICT,
                     "capture_pending",
                     "A matching upload is still being created.",
+                )
+            if reserved_client_capture and metadata.client_capture_id is not None:
+                pairing_store.bind_client_capture(
+                    pairing_id=pairing.pairing_id,
+                    client_capture_id=metadata.client_capture_id,
+                    review_id=existing_review_id,
                 )
             _delete_temp_path(temp_path)
             response.status_code = status.HTTP_200_OK
@@ -282,11 +341,16 @@ async def create_extension_review(
                 expires_at=existing.expires_at,
                 deduplicated=True,
             )
-        reserved_capture = True
         record = create_review_record(image=image, source_metadata=metadata)
+        if metadata.client_capture_id is not None:
+            pairing_store.bind_client_capture(
+                pairing_id=pairing.pairing_id,
+                client_capture_id=metadata.client_capture_id,
+                review_id=record.review_id,
+            )
         pairing_store.bind_capture(
             pairing_id=pairing.pairing_id,
-            capture_sha256=image_hash,
+            capture_sha256=image_dedup_hash,
             review_id=record.review_id,
         )
     except ImageValidationError as exc:
@@ -295,17 +359,26 @@ async def create_extension_review(
     except SourceMetadataError as exc:
         _delete_temp_path(temp_path)
         raise _business_error(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
+    except CaptureConflict as exc:
+        _delete_temp_path(temp_path)
+        raise _business_error(status.HTTP_409_CONFLICT, exc.code, exc.message) from exc
     except ReviewStoreFullError as exc:
-        if reserved_capture:
-            pairing_store.rollback_capture(pairing_id=pairing.pairing_id, capture_sha256=image_hash)
+        if reserved_client_capture:
+            if metadata.client_capture_id is not None:
+                pairing_store.rollback_client_capture(pairing_id=pairing.pairing_id, client_capture_id=metadata.client_capture_id)
+        if reserved_image_capture:
+            pairing_store.rollback_capture(pairing_id=pairing.pairing_id, capture_sha256=image_dedup_hash)
         _delete_temp_path(temp_path)
         raise _business_error(status.HTTP_409_CONFLICT, "review_store_full", "The local review store is full.") from exc
     except HTTPException:
         _delete_temp_path(temp_path)
         raise
     except Exception:
-        if reserved_capture:
-            pairing_store.rollback_capture(pairing_id=pairing.pairing_id, capture_sha256=image_hash)
+        if reserved_client_capture:
+            if metadata.client_capture_id is not None:
+                pairing_store.rollback_client_capture(pairing_id=pairing.pairing_id, client_capture_id=metadata.client_capture_id)
+        if reserved_image_capture:
+            pairing_store.rollback_capture(pairing_id=pairing.pairing_id, capture_sha256=image_dedup_hash)
         _delete_temp_path(temp_path)
         raise
 

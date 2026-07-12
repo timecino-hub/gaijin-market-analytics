@@ -705,6 +705,11 @@ function ReviewPanel({
         <Info label="来源" value={sourceLabel(review)} />
         <Info label="安全化URL" value={review.source_metadata.source_url_safe ?? "—"} />
         <Info label="页面标题" value={review.source_metadata.source_tab_title ?? "—"} />
+        <Info label="Capture ID" value={review.source_metadata.client_capture_id?.slice(0, 8) ?? "legacy"} />
+        <Info label="Captured at" value={review.source_metadata.captured_at ? formatDateTime(review.source_metadata.captured_at) : "服务器接收时间（legacy）"} />
+        <Info label="Capture duration" value={review.source_metadata.capture_duration_ms === null ? "—" : `${review.source_metadata.capture_duration_ms} ms`} />
+        <Info label="页面身份" value={review.source_metadata.page_identity?.item_key ?? review.source_metadata.page_identity?.market_path ?? "—"} />
+        <Info label="页面身份匹配" value={review.source_metadata.page_identity ? "尚未与数据库 Item 自动验证" : "无页面身份"} />
         <Info label="图片尺寸" value={review.image ? `${review.image.width} x ${review.image.height}` : "—"} />
         <Info label="Layout" value={`${review.recognition.layout_name} ${review.recognition.layout_version}`} />
         <Info label="OCR backend" value={review.recognition.ocr_backend} />
@@ -721,6 +726,13 @@ function ReviewPanel({
       />
 
       <ComparisonTable canEdit={canEdit} form={form} onUpdate={onUpdate} review={review} />
+
+      {(!form.finalTotalBidQuantity.trim() || !form.finalTotalAskQuantity.trim()) ? (
+        <label className="choice-pill">
+          <input type="checkbox" disabled={!canEdit} checked={form.acknowledgeIncompleteQuantities} onChange={(event) => onUpdate({ acknowledgeIncompleteQuantities: event.currentTarget.checked })} />
+          <span>我知道本次截图中的 bid/ask 数量数据不完整；缺失值仍保持为空，不代表零。</span>
+        </label>
+      ) : null}
 
       <div className="issue-report">
         <IssueBlock title="Warnings" issues={review.warnings} />
@@ -1042,6 +1054,7 @@ function ComparisonTable({
                 <input
                   disabled={!canEdit}
                   type="datetime-local"
+                  step="0.001"
                   value={form.observedAtLocal}
                   onChange={(event) => onUpdate({ observedAtLocal: event.currentTarget.value })}
                 />

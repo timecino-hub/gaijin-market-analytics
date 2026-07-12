@@ -325,6 +325,11 @@ def patch_review_draft(
             "reviewer_note": _blank_to_none(
                 _field_value(request, "reviewer_note", record.draft.reviewer_note)
             ),
+            "acknowledge_incomplete_quantities": _field_value(
+                request,
+                "acknowledge_incomplete_quantities",
+                record.draft.acknowledge_incomplete_quantities,
+            ) or False,
         }
     )
     _validate_market_price(draft.final_best_bid)
@@ -511,6 +516,13 @@ def _validate_confirm_values(draft: ReviewDraft) -> None:
     for value in (draft.final_total_bid_quantity, draft.final_total_ask_quantity):
         if value is not None and value < 0:
             raise LocalRecognitionError("invalid_quantity", "Quantity must be a non-negative integer or null.")
+    if (
+        draft.final_total_bid_quantity is None or draft.final_total_ask_quantity is None
+    ) and not draft.acknowledge_incomplete_quantities:
+        raise LocalRecognitionError(
+            "incomplete_quantities_acknowledgement_required",
+            "Missing screenshot quantities require explicit acknowledgement.",
+        )
 
 
 def _validate_market_price(value: Decimal | None) -> None:

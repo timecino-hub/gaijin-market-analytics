@@ -110,18 +110,25 @@ class LocalReviewStore:
             self._cleanup_locked(datetime.now(UTC), remove_expired_records=True)
             if len(self._records) >= self.max_reviews:
                 raise ReviewStoreFullError("The local review store is full.")
+            metadata = source_metadata or manual_source_metadata()
+            suggested_observed_at = metadata.captured_at or created_at
+            observed_source = (
+                ObservedAtSource.BROWSER_CAPTURE
+                if metadata.captured_at is not None
+                else ObservedAtSource.REVIEW_CREATED_DEFAULT
+            )
             record = ReviewRecord(
                 review_id=review_id,
                 created_at=created_at,
                 expires_at=created_at + timedelta(seconds=self.ttl_seconds),
                 status=ReviewStatus.PROCESSING,
-                suggested_observed_at=created_at,
+                suggested_observed_at=suggested_observed_at,
                 image=image,
                 recognition=recognition,
-                source_metadata=source_metadata or manual_source_metadata(),
+                source_metadata=metadata,
                 draft=ReviewDraft(
-                    observed_at=created_at,
-                    observed_at_source=ObservedAtSource.REVIEW_CREATED_DEFAULT,
+                    observed_at=suggested_observed_at,
+                    observed_at_source=observed_source,
                 ),
             )
             self._records[review_id] = record
@@ -379,6 +386,7 @@ def make_candidate(
         best_ask=draft.final_best_ask,
         total_bid_quantity=draft.final_total_bid_quantity,
         total_ask_quantity=draft.final_total_ask_quantity,
+        acknowledge_incomplete_quantities=draft.acknowledge_incomplete_quantities,
         recognition=CandidateRecognition(
             layout_name=record.recognition.layout_name,
             layout_version=record.recognition.layout_version,
