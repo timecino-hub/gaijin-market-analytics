@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -213,6 +213,7 @@ class LoadedMarketHistoryDataset:
     export_profile: MarketHistoryExportProfile
     item_mapping_fingerprint: str | None
     diagnostics: Mapping[str, Any]
+    item_identity_by_id: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def load_item_mapping_manifest(path: str | Path) -> ItemMappingManifest:
@@ -503,6 +504,16 @@ def parse_market_history_export(payload: object) -> LoadedMarketHistoryDataset:
     return LoadedMarketHistoryDataset(
         histories=tuple(histories),
         provenance_by_key=provenance,
+        item_identity_by_id={
+            item["item_id"]: {
+                "external_key": item["external_key"],
+                "name": item["name"],
+                "category": item["category"],
+                "rarity": item["rarity"],
+                "is_active": item["is_active"],
+            }
+            for item in normalized["items"]
+        },
         source_fingerprint=normalized["source_fingerprint"],
         typed_history_fingerprint=normalized["typed_history_fingerprint"],
         export_profile=MarketHistoryExportProfile(normalized["export_profile"]),

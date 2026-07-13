@@ -1,5 +1,25 @@
 """Pure offline dataset adapters and inventory helpers."""
 
+from gaijin_market_analytics.datasets.combined_calibration import (
+    COMBINED_CALIBRATION_SCHEMA_VERSION,
+    NO_LOOKAHEAD_POLICY_NAME,
+    NO_LOOKAHEAD_POLICY_VERSION,
+    QUOTE_ONLY_BASELINE_SCHEMA_VERSION,
+    TRADE_SUPPORT_EVIDENCE_SCHEMA_VERSION,
+    CombinedCalibrationValidationError,
+    LoadedCombinedCalibrationDataset,
+    ObservationTradeAvailability,
+    build_combined_calibration_dataset,
+    combined_calibration_json_bytes,
+    combined_calibration_source_fingerprint,
+    combined_calibration_typed_fingerprint,
+    load_combined_calibration_dataset,
+    parse_combined_calibration_dataset,
+    quote_only_baseline_fingerprint,
+    select_available_trade_buckets,
+    trade_support_evidence_fingerprint,
+    write_combined_calibration_dataset,
+)
 from gaijin_market_analytics.datasets.gaijin_history_json import (
     OFFLINE_MANIFEST_SCHEMA_VERSION,
     OfflineHistoryDataset,
@@ -35,6 +55,24 @@ from gaijin_market_analytics.datasets.market_history_export import (
 )
 
 __all__ = [
+    "COMBINED_CALIBRATION_SCHEMA_VERSION",
+    "NO_LOOKAHEAD_POLICY_NAME",
+    "NO_LOOKAHEAD_POLICY_VERSION",
+    "QUOTE_ONLY_BASELINE_SCHEMA_VERSION",
+    "TRADE_SUPPORT_EVIDENCE_SCHEMA_VERSION",
+    "CombinedCalibrationValidationError",
+    "LoadedCombinedCalibrationDataset",
+    "ObservationTradeAvailability",
+    "build_combined_calibration_dataset",
+    "combined_calibration_json_bytes",
+    "combined_calibration_source_fingerprint",
+    "combined_calibration_typed_fingerprint",
+    "load_combined_calibration_dataset",
+    "parse_combined_calibration_dataset",
+    "quote_only_baseline_fingerprint",
+    "select_available_trade_buckets",
+    "trade_support_evidence_fingerprint",
+    "write_combined_calibration_dataset",
     "ITEM_MAPPING_SCHEMA_VERSION",
     "MARKET_HISTORY_EXPORT_SCHEMA_VERSION",
     "ItemMappingEntry",
