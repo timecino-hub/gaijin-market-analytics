@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -13,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.models import Item, MarketSnapshot, OrderBookObservation, ScreenReviewImport
 from api.schemas.local_recognition import ReviewStatus, ReviewedCandidate
 from api.services.csv_import import advisory_lock_key_for_import
+from api.services.local_recognition_candidate import (
+    candidate_audit_payload,
+    candidate_payload_sha256,
+)
 from api.services.local_recognition_store import ReviewRecord
 
 
@@ -50,8 +51,8 @@ async def import_confirmed_review(
         )
 
     candidate = record.candidate
-    candidate_payload = _candidate_audit_payload(candidate)
-    candidate_sha256 = _payload_sha256(candidate_payload)
+    candidate_payload = candidate_audit_payload(candidate)
+    candidate_sha256 = candidate_payload_sha256(candidate_payload)
 
     async with session.begin():
         await _acquire_review_lock(session, review_id=record.review_id)
@@ -217,29 +218,3 @@ def _observation_from_import(imported: ScreenReviewImport) -> OrderBookObservati
         review_status=imported.review_status,
         created_at=imported.imported_at,
     )
-
-
-def _candidate_audit_payload(candidate: ReviewedCandidate) -> dict[str, Any]:
-    immutable_candidate = candidate.model_copy(
-        update={
-            "imported": False,
-            "database_written": False,
-            "market_snapshot_created": False,
-            "database_item_id": None,
-            "screen_review_import_id": None,
-            "market_snapshot_id": None,
-            "order_book_observation_id": None,
-            "imported_at": None,
-        }
-    )
-    return immutable_candidate.model_dump(mode="json")
-
-
-def _payload_sha256(payload: dict[str, Any]) -> str:
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
