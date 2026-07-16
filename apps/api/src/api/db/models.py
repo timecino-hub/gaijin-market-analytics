@@ -49,6 +49,9 @@ class Item(Base):
     historical_trade_buckets: Mapped[list["HistoricalTradeBucket"]] = relationship(
         back_populates="item"
     )
+    manual_order_book_imports: Mapped[list["ManualOrderBookImport"]] = relationship(
+        back_populates="item"
+    )
 
 
 class ImportJob(Base):
@@ -82,6 +85,9 @@ class ImportJob(Base):
     error_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     snapshots: Mapped[list["MarketSnapshot"]] = relationship(back_populates="source_import_job")
+    manual_order_book_imports: Mapped[list["ManualOrderBookImport"]] = relationship(
+        back_populates="import_job"
+    )
 
 
 class MarketSnapshot(Base):
@@ -224,6 +230,156 @@ class OrderBookObservation(Base):
     screen_review_import: Mapped[ScreenReviewImport] = relationship(
         back_populates="order_book_observation"
     )
+
+
+class ManualOrderBookImport(Base):
+    __tablename__ = "manual_order_book_imports"
+    __table_args__ = (
+        CheckConstraint(
+            "capture_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'",
+            name="ck_manual_order_book_imports_capture_uuid4",
+        ),
+        CheckConstraint(
+            "source_type = 'manual_response_json'",
+            name="ck_manual_order_book_imports_source_type",
+        ),
+        CheckConstraint(
+            "capture_method = 'passive_page_response_intercept'",
+            name="ck_manual_order_book_imports_capture_method",
+        ),
+        CheckConstraint(
+            "review_status = 'confirmed_by_user'",
+            name="ck_manual_order_book_imports_review_status",
+        ),
+        CheckConstraint(
+            "price_semantics = 'gaijin_market_response_price_raw_unscaled'",
+            name="ck_manual_order_book_imports_price_semantics",
+        ),
+        CheckConstraint(
+            "source_file_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_manual_order_book_imports_file_sha256",
+        ),
+        CheckConstraint(
+            "raw_response_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_manual_order_book_imports_raw_sha256",
+        ),
+        CheckConstraint(
+            "normalized_capture_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_manual_order_book_imports_fingerprint",
+        ),
+        CheckConstraint(
+            "timezone_offset_minutes BETWEEN -840 AND 840",
+            name="ck_manual_order_book_imports_timezone_offset",
+        ),
+        CheckConstraint(
+            "buy_level_count BETWEEN 1 AND 500 AND sell_level_count BETWEEN 1 AND 500",
+            name="ck_manual_order_book_imports_level_counts",
+        ),
+        CheckConstraint(
+            "buy_depth BETWEEN 0 AND 9007199254740991 AND sell_depth BETWEEN 0 AND 9007199254740991",
+            name="ck_manual_order_book_imports_depths",
+        ),
+        CheckConstraint(
+            "best_buy_price_raw > 0 AND best_sell_price_raw > 0",
+            name="ck_manual_order_book_imports_best_prices",
+        ),
+        CheckConstraint(
+            "best_buy_quantity > 0 AND best_sell_quantity > 0",
+            name="ck_manual_order_book_imports_best_quantities",
+        ),
+        CheckConstraint(
+            "page_origin = 'https://trade.gaijin.net'",
+            name="ck_manual_order_book_imports_page_origin",
+        ),
+        CheckConstraint(
+            "request_method = 'POST' AND request_origin = 'https://market-proxy.gaijin.net' AND request_path = '/web'",
+            name="ck_manual_order_book_imports_request_identity",
+        ),
+        Index("ix_manual_order_book_imports_item_id", "item_id"),
+        Index("ix_manual_order_book_imports_captured_at", "captured_at"),
+        UniqueConstraint("capture_id", name="uq_manual_order_book_imports_capture_id"),
+        UniqueConstraint(
+            "normalized_capture_fingerprint",
+            name="uq_manual_order_book_imports_fingerprint",
+        ),
+        UniqueConstraint(
+            "source_file_sha256",
+            name="uq_manual_order_book_imports_file_sha256",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    import_job_id: Mapped[int] = mapped_column(
+        ForeignKey("import_jobs.id"), nullable=False, unique=True
+    )
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    capture_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    capture_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_response_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_capture_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timezone_offset_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_origin: Mapped[str] = mapped_column(String(255), nullable=False)
+    page_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    literal_external_key: Mapped[str] = mapped_column(String, nullable=False)
+    decoded_external_key: Mapped[str] = mapped_column(String, nullable=False)
+    request_method: Mapped[str] = mapped_column(String(8), nullable=False)
+    request_origin: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    price_semantics: Mapped[str] = mapped_column(String(64), nullable=False)
+    buy_level_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    sell_level_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    buy_depth: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sell_depth: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    best_buy_price_raw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    best_buy_quantity: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    best_sell_price_raw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    best_sell_quantity: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    capture_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    import_job: Mapped[ImportJob] = relationship(back_populates="manual_order_book_imports")
+    item: Mapped[Item] = relationship(back_populates="manual_order_book_imports")
+    levels: Mapped[list["ManualOrderBookLevel"]] = relationship(
+        back_populates="source_import",
+        cascade="all, delete-orphan",
+        order_by="ManualOrderBookLevel.side, ManualOrderBookLevel.level_index",
+    )
+
+
+class ManualOrderBookLevel(Base):
+    __tablename__ = "manual_order_book_levels"
+    __table_args__ = (
+        CheckConstraint("side IN ('BUY', 'SELL')", name="ck_manual_order_book_levels_side"),
+        CheckConstraint("level_index >= 0", name="ck_manual_order_book_levels_index"),
+        CheckConstraint("price_raw > 0", name="ck_manual_order_book_levels_price"),
+        CheckConstraint("quantity > 0", name="ck_manual_order_book_levels_quantity"),
+        UniqueConstraint(
+            "source_import_id",
+            "side",
+            "level_index",
+            name="uq_manual_order_book_levels_import_side_index",
+        ),
+        Index("ix_manual_order_book_levels_source_import_id", "source_import_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_import_id: Mapped[int] = mapped_column(
+        ForeignKey("manual_order_book_imports.id", ondelete="CASCADE"), nullable=False
+    )
+    side: Mapped[str] = mapped_column(String(4), nullable=False)
+    level_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_raw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quantity: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    source_import: Mapped[ManualOrderBookImport] = relationship(back_populates="levels")
 
 
 class HistoricalTradeImport(Base):

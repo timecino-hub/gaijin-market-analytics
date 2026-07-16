@@ -30,6 +30,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "order_book_observations",
         "historical_trade_imports",
         "historical_trade_buckets",
+        "manual_order_book_imports",
+        "manual_order_book_levels",
     }.issubset(_table_names(test_database_url))
 
     command.downgrade(config, "base")
@@ -41,6 +43,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "order_book_observations",
         "historical_trade_imports",
         "historical_trade_buckets",
+        "manual_order_book_imports",
+        "manual_order_book_levels",
     }.intersection(_table_names(test_database_url))
 
     command.upgrade(config, "head")
@@ -52,6 +56,8 @@ def test_initial_migration_upgrade_downgrade_and_upgrade_again(test_database_url
         "order_book_observations",
         "historical_trade_imports",
         "historical_trade_buckets",
+        "manual_order_book_imports",
+        "manual_order_book_levels",
     }.issubset(_table_names(test_database_url))
 
 
