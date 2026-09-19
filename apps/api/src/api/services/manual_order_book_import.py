@@ -20,6 +20,7 @@ from api.db.models import (
 )
 from api.importers.manual_order_book_json import (
     ManualOrderBookCapture,
+    confirm_pending_manual_order_book_json,
     parse_manual_order_book_json,
 )
 from api.services.csv_import import advisory_lock_key_for_import
@@ -78,6 +79,15 @@ async def inspect_manual_order_book_import(
     return await _inspect_bound_document(session=session, document=document)
 
 
+async def inspect_pending_manual_order_book_import(
+    *,
+    session: AsyncSession,
+    content: bytes,
+) -> ManualOrderBookImportInspection:
+    document = _bind_promoted_pending_document(content)
+    return await _inspect_bound_document(session=session, document=document)
+
+
 async def _inspect_bound_document(
     *,
     session: AsyncSession,
@@ -119,6 +129,20 @@ async def import_manual_order_book(
     source_filename: str,
 ) -> ManualOrderBookImportResult:
     document = _bind_document(content)
+    return await _import_bound_document(
+        session=session,
+        document=document,
+        source_filename=source_filename,
+    )
+
+
+async def import_pending_manual_order_book(
+    *,
+    session: AsyncSession,
+    content: bytes,
+    source_filename: str,
+) -> ManualOrderBookImportResult:
+    document = _bind_promoted_pending_document(content)
     return await _import_bound_document(
         session=session,
         document=document,
@@ -523,7 +547,11 @@ def _safe_filename(value: str) -> str:
     return filename
 
 
-def _bind_document(content: bytes) -> _BoundManualOrderBookDocument:
+def _bind_document(
+    content: bytes,
+    *,
+    source_file_sha256: str | None = None,
+) -> _BoundManualOrderBookDocument:
     if not isinstance(content, bytes):
         raise TypeError("content must be bytes")
     capture = parse_manual_order_book_json(content)
@@ -533,7 +561,22 @@ def _bind_document(content: bytes) -> _BoundManualOrderBookDocument:
     return _BoundManualOrderBookDocument(
         capture=capture,
         capture_payload=payload,
-        source_file_sha256=hashlib.sha256(content).hexdigest(),
+        source_file_sha256=(
+            hashlib.sha256(content).hexdigest()
+            if source_file_sha256 is None
+            else source_file_sha256
+        ),
+    )
+
+
+def _bind_promoted_pending_document(content: bytes) -> _BoundManualOrderBookDocument:
+    if not isinstance(content, bytes):
+        raise TypeError("content must be bytes")
+    source_file_sha256 = hashlib.sha256(content).hexdigest()
+    promoted = confirm_pending_manual_order_book_json(content)
+    return _bind_document(
+        promoted,
+        source_file_sha256=source_file_sha256,
     )
 
 

@@ -74,6 +74,17 @@ def fixture_with_reported_depth(*, buy: int, sell: int) -> bytes:
     ).encode("utf-8")
 
 
+def pending_fixture_content() -> bytes:
+    payload = fixture_payload()
+    payload["review"]["status"] = "pending_user_confirmation"
+    payload["source"]["normalized_capture_fingerprint"] = (
+        compute_normalized_capture_fingerprint(payload)
+    )
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+
+
 def insert_item(
     database_url: str,
     *,
@@ -655,6 +666,80 @@ def test_cli_invalid_write_records_failed_audit_without_echoing_input(
     assert json.loads(result.stderr)["error_code"] == "top_level_keys_invalid"
     assert "private-sentinel" not in result.stderr
     assert str(path) not in result.stderr
+    assert scalar(
+        migrated_database,
+        "SELECT count(*) FROM import_jobs WHERE status = 'failed'",
+    ) == 1
+
+
+def test_cli_requires_explicit_gate_for_pending_export(
+    migrated_database: str,
+    tmp_path: Path,
+) -> None:
+    insert_item(migrated_database)
+    path = tmp_path / "pending.json"
+    path.write_bytes(pending_fixture_content())
+
+    rejected = run_cli(migrated_database, path)
+    accepted = run_cli(migrated_database, path, "--confirm-pending")
+
+    assert rejected.returncode == cli.EXIT_VALIDATION_ERROR
+    assert json.loads(rejected.stderr)["error_code"] == "review_status_not_importable"
+    assert accepted.returncode == 0
+    summary = json.loads(accepted.stdout)
+    assert summary["mode"] == "dry_run"
+    assert summary["operator_confirmed_pending"] is True
+    assert summary["database_written"] is False
+
+
+def test_cli_operator_gate_persists_promoted_payload(
+    migrated_database: str,
+    tmp_path: Path,
+) -> None:
+    insert_item(migrated_database)
+    path = tmp_path / "pending.json"
+    path.write_bytes(pending_fixture_content())
+
+    result = run_cli(migrated_database, path, "--confirm-pending", "--write")
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["operator_confirmed_pending"] is True
+    engine = create_engine(migrated_database)
+    try:
+        with engine.connect() as connection:
+                imported = connection.execute(
+                    text(
+                        "SELECT review_status, capture_payload, source_file_sha256 "
+                        "FROM manual_order_book_imports"
+                    )
+                ).mappings().one()
+    finally:
+        engine.dispose()
+    assert imported["review_status"] == "confirmed_by_user"
+    assert imported["capture_payload"]["review"]["status"] == "confirmed_by_user"
+    assert imported["source_file_sha256"] == hashlib.sha256(
+        pending_fixture_content()
+    ).hexdigest()
+
+
+def test_cli_tampered_pending_write_records_failed_audit(
+    migrated_database: str,
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(pending_fixture_content())
+    payload["source"]["normalized_capture_fingerprint"] = "0" * 64
+    path = tmp_path / "tampered-pending.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_cli(
+        migrated_database,
+        path,
+        "--confirm-pending",
+        "--write",
+    )
+
+    assert result.returncode == cli.EXIT_VALIDATION_ERROR
+    assert json.loads(result.stderr)["error_code"] == "fingerprint_mismatch"
     assert scalar(
         migrated_database,
         "SELECT count(*) FROM import_jobs WHERE status = 'failed'",

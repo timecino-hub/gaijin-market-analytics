@@ -16,6 +16,7 @@ from api.importers.manual_order_book_json import (
     MAX_DOCUMENT_BYTES,
     MAX_JSON_NESTING_DEPTH,
     ManualOrderBookValidationError,
+    confirm_pending_manual_order_book_json,
     compute_normalized_capture_fingerprint,
     parse_manual_order_book_json,
     read_manual_order_book_file,
@@ -539,6 +540,57 @@ def test_pending_capture_is_not_importable() -> None:
         nested(document, "review")["status"] = "pending_user_confirmation"
 
     assert_code(mutate(change, sign=True), "review_status_not_importable")
+
+
+def test_operator_confirmation_promotes_intact_pending_capture() -> None:
+    document = fixture_document()
+    nested(document, "review")["status"] = "pending_user_confirmation"
+    pending = encoded(resign(document))
+
+    promoted = confirm_pending_manual_order_book_json(pending)
+    promoted_document = json.loads(promoted)
+    capture = parse_manual_order_book_json(promoted)
+
+    assert capture.review.status == "confirmed_by_user"
+    assert nested(promoted_document, "review")["status"] == "confirmed_by_user"
+    assert nested(promoted_document, "source")["normalized_capture_fingerprint"] == (
+        compute_normalized_capture_fingerprint(promoted_document)
+    )
+
+
+def test_operator_confirmation_rejects_tampered_pending_capture() -> None:
+    document = fixture_document()
+    nested(document, "review")["status"] = "pending_user_confirmation"
+
+    with pytest.raises(ManualOrderBookValidationError) as exc_info:
+        confirm_pending_manual_order_book_json(encoded(document))
+
+    assert exc_info.value.code == "fingerprint_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_code"),
+    [
+        ("status", "confirmed_by_user", "review_status_not_pending"),
+        ("fill_claim", True, "fill_claim_not_importable"),
+        ("requires_manual_review", True, "manual_review_required"),
+    ],
+)
+def test_operator_confirmation_keeps_review_safety_gates(
+    field: str,
+    value: object,
+    expected_code: str,
+) -> None:
+    document = fixture_document()
+    review = nested(document, "review")
+    review["status"] = "pending_user_confirmation"
+    review[field] = value
+    pending = encoded(resign(document))
+
+    with pytest.raises(ManualOrderBookValidationError) as exc_info:
+        confirm_pending_manual_order_book_json(pending)
+
+    assert exc_info.value.code == expected_code
 
 
 def test_manual_review_capture_is_not_importable() -> None:

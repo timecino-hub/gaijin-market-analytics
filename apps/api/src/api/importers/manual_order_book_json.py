@@ -139,6 +139,52 @@ def parse_manual_order_book_json(content: bytes | str) -> ManualOrderBookCapture
     return _parse_document(value)
 
 
+def confirm_pending_manual_order_book_json(content: bytes | str) -> bytes:
+    """Promote one intact pending export through an explicit operator action."""
+
+    text = _decode_document(content)
+    _validate_json_nesting_depth(text)
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except ManualOrderBookValidationError:
+        raise
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ManualOrderBookValidationError("invalid_json") from exc
+    if not isinstance(value, dict):
+        raise ManualOrderBookValidationError("top_level_keys_invalid")
+
+    source = value.get("source")
+    review = value.get("review")
+    if not isinstance(source, dict):
+        raise ManualOrderBookValidationError("source_keys_invalid")
+    if not isinstance(review, dict):
+        raise ManualOrderBookValidationError("review_keys_invalid")
+    if source.get("normalized_capture_fingerprint") != (
+        compute_normalized_capture_fingerprint(value)
+    ):
+        raise ManualOrderBookValidationError("fingerprint_mismatch")
+    if review.get("status") != "pending_user_confirmation":
+        raise ManualOrderBookValidationError("review_status_not_pending")
+    if review.get("fill_claim") is not False:
+        raise ManualOrderBookValidationError("fill_claim_not_importable")
+    if review.get("requires_manual_review") is not False:
+        raise ManualOrderBookValidationError("manual_review_required")
+
+    review["status"] = "confirmed_by_user"
+    source["normalized_capture_fingerprint"] = (
+        compute_normalized_capture_fingerprint(value)
+    )
+    promoted = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode(
+        "utf-8"
+    )
+    parse_manual_order_book_json(promoted)
+    return promoted
+
+
 def read_manual_order_book_file(path: Path) -> bytes:
     """Read at most 2 MiB plus one byte from one explicit local path."""
 

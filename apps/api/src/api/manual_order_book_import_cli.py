@@ -12,13 +12,16 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from api.importers.manual_order_book_json import (
     ManualOrderBookValidationError,
+    confirm_pending_manual_order_book_json,
     parse_manual_order_book_json,
     read_manual_order_book_file,
 )
 from api.services.manual_order_book_import import (
     ManualOrderBookImportError,
     import_manual_order_book,
+    import_pending_manual_order_book,
     inspect_manual_order_book_import,
+    inspect_pending_manual_order_book_import,
     record_invalid_manual_order_book_attempt,
 )
 
@@ -38,7 +41,10 @@ def main(argv: list[str] | None = None) -> int:
 
     source_file_sha256 = hashlib.sha256(content).hexdigest()
     try:
-        parse_manual_order_book_json(content)
+        if args.confirm_pending:
+            confirm_pending_manual_order_book_json(content)
+        else:
+            parse_manual_order_book_json(content)
     except ManualOrderBookValidationError as exc:
         if args.write:
             try:
@@ -67,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
                 content=content,
                 source_filename=args.file.name,
                 write=args.write,
+                operator_confirmed_pending=args.confirm_pending,
             )
         )
     except ManualOrderBookImportError as exc:
@@ -91,14 +98,22 @@ async def _run(
     content: bytes,
     source_filename: str,
     write: bool,
+    operator_confirmed_pending: bool,
 ) -> dict[str, Any]:
     from api.db.session import async_session_factory
 
     async with async_session_factory() as session:
         if not write:
-            inspection = await inspect_manual_order_book_import(
-                session=session,
-                content=content,
+            inspection = await (
+                inspect_pending_manual_order_book_import(
+                    session=session,
+                    content=content,
+                )
+                if operator_confirmed_pending
+                else inspect_manual_order_book_import(
+                    session=session,
+                    content=content,
+                )
             )
             return {
                 "mode": "dry_run",
@@ -114,12 +129,21 @@ async def _run(
                 ),
                 "buy_level_count": inspection.buy_level_count,
                 "sell_level_count": inspection.sell_level_count,
+                "operator_confirmed_pending": operator_confirmed_pending,
             }
 
-        result = await import_manual_order_book(
-            session=session,
-            content=content,
-            source_filename=source_filename,
+        result = await (
+            import_pending_manual_order_book(
+                session=session,
+                content=content,
+                source_filename=source_filename,
+            )
+            if operator_confirmed_pending
+            else import_manual_order_book(
+                session=session,
+                content=content,
+                source_filename=source_filename,
+            )
         )
         return {
             "mode": "write",
@@ -135,6 +159,7 @@ async def _run(
             ),
             "buy_level_count": result.buy_level_count,
             "sell_level_count": result.sell_level_count,
+            "operator_confirmed_pending": operator_confirmed_pending,
         }
 
 
@@ -174,6 +199,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--write",
         action="store_true",
         help="Persist an audited raw capture; does not create market snapshots.",
+    )
+    parser.add_argument(
+        "--confirm-pending",
+        action="store_true",
+        help=(
+            "Promote one intact pending_user_confirmation export, recompute "
+            "its fingerprint, and run the normal strict validator."
+        ),
     )
     return parser
 
