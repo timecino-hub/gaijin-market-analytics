@@ -16,7 +16,7 @@ export function MarketHeader({ active }: { active?: "home" | "catalog" }) {
         <Link className={active === "catalog" ? "active" : undefined} href="/items">
           载具目录
         </Link>
-        <span aria-disabled="true">潜力榜 · 等待口径</span>
+        <span aria-disabled="true">潜力分析 · 尚未开放</span>
       </nav>
       <span className="deco-readonly">只读预览</span>
     </header>

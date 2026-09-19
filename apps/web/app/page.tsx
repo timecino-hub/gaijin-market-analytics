@@ -83,7 +83,7 @@ function FeaturedItem({ item }: { item: ItemSummary }) {
       <div className="deco-stage" aria-hidden="true"><span className="deco-block block-one" /><span className="deco-block block-two" /><strong>{item.name.slice(0, 2).toUpperCase()}</strong></div>
       <div className="deco-feature-copy">
         <p className="deco-kicker">LATEST CATALOG ENTRY</p><h2 id="featured-title">{item.name}</h2><p>{item.external_key}</p>
-        <div className="deco-feature-prices"><Price label="最佳买价" value={book?.best_buy.canonical_display_text} /><Price label="最佳卖价" value={book?.best_sell.canonical_display_text} /></div>
+        <div className="deco-feature-prices"><Price label="当前买价" value={book?.best_buy.canonical_display_text} /><Price label="当前卖价" value={book?.best_sell.canonical_display_text} /></div>
         <Link className="deco-primary-link" href={`/items/${item.id}`}>查看订单簿 <span>→</span></Link>
       </div>
     </section>

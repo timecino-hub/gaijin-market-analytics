@@ -45,7 +45,7 @@ function Catalog({ data, query }: { data: PaginatedItemsResponse; query: ItemLis
         <div className="deco-empty-large"><span aria-hidden="true">00</span><div><strong>当前条件没有载具</strong><p>保留筛选条件继续调整，或重置后查看全部审核条目。</p><Link href="/items">重置筛选 →</Link></div></div>
       ) : (
         <div className="deco-catalog-list">
-          <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>最佳买价</span><span>最佳卖价</span><span>观测状态</span><span /></div>
+          <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>当前买价</span><span>当前卖价</span><span>观测状态</span><span /></div>
           {data.items.map((item) => <CatalogRow item={item} key={item.id} />)}
         </div>
       )}

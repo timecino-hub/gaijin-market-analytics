@@ -15,6 +15,10 @@ test("public homepage is a read-only, evidence-backed catalog", async () => {
   assert.match(source, /<form[^>]+action="\/items"/);
   assert.match(header, /只读预览/);
   assert.match(source, /当前不生成示例评分、收益预测或历史图表/);
+  assert.match(source, /当前买价/);
+  assert.match(source, /当前卖价/);
+  assert.match(header, /潜力分析 · 尚未开放/);
+  assert.doesNotMatch(source, /最佳买价|最佳卖价/);
   assert.match(source, /市场数据暂不可用/);
   assert.doesNotMatch(source, /Math\.random/);
 });
