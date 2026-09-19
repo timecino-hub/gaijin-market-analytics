@@ -1,168 +1,75 @@
 import Link from "next/link";
-import { getItem, getItemSnapshots, toDisplayError } from "../../../lib/api-client";
-import { initialAnalysisStateFromQuery } from "../../../lib/analysis-url-state";
-import { formatBoolean, formatDateTime, formatDecimal, formatOptionalText } from "../../../lib/formatters";
-import type { ApiError, ItemDetail, MarketSnapshot, SnapshotQuery, SortOrder } from "../../../lib/types";
-import { AnalysisPanel } from "./analysis-panel";
-import { SnapshotFilterForm } from "./snapshot-filter-form";
+import { getCurrentOrderBook, getItem, toDisplayError } from "../../../lib/api-client";
+import { formatDateTime } from "../../../lib/formatters";
+import type { ApiError, CurrentOrderBook, CurrentOrderBookLevel, ItemDetail } from "../../../lib/types";
 
-type ItemDetailPageProps = {
-  params: Promise<{ itemId: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-};
+export const dynamic = "force-dynamic";
 
-export default async function ItemDetailPage({ params, searchParams }: ItemDetailPageProps) {
+type ItemDetailPageProps = { params: Promise<{ itemId: string }> };
+
+export default async function ItemDetailPage({ params }: ItemDetailPageProps) {
   const { itemId } = await params;
-  const rawSearchParams = await searchParams;
-  const query = toSnapshotQuery(rawSearchParams);
-  const initialAnalysisState = initialAnalysisStateFromQuery(rawSearchParams);
-  const result = await loadItemDetail(itemId, query);
-
-  if ("error" in result) {
-    const displayError = result.error;
-    return (
-      <main className="page-shell">
-        <header className="page-header">
-          <Link href="/items" className="back-link">
-            返回商品列表
-          </Link>
-          <h1>{displayError.code === "item_not_found" ? "商品不存在" : "无法加载商品详情"}</h1>
-        </header>
-        <section className="error-state" aria-live="polite">
-          <h2>{displayError.code === "api_unreachable" ? "API 不可访问" : "请求失败"}</h2>
-          <p>{displayError.message}</p>
-        </section>
-      </main>
-    );
-  }
-
-  const { item, snapshots } = result;
+  const result = await loadItem(itemId);
+  if ("error" in result) return <ItemError error={result.error} />;
+  const { item, orderBook } = result;
 
   return (
-    <main className="page-shell">
-      <header className="page-header">
-        <Link href="/items" className="back-link">
-          返回商品列表
-        </Link>
-        <h1>{item.name}</h1>
-        <p>收益与风险分析功能将在后续阶段加入。</p>
+    <main className="market-shell detail-page">
+      <header className="site-header">
+        <Link className="brand" href="/">Gaijin Market Analytics</Link>
+        <nav><Link href="/items">Market</Link><span aria-disabled="true">Analytics · coming soon</span></nav>
+        <span className="preview-badge">Read-only preview</span>
       </header>
-
-      <section className="detail-grid" aria-label="商品基础信息">
-        <Info label="external_key" value={item.external_key} />
-        <Info label="分类" value={item.category} />
-        <Info label="稀有度" value={formatOptionalText(item.rarity)} />
-        <Info label="状态" value={formatBoolean(item.is_active)} />
-        <Info label="快照数量" value={String(item.snapshot_count)} />
-        <Info label="首次观测" value={formatDateTime(item.first_snapshot_at)} />
-        <Info label="最后观测" value={formatDateTime(item.last_snapshot_at)} />
+      <div className="detail-breadcrumb"><Link href="/items">Market</Link><span>/</span><span>{item.name}</span></div>
+      <section className="item-title-block">
+        <div><p className="eyebrow">{item.category}</p><h1>{item.name}</h1><p>{item.external_key}</p></div>
+        <span className={orderBook?.freshness === "fresh" ? "freshness fresh" : "freshness stale"}>{orderBook ? orderBook.freshness : "No order book"}</span>
       </section>
 
-      <section className="panel" aria-labelledby="latest-heading">
-        <h2 id="latest-heading">最新市场快照</h2>
-        {item.latest_snapshot ? (
-          <div className="detail-grid compact">
-            <Info label="observed_at" value={formatDateTime(item.latest_snapshot.observed_at)} />
-            <Info label="best_ask" value={formatDecimal(item.latest_snapshot.best_ask)} />
-            <Info label="best_bid" value={formatDecimal(item.latest_snapshot.best_bid)} />
-            <Info label="ask_count" value={formatOptionalNumber(item.latest_snapshot.ask_count)} />
-            <Info label="bid_count" value={formatOptionalNumber(item.latest_snapshot.bid_count)} />
-            <Info
-              label="estimated_volume"
-              value={formatDecimal(item.latest_snapshot.estimated_volume)}
-            />
-          </div>
-        ) : (
-          <div className="empty-state">
-            <h3>商品存在但没有快照</h3>
-            <p>当前商品尚未导入任何市场快照。</p>
-          </div>
-        )}
-      </section>
-
-      <AnalysisPanel itemId={itemId} itemName={item.name} initialState={initialAnalysisState} />
-
-      <section className="panel" aria-labelledby="history-heading">
-        <div className="section-heading">
-          <div>
-            <h2 id="history-heading">历史快照</h2>
-            <p>不补零、不插值，只展示后端返回的已观测记录。</p>
-          </div>
-        </div>
-        <SnapshotFilterForm itemId={itemId} />
-
-        {snapshots.length === 0 ? (
-          <div className="empty-state">
-            <h3>没有快照</h3>
-            <p>当前时间范围内没有历史市场快照。</p>
-          </div>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>observed_at</th>
-                  <th>best_ask</th>
-                  <th>best_bid</th>
-                  <th>ask_count</th>
-                  <th>bid_count</th>
-                  <th>estimated_volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshots.map((snapshot) => (
-                  <tr key={snapshot.id}>
-                    <td>{formatDateTime(snapshot.observed_at)}</td>
-                    <td>{formatDecimal(snapshot.best_ask)}</td>
-                    <td>{formatDecimal(snapshot.best_bid)}</td>
-                    <td>{formatOptionalNumber(snapshot.ask_count)}</td>
-                    <td>{formatOptionalNumber(snapshot.bid_count)}</td>
-                    <td>{formatDecimal(snapshot.estimated_volume)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {!orderBook ? (
+        <div className="market-empty"><strong>No confirmed order book</strong><p>This item exists, but no approved current-book capture is available.</p></div>
+      ) : (
+        <>
+          <section className="price-summary" aria-label="Current market prices">
+            <PriceMetric label="Best buy" value={orderBook.best_buy.canonical_display_text} tone="buy" />
+            <PriceMetric label="Best sell" value={orderBook.best_sell.canonical_display_text} tone="sell" />
+            <PriceMetric label="Spread" value={orderBook.spread_display_text} tone="neutral" />
+            <div className="price-meta"><span>Captured</span><strong>{formatDateTime(orderBook.captured_at)}</strong><small>{orderBook.contract.currency_code} · contract v{orderBook.contract.contract_version}</small></div>
+          </section>
+          <section className="orderbook-section" aria-labelledby="orderbook-title">
+            <div className="market-section-heading"><div><p className="eyebrow">Current depth</p><h2 id="orderbook-title">Order book</h2></div><span>{orderBook.schema_version}</span></div>
+            <div className="orderbook-grid">
+              <OrderBookSide title="BUY orders" levels={orderBook.buy_levels} side="BUY" />
+              <OrderBookSide title="SELL orders" levels={orderBook.sell_levels} side="SELL" />
+            </div>
+          </section>
+          <section className="provenance-band" aria-labelledby="provenance-title">
+            <div><p className="eyebrow">Evidence</p><h2 id="provenance-title">Data provenance</h2></div>
+            <dl><Info term="Source" value="Confirmed manual response JSON" /><Info term="Review" value={orderBook.provenance.review_status} /><Info term="Request action" value="Unknown · not claimed" /><Info term="Price contract" value={orderBook.contract.contract_id} /><Info term="Read model" value={orderBook.provenance.read_model_implementation_version} /></dl>
+          </section>
+        </>
+      )}
+      <section className="market-section muted-band"><div><p className="eyebrow">History</p><h2>Market history</h2></div><p>Historical market data is not available yet.</p></section>
     </main>
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="info-tile">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+function PriceMetric({ label, value, tone }: { label: string; value: string; tone: "buy" | "sell" | "neutral" }) {
+  return <div className={`price-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>GJN</small></div>;
 }
 
-function formatOptionalNumber(value: number | null): string {
-  return value === null ? "—" : String(value);
+function OrderBookSide({ title, levels, side }: { title: string; levels: CurrentOrderBookLevel[]; side: "BUY" | "SELL" }) {
+  return <div className={`book-side ${side.toLowerCase()}`}><h3>{title}</h3><div className="book-table"><div className="book-head"><span>#</span><span>Price</span><span>Quantity</span></div>{levels.map((level) => <div className="book-row" key={`${side}-${level.level_index}`}><span>{level.level_index + 1}</span><strong>{level.canonical_display_text} GJN</strong><span>{level.quantity}</span></div>)}</div></div>;
 }
 
-function toSnapshotQuery(params: Record<string, string | string[] | undefined>): SnapshotQuery {
-  return {
-    from: readParam(params.from),
-    to: readParam(params.to),
-    limit: readParam(params.limit) ?? "500",
-    order: readParam(params.order) === "desc" ? "desc" : ("asc" satisfies SortOrder)
-  };
-}
+function Info({ term, value }: { term: string; value: string }) { return <div><dt>{term}</dt><dd>{value}</dd></div>; }
 
-function readParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
+function ItemError({ error }: { error: ApiError }) { return <main className="market-shell detail-page"><header className="site-header"><Link className="brand" href="/">Gaijin Market Analytics</Link><Link href="/items">Market</Link></header><div className="market-error"><strong>{error.code === "item_not_found" ? "Item not found" : "Unable to load item"}</strong><p>{error.message}</p></div></main>; }
 
-async function loadItemDetail(
-  itemId: string,
-  query: SnapshotQuery
-): Promise<{ item: ItemDetail; snapshots: MarketSnapshot[] } | { error: ApiError }> {
+async function loadItem(itemId: string): Promise<{ item: ItemDetail; orderBook: CurrentOrderBook | null } | { error: ApiError }> {
   try {
-    const [item, snapshots] = await Promise.all([getItem(itemId), getItemSnapshots(itemId, query)]);
-    return { item, snapshots };
-  } catch (error) {
-    return { error: toDisplayError(error) };
-  }
+    const item = await getItem(itemId);
+    try { return { item, orderBook: await getCurrentOrderBook(itemId) }; }
+    catch (error) { const display = toDisplayError(error); if (display.code === "order_book_not_found") return { item, orderBook: null }; throw error; }
+  } catch (error) { return { error: toDisplayError(error) }; }
 }

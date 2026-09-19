@@ -37,6 +37,50 @@ export type ItemDetail = ItemSummary & {
   last_snapshot_at: string | null;
 };
 
+export type CurrentOrderBookLevel = {
+  side: "BUY" | "SELL";
+  level_index: number;
+  quantity: number;
+  price_raw: number;
+  base_amount_gjn: string;
+  display_amount_gjn: string;
+  canonical_display_text: string;
+};
+
+export type CurrentOrderBook = {
+  schema_version: "web_current_order_book_v1";
+  item: { id: number; external_key: string; name: string };
+  captured_at: string;
+  freshness: "fresh" | "stale";
+  stale_after_seconds: number;
+  best_buy: CurrentOrderBookLevel;
+  best_sell: CurrentOrderBookLevel;
+  spread_display_text: string;
+  contract: {
+    contract_id: string;
+    contract_version: number;
+    currency_code: "GJN";
+    raw_scale: number;
+    display_decimal_places: number;
+    evidence_level: string;
+  };
+  provenance: {
+    source_type: "manual_response_json";
+    source_capture_schema_version: string;
+    capture_method: string;
+    review_status: "confirmed_by_user";
+    request_action: "UNKNOWN";
+    normalized_capture_fingerprint: string;
+    source_file_sha256: string;
+    raw_response_sha256_claim: string;
+    raw_response_hash_verifiable: false;
+    read_model_schema_version: string;
+    read_model_implementation_version: string;
+  };
+  buy_levels: CurrentOrderBookLevel[];
+  sell_levels: CurrentOrderBookLevel[];
+};
+
 export type PaginatedItemsResponse = {
   items: ItemSummary[];
   page: number;

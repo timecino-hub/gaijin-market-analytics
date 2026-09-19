@@ -1,0 +1,39 @@
+bvvd-analysis.duckdns.org {
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+
+  route {
+    @write_method method POST PUT PATCH DELETE CONNECT TRACE
+    respond @write_method "Read-only preview" 405
+
+    @blocked_ui path /imports /imports/* /screen-recognition /screen-recognition/* /opportunities /opportunities/*
+    respond @blocked_ui "Not found" 404
+
+    @item_list {
+      method GET HEAD
+      path /api/v1/items
+    }
+    reverse_proxy @item_list api:8000
+
+    @item_detail {
+      method GET HEAD
+      path_regexp public_item ^/api/v1/items/[0-9]+(?:/order-book)?$
+    }
+    reverse_proxy @item_detail api:8000
+
+    @private_api path /api/*
+    respond @private_api "Read-only preview" 405
+
+    @health {
+      method GET HEAD
+      path /health /ready
+    }
+    reverse_proxy @health api:8000
+
+    reverse_proxy web:3000
+  }
+}

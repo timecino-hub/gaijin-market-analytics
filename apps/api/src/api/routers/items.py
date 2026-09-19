@@ -14,6 +14,10 @@ from api.schemas.items import (
     ItemDetailResponse,
     ItemListResponse,
     ItemSummary,
+    CurrentOrderBookContractResponse,
+    CurrentOrderBookLevelResponse,
+    CurrentOrderBookProvenanceResponse,
+    CurrentOrderBookResponse,
     OrderBookObservationResponse,
     SnapshotResponse,
     SnapshotSummary,
@@ -31,6 +35,12 @@ from api.services.items import (
     ItemWithLatestSnapshot,
     OrderBookObservationData,
     SnapshotData,
+)
+from api.services.current_order_book import (
+    STALE_AFTER_SECONDS,
+    CurrentOrderBookContractError,
+    CurrentOrderBookNotFoundError,
+    get_current_order_book,
 )
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
@@ -153,6 +163,76 @@ async def get_item(
             "The requested item was not found.",
         ) from exc
     return _item_detail(detail)
+
+
+@router.get("/{item_id}/order-book", response_model=CurrentOrderBookResponse)
+async def get_item_current_order_book(
+    item_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CurrentOrderBookResponse:
+    try:
+        data = await get_current_order_book(session, item_id=item_id)
+    except CurrentOrderBookNotFoundError as exc:
+        code = str(exc)
+        message = (
+            "The requested item was not found."
+            if code == "item_not_found"
+            else "No approved current order-book capture is available for this item."
+        )
+        raise _business_error(status.HTTP_404_NOT_FOUND, code, message) from exc
+    except CurrentOrderBookContractError as exc:
+        raise _business_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "price_contract_not_applicable",
+            "The latest capture is outside the approved price contract.",
+        ) from exc
+
+    model = data.read_model
+    levels = [CurrentOrderBookLevelResponse(**level) for level in model["levels"]]
+    buy_levels = [level for level in levels if level.side == "BUY"]
+    sell_levels = [level for level in levels if level.side == "SELL"]
+    best_buy = max(buy_levels, key=lambda level: level.price_raw)
+    best_sell = min(sell_levels, key=lambda level: level.price_raw)
+    contract = model["contract"]
+    capture = model["capture"]
+    evidence = model["evidence"]
+    return CurrentOrderBookResponse(
+        schema_version="web_current_order_book_v1",
+        item={
+            "id": data.item.id,
+            "external_key": data.item.external_key,
+            "name": data.item.name,
+        },
+        captured_at=data.source.captured_at,
+        freshness=data.freshness,
+        stale_after_seconds=STALE_AFTER_SECONDS,
+        best_buy=best_buy,
+        best_sell=best_sell,
+        spread_display_text=data.spread_display_text,
+        contract=CurrentOrderBookContractResponse(
+            contract_id=contract["contract_id"],
+            contract_version=contract["contract_version"],
+            currency_code=contract["currency_code"],
+            raw_scale=contract["raw_scale"],
+            display_decimal_places=contract["display_decimal_places"],
+            evidence_level=contract["evidence_level"],
+        ),
+        provenance=CurrentOrderBookProvenanceResponse(
+            source_type=data.source.source_type,
+            source_capture_schema_version=capture["source_capture_schema_version"],
+            capture_method=capture["capture_method"],
+            review_status=capture["review_status"],
+            request_action=capture["request_action"],
+            normalized_capture_fingerprint=capture["normalized_capture_fingerprint"],
+            source_file_sha256=data.source.source_file_sha256,
+            raw_response_sha256_claim=capture["raw_response_sha256_claim"],
+            raw_response_hash_verifiable=capture["raw_response_hash_verifiable"],
+            read_model_schema_version=model["schema_version"],
+            read_model_implementation_version=evidence["read_model_implementation_version"],
+        ),
+        buy_levels=buy_levels,
+        sell_levels=sell_levels,
+    )
 
 
 @router.get("/{item_id}/snapshots", response_model=list[SnapshotResponse])

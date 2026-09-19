@@ -1,6 +1,7 @@
 import type {
   ApiError,
   CsvUploadResult,
+  CurrentOrderBook,
   ImportJobResponse,
   ItemAnalysisQuery,
   ItemAnalysisResponse,
@@ -30,8 +31,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-const DEFAULT_API_BASE_URL = "http://localhost:8000";
-
 export async function getItems(query: ItemListQuery): Promise<PaginatedItemsResponse> {
   return fetchJson<PaginatedItemsResponse>("/api/v1/items", query);
 }
@@ -44,6 +43,12 @@ export async function getOpportunities(
 
 export async function getItem(itemId: string): Promise<ItemDetail> {
   return fetchJson<ItemDetail>(`/api/v1/items/${encodeURIComponent(itemId)}`);
+}
+
+export async function getCurrentOrderBook(itemId: string): Promise<CurrentOrderBook> {
+  return fetchJson<CurrentOrderBook>(
+    `/api/v1/items/${encodeURIComponent(itemId)}/order-book`
+  );
 }
 
 export async function getItemSnapshots(
@@ -323,7 +328,19 @@ export function buildApiUrl(path: string, query?: Record<string, string | undefi
 }
 
 function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL;
+  if (typeof window !== "undefined") {
+    return process.env.NEXT_PUBLIC_API_BASE_URL || window.location.origin;
+  }
+
+  const baseUrl = process.env["API_BASE_URL"] ?? process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!baseUrl) {
+    throw new ApiRequestError({
+      status: 0,
+      code: "api_configuration_error",
+      message: "API base URL is not configured."
+    });
+  }
+  return baseUrl;
 }
 
 async function parseApiError(response: Response): Promise<ApiError> {

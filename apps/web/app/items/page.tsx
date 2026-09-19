@@ -5,6 +5,8 @@ import { formatBoolean, formatDateTime, formatDecimal, formatOptionalText } from
 import type { ApiError, ItemListQuery, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
 import { ItemsFilterForm } from "./items-filter-form";
 
+export const dynamic = "force-dynamic";
+
 type ItemsPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -110,9 +112,7 @@ function Header() {
         <Link href="/" className="back-link">
           返回首页
         </Link>
-        <Link href="/imports" className="back-link">
-          导入 CSV
-        </Link>
+        <span className="back-link" aria-disabled="true">只读预览</span>
       </nav>
       <h1>已导入市场数据</h1>
       <p>仅浏览 CSV、JSON、手动或明确授权来源导入的数据，不展示虚假涨跌或收益。</p>

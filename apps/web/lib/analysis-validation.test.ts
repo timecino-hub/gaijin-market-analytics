@@ -28,7 +28,10 @@ test("datetimeLocalToIso converts local datetime through Date and rejects invali
   const result = datetimeLocalToIso("2026-06-29T08:30");
 
   assert.equal(result.ok, true);
-  assert.match(result.ok ? result.value ?? "" : "", /^2026-06-29T/);
+  assert.equal(
+    result.ok ? result.value : undefined,
+    new Date("2026-06-29T08:30").toISOString()
+  );
   assert.equal(datetimeLocalToIso("").ok, true);
   assert.equal(datetimeLocalToIso("Invalid Date").ok, false);
   assert.equal(datetimeLocalToIso("2026-02-31T08:30").ok, false);

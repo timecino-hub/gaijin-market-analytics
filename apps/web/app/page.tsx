@@ -1,51 +1,81 @@
 import Link from "next/link";
+import { getItems, toDisplayError } from "../lib/api-client";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const result = await loadRecentItems();
+
   return (
-    <main className="home-page">
-      <section className="intro" aria-labelledby="page-title">
-        <p className="eyebrow">Imported data browser</p>
-        <h1 id="page-title">Gaijin Market Analytics</h1>
-        <p>
-          浏览 CSV、JSON、手动或明确授权来源导入的市场数据，提供描述性统计和后续分析的基础。
-        </p>
-        <div className="hero-actions">
-          <Link className="primary-link" href="/imports">
-            导入 CSV
-          </Link>
-          <Link className="primary-link" href="/items">
-            浏览商品数据
-          </Link>
-          <Link className="primary-link" href="/opportunities">
-            机会排行榜
-          </Link>
-          <Link className="primary-link" href="/screen-recognition">
-            屏幕识别复核
-          </Link>
+    <main className="market-shell">
+      <header className="site-header">
+        <Link className="brand" href="/">Gaijin Market Analytics</Link>
+        <nav aria-label="Primary navigation">
+          <Link href="/items">Market</Link>
+          <span aria-disabled="true">Analytics · coming soon</span>
+        </nav>
+        <span className="preview-badge">Read-only preview</span>
+      </header>
+
+      <section className="market-hero" aria-labelledby="home-title">
+        <div>
+          <p className="eyebrow">Authorized market data</p>
+          <h1 id="home-title">Gaijin Market Analytics</h1>
+          <p className="hero-copy">
+            Browse confirmed order books with versioned, evidence-backed GJN price interpretation.
+          </p>
         </div>
+        <form className="hero-search" action="/items">
+          <label htmlFor="home-search">Find an item</label>
+          <div>
+            <input id="home-search" name="search" type="search" placeholder="Name or external key" />
+            <button type="submit">Search market</button>
+          </div>
+        </form>
       </section>
-      <section className="notice" aria-labelledby="notice-title">
-        <h2 id="notice-title">合规边界</h2>
-        <p>
-          本项目只提供数据分析参考，不构成收益保证；不会访问 Gaijin Market、不会自动登录、
-          不会执行买卖、撤单、支付或账户控制。
-        </p>
-        <p>机会评分使用可解释的确定性基线，不预测价格，也不代表成交或盈利概率。</p>
+
+      <section className="status-strip" aria-label="Service and data status">
+        <div><span>API</span><strong className={result.ok ? "status-live" : "status-down"}>{result.ok ? "Online" : "Unavailable"}</strong></div>
+        <div><span>Data policy</span><strong>Confirmed imports only</strong></div>
+        <div><span>Price contract</span><strong>GJN current-book v1</strong></div>
+        <div><span>Live polling</span><strong>Disabled</strong></div>
       </section>
-      <section className="status" aria-label="项目状态">
-        <div>
-          <span>Web</span>
-          <strong>Ready on port 3000</strong>
+
+      <section className="market-section" aria-labelledby="recent-title">
+        <div className="market-section-heading">
+          <div><p className="eyebrow">Browse</p><h2 id="recent-title">Recently available items</h2></div>
+          <Link href="/items">View all items</Link>
         </div>
-        <div>
-          <span>API</span>
-          <strong>Health check on port 8000</strong>
-        </div>
-        <div>
-          <span>Database</span>
-          <strong>PostgreSQL on port 5432</strong>
-        </div>
+        {!result.ok ? (
+          <div className="market-error"><strong>API unavailable</strong><p>{result.message}</p></div>
+        ) : result.items.length === 0 ? (
+          <div className="market-empty"><strong>No imported items yet</strong><p>Only approved, explicitly imported data will appear here.</p></div>
+        ) : (
+          <div className="item-browser-grid">
+            {result.items.map((item) => (
+              <Link className="item-row" href={`/items/${item.id}`} key={item.id}>
+                <div><strong>{item.name}</strong><span>{item.external_key}</span></div>
+                <span>{item.category}</span>
+                <span className="row-action">Open</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="market-section muted-band" aria-labelledby="history-title">
+        <div><p className="eyebrow">Historical market</p><h2 id="history-title">Price history</h2></div>
+        <p>Historical market data is not available yet.</p>
       </section>
     </main>
   );
+}
+
+async function loadRecentItems() {
+  try {
+    const data = await getItems({ page: "1", page_size: "6", sort: "updated_at", order: "desc" });
+    return { ok: true as const, items: data.items };
+  } catch (error) {
+    return { ok: false as const, items: [], message: toDisplayError(error).message };
+  }
 }

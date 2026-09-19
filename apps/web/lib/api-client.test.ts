@@ -17,6 +17,8 @@ import {
   uploadCsvImport
 } from "./api-client.ts";
 
+process.env.API_BASE_URL = "http://localhost:8000";
+
 test("buildApiUrl omits empty parameters and encodes query values", () => {
   const url = buildApiUrl("/api/v1/items", {
     search: "Synthetic Alpha",

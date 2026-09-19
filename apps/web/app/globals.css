@@ -1014,3 +1014,232 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+/* Public market preview */
+:root {
+  --mvp-bg: #0b0e12;
+  --mvp-surface: #12171d;
+  --mvp-surface-2: #171d24;
+  --mvp-line: #29313a;
+  --mvp-text: #f2f5f7;
+  --mvp-muted: #97a3af;
+  --mvp-buy: #34c78a;
+  --mvp-sell: #ff6b67;
+  --mvp-accent: #f0b429;
+}
+
+body:has(.market-shell) {
+  color-scheme: dark;
+  background: var(--mvp-bg);
+  color: var(--mvp-text);
+}
+
+.market-shell {
+  margin: 0 auto;
+  max-width: 1440px;
+  min-height: 100vh;
+  padding: 0 32px 64px;
+}
+
+.site-header {
+  align-items: center;
+  border-bottom: 1px solid var(--mvp-line);
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(80px, 1fr);
+  min-height: 68px;
+}
+
+.site-header .brand {
+  color: var(--mvp-text);
+  font-size: 1.05rem;
+}
+
+.site-header nav {
+  display: flex;
+  gap: 28px;
+}
+
+.site-header nav a,
+.site-header nav span {
+  color: var(--mvp-muted);
+  font-size: 0.9rem;
+}
+
+.site-header nav a:hover { color: var(--mvp-text); }
+
+.preview-badge,
+.freshness {
+  border: 1px solid var(--mvp-line);
+  color: var(--mvp-accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  justify-self: end;
+  padding: 5px 8px;
+  text-transform: uppercase;
+}
+
+.market-hero {
+  align-items: end;
+  display: grid;
+  gap: 56px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.75fr);
+  min-height: 360px;
+  padding: 72px 0 48px;
+}
+
+.market-hero h1,
+.item-title-block h1 {
+  color: var(--mvp-text);
+  font-size: clamp(2.5rem, 5vw, 5rem);
+  letter-spacing: 0;
+  line-height: 0.98;
+}
+
+.market-hero .eyebrow,
+.market-section .eyebrow,
+.orderbook-section .eyebrow,
+.item-title-block .eyebrow,
+.provenance-band .eyebrow {
+  color: var(--mvp-accent);
+}
+
+.hero-copy {
+  color: var(--mvp-muted);
+  font-size: 1.08rem;
+  line-height: 1.65;
+  max-width: 660px;
+}
+
+.hero-search { display: grid; gap: 9px; }
+.hero-search label { color: var(--mvp-muted); font-size: 0.82rem; font-weight: 700; }
+.hero-search > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.hero-search input {
+  background: var(--mvp-surface);
+  border: 1px solid var(--mvp-line);
+  color: var(--mvp-text);
+  min-height: 52px;
+  padding: 0 16px;
+  width: 100%;
+}
+.hero-search button { background: var(--mvp-accent); border-color: var(--mvp-accent); color: #16130a; min-height: 52px; }
+
+.status-strip {
+  border-bottom: 1px solid var(--mvp-line);
+  border-top: 1px solid var(--mvp-line);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.status-strip > div { border-right: 1px solid var(--mvp-line); display: grid; gap: 6px; padding: 18px; }
+.status-strip > div:last-child { border-right: 0; }
+.status-strip span { color: var(--mvp-muted); font-size: 0.75rem; text-transform: uppercase; }
+.status-strip strong { font-size: 0.92rem; }
+.status-live { color: var(--mvp-buy); }
+.status-down { color: var(--mvp-sell); }
+
+.market-section,
+.orderbook-section,
+.provenance-band { padding: 48px 0; }
+.market-section-heading { align-items: end; display: flex; justify-content: space-between; margin-bottom: 20px; }
+.market-section-heading h2,
+.market-section h2,
+.orderbook-section h2,
+.provenance-band h2 { font-size: 1.65rem; margin-bottom: 0; }
+
+.item-browser-grid { border-top: 1px solid var(--mvp-line); }
+.item-row {
+  align-items: center;
+  border-bottom: 1px solid var(--mvp-line);
+  color: var(--mvp-text);
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 180px 60px;
+  padding: 18px 8px;
+}
+.item-row:hover { background: var(--mvp-surface); text-decoration: none; }
+.item-row div { display: grid; gap: 4px; }
+.item-row div span,
+.item-row > span { color: var(--mvp-muted); font-size: 0.82rem; }
+.item-row .row-action { color: var(--mvp-accent); text-align: right; }
+
+.muted-band { border-top: 1px solid var(--mvp-line); color: var(--mvp-muted); display: flex; gap: 32px; justify-content: space-between; }
+.market-empty,
+.market-error,
+.market-loading { background: var(--mvp-surface); border: 1px solid var(--mvp-line); display: grid; gap: 8px; padding: 28px; }
+.market-empty p,
+.market-error p,
+.market-loading p { color: var(--mvp-muted); margin: 0; }
+.market-error { border-left: 3px solid var(--mvp-sell); }
+
+.detail-page { max-width: 1560px; }
+.detail-breadcrumb { color: var(--mvp-muted); display: flex; font-size: 0.82rem; gap: 10px; padding: 24px 0; }
+.item-title-block { align-items: end; display: flex; justify-content: space-between; padding: 24px 0 40px; }
+.item-title-block h1 { font-size: clamp(2.2rem, 4vw, 4.2rem); margin-bottom: 12px; }
+.item-title-block p:last-child { color: var(--mvp-muted); }
+.freshness.fresh { color: var(--mvp-buy); }
+.freshness.stale { color: var(--mvp-sell); }
+
+.price-summary { border: 1px solid var(--mvp-line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(220px, 1.2fr); }
+.price-metric,
+.price-meta { border-right: 1px solid var(--mvp-line); display: grid; gap: 8px; min-height: 130px; padding: 22px; }
+.price-summary > :last-child { border-right: 0; }
+.price-metric span,
+.price-meta span { color: var(--mvp-muted); font-size: 0.78rem; text-transform: uppercase; }
+.price-metric strong { font-size: 2rem; }
+.price-metric small,
+.price-meta small { color: var(--mvp-muted); }
+.price-metric.buy strong { color: var(--mvp-buy); }
+.price-metric.sell strong { color: var(--mvp-sell); }
+
+.orderbook-grid { display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
+.book-side { background: var(--mvp-surface); border: 1px solid var(--mvp-line); min-width: 0; }
+.book-side h3 { border-bottom: 1px solid var(--mvp-line); margin: 0; padding: 16px 18px; }
+.book-side.buy h3 { color: var(--mvp-buy); }
+.book-side.sell h3 { color: var(--mvp-sell); }
+.book-table { max-height: 520px; overflow: auto; }
+.book-head,
+.book-row { display: grid; grid-template-columns: 54px minmax(130px, 1fr) minmax(90px, 0.6fr); min-height: 42px; }
+.book-head { color: var(--mvp-muted); font-size: 0.75rem; position: sticky; top: 0; background: var(--mvp-surface-2); }
+.book-head span,
+.book-row span,
+.book-row strong { align-items: center; border-bottom: 1px solid var(--mvp-line); display: flex; padding: 9px 12px; }
+.book-row > :nth-child(n + 2) { justify-content: flex-end; }
+.book-head > :nth-child(n + 2) { justify-content: flex-end; }
+.book-side.buy .book-row strong { color: var(--mvp-buy); }
+.book-side.sell .book-row strong { color: var(--mvp-sell); }
+
+.provenance-band { border-top: 1px solid var(--mvp-line); }
+.provenance-band dl { display: grid; gap: 12px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 22px 0 0; }
+.provenance-band dl div { border-left: 1px solid var(--mvp-line); min-width: 0; padding-left: 14px; }
+.provenance-band dt { color: var(--mvp-muted); font-size: 0.75rem; margin-bottom: 6px; }
+.provenance-band dd { margin: 0; overflow-wrap: anywhere; }
+.loading-bar { animation: market-load 1.2s infinite; background: var(--mvp-accent); height: 3px; width: 120px; }
+@keyframes market-load { 50% { opacity: 0.3; transform: scaleX(0.55); transform-origin: left; } }
+
+@media (max-width: 900px) {
+  .market-hero { gap: 32px; grid-template-columns: 1fr; }
+  .status-strip { grid-template-columns: 1fr 1fr; }
+  .status-strip > div:nth-child(2) { border-right: 0; }
+  .price-summary { grid-template-columns: 1fr 1fr; }
+  .price-summary > :nth-child(2) { border-right: 0; }
+  .price-summary > :nth-child(-n + 2) { border-bottom: 1px solid var(--mvp-line); }
+  .orderbook-grid { grid-template-columns: 1fr; }
+  .provenance-band dl { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 620px) {
+  .market-shell { padding-inline: 16px; }
+  .site-header { gap: 12px; grid-template-columns: 1fr auto; }
+  .site-header nav { display: none; }
+  .market-hero { min-height: auto; padding-top: 48px; }
+  .hero-search > div { grid-template-columns: 1fr; }
+  .status-strip,
+  .price-summary { grid-template-columns: 1fr; }
+  .status-strip > div,
+  .price-summary > * { border-bottom: 1px solid var(--mvp-line); border-right: 0; }
+  .item-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .item-row > :nth-child(2) { display: none; }
+  .muted-band,
+  .item-title-block { align-items: start; display: grid; }
+  .provenance-band dl { grid-template-columns: 1fr; }
+}
