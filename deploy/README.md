@@ -37,3 +37,11 @@ Restore is intentionally not automated. Before a restore, stop public traffic,
 take a fresh backup, select an exact dump, verify its SHA-256, and obtain an
 explicit operator confirmation. Use a disposable database to rehearse the
 restore before touching the production database.
+
+## Reviewed production intake
+
+Initialize the restricted server inbox with `./deploy/init-data-intake.sh`.
+Use `import-item-catalog.sh` for reviewed item identities, then
+`import-approved-orderbook.sh` for confirmed raw order-book captures. Both
+commands default to dry-run and require `--write` for persistence. See
+`docs/production-data-intake.md` for the complete boundary and workflow.
