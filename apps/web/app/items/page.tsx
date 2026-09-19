@@ -1,199 +1,93 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getItems, toDisplayError } from "../../lib/api-client";
-import { formatBoolean, formatDateTime, formatDecimal, formatOptionalText } from "../../lib/formatters";
-import type { ApiError, ItemListQuery, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
+import { formatDateTime } from "../../lib/formatters";
+import type { ApiError, ItemListQuery, ItemSummary, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
+import { MarketHeader } from "../market-header";
 import { ItemsFilterForm } from "./items-filter-form";
 
 export const dynamic = "force-dynamic";
 
-type ItemsPageProps = {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-};
+type ItemsPageProps = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 export default async function ItemsPage({ searchParams }: ItemsPageProps) {
-  const params = await searchParams;
-  const query = toItemListQuery(params);
-  const dataResult = await loadItems(query);
-
-  if ("error" in dataResult) {
-    return (
-      <main className="page-shell">
-        <Header />
-        <ItemsFilterForm />
-        <ErrorPanel error={dataResult.error} />
-      </main>
-    );
-  }
-
-  const data = dataResult.data;
-  const previousPage = Math.max(data.page - 1, 1);
-  const nextPage = data.page + 1;
-  const hasPrevious = data.page > 1;
-  const hasNext = data.total_pages > 0 && data.page < data.total_pages;
+  const query = toItemListQuery(await searchParams);
+  const result = await loadItems(query);
 
   return (
-    <main className="page-shell">
-      <Header />
-      <ItemsFilterForm />
-
-      <section className="panel" aria-labelledby="items-heading">
-        <div className="section-heading">
-          <div>
-            <h2 id="items-heading">商品列表</h2>
-            <p>
-              第 {data.page} 页，共 {data.total_pages} 页；总商品数 {data.total}
-            </p>
-          </div>
-          <div className="pagination" aria-label="分页">
-            <PageLink disabled={!hasPrevious} page={previousPage} query={query}>
-              上一页
-            </PageLink>
-            <PageLink disabled={!hasNext} page={nextPage} query={query}>
-              下一页
-            </PageLink>
-          </div>
-        </div>
-
-          {data.items.length === 0 ? (
-            <div className="empty-state">
-              <h3>没有商品</h3>
-              <p>当前数据库或筛选条件下没有可浏览的已导入商品。</p>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>external_key</th>
-                    <th>分类</th>
-                    <th>稀有度</th>
-                    <th>状态</th>
-                    <th>best_ask</th>
-                    <th>best_bid</th>
-                    <th>观测时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <Link href={`/items/${item.id}`}>{item.name}</Link>
-                      </td>
-                      <td>{item.external_key}</td>
-                      <td>{item.category}</td>
-                      <td>{formatOptionalText(item.rarity)}</td>
-                      <td>{formatBoolean(item.is_active)}</td>
-                      {item.latest_snapshot ? (
-                        <>
-                          <td>{formatDecimal(item.latest_snapshot.best_ask)}</td>
-                          <td>{formatDecimal(item.latest_snapshot.best_bid)}</td>
-                          <td>{formatDateTime(item.latest_snapshot.observed_at)}</td>
-                        </>
-                      ) : (
-                        <td colSpan={3}>暂无市场快照</td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+    <main className="art-shell">
+      <MarketHeader active="catalog" />
+      <section className="deco-page-title">
+        <div><p className="deco-kicker">VEHICLE CATALOG</p><h1>载具目录</h1><p>仅展示人工审核导入的数据；缺失价格不会被填成零或示例值。</p></div>
+        {"data" in result ? <div className="deco-total"><strong>{result.data.total}</strong><span>个可浏览条目</span></div> : null}
       </section>
+      <ItemsFilterForm query={query} />
+
+      {"error" in result ? <CatalogError error={result.error} /> : <Catalog data={result.data} query={query} />}
     </main>
   );
 }
 
-function Header() {
+function Catalog({ data, query }: { data: PaginatedItemsResponse; query: ItemListQuery }) {
+  const hasPrevious = data.page > 1;
+  const hasNext = data.total_pages > 0 && data.page < data.total_pages;
   return (
-    <header className="page-header">
-      <nav className="page-nav" aria-label="页面导航">
-        <Link href="/" className="back-link">
-          返回首页
-        </Link>
-        <span className="back-link" aria-disabled="true">只读预览</span>
-      </nav>
-      <h1>已导入市场数据</h1>
-      <p>仅浏览 CSV、JSON、手动或明确授权来源导入的数据，不展示虚假涨跌或收益。</p>
-    </header>
-  );
-}
-
-function ErrorPanel({ error }: { error: { code: string; message: string } }) {
-  return (
-    <section className="error-state" aria-live="polite">
-      <h2>{error.code === "api_unreachable" ? "API 不可访问" : "无法加载商品"}</h2>
-      <p>{error.message}</p>
+    <section className="deco-list-section deco-catalog-page" aria-labelledby="catalog-heading">
+      <div className="deco-section-heading">
+        <div><p className="deco-kicker">CURRENT BOOK</p><h2 id="catalog-heading">审核数据目录</h2></div>
+        <div className="deco-pagination" aria-label="分页">
+          <PageLink disabled={!hasPrevious} page={Math.max(data.page - 1, 1)} query={query}>← 上一页</PageLink>
+          <span>{data.page} / {Math.max(data.total_pages, 1)}</span>
+          <PageLink disabled={!hasNext} page={data.page + 1} query={query}>下一页 →</PageLink>
+        </div>
+      </div>
+      {data.items.length === 0 ? (
+        <div className="deco-empty-large"><span aria-hidden="true">00</span><div><strong>当前条件没有载具</strong><p>保留筛选条件继续调整，或重置后查看全部审核条目。</p><Link href="/items">重置筛选 →</Link></div></div>
+      ) : (
+        <div className="deco-catalog-list">
+          <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>最佳买价</span><span>最佳卖价</span><span>观测状态</span><span /></div>
+          {data.items.map((item) => <CatalogRow item={item} key={item.id} />)}
+        </div>
+      )}
     </section>
   );
 }
 
-function PageLink({
-  children,
-  disabled,
-  page,
-  query
-}: {
-  children: ReactNode;
-  disabled: boolean;
-  page: number;
-  query?: ItemListQuery;
-}) {
-  if (disabled) {
-    return (
-      <span className="button-disabled" aria-disabled="true">
-        {children}
-      </span>
-    );
-  }
-
-  const nextQuery = { ...query, page: String(page) };
+function CatalogRow({ item }: { item: ItemSummary }) {
+  const book = item.current_order_book;
   return (
-    <Link className="button-link" href={{ pathname: "/items", query: cleanQuery(nextQuery) }}>
-      {children}
+    <Link className="deco-catalog-row" href={`/items/${item.id}`}>
+      <div className="deco-item-identity"><span className="deco-item-mark" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span><div><strong>{item.name}</strong><small>{item.category}{item.rarity ? ` · ${item.rarity}` : ""}<br />{item.external_key}</small></div></div>
+      <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
+      <span className={`deco-data-state ${book?.freshness === "stale" ? "stale" : ""}`}><b>{book ? (book.freshness === "fresh" ? "当前" : "已过期") : statusLabel(item)}</b><small>{book ? formatDateTime(book.captured_at) : "无观测时间"}</small></span>
+      <b className="deco-row-action">查看 →</b>
     </Link>
   );
 }
 
+function CatalogError({ error }: { error: ApiError }) {
+  return <section className="deco-error" aria-live="polite"><span aria-hidden="true">!</span><div><strong>{error.code === "api_unreachable" ? "API 不可访问" : "目录加载失败"}</strong><p>{error.message}</p></div></section>;
+}
+
+function PageLink({ children, disabled, page, query }: { children: ReactNode; disabled: boolean; page: number; query: ItemListQuery }) {
+  if (disabled) return <span aria-disabled="true">{children}</span>;
+  return <Link href={{ pathname: "/items", query: cleanQuery({ ...query, page: String(page) }) }}>{children}</Link>;
+}
+
+function statusLabel(item: ItemSummary): string {
+  return item.current_order_book_status === "contract_error" ? "合同错误" : "数据不足";
+}
+
 function toItemListQuery(params: Record<string, string | string[] | undefined>): ItemListQuery {
-  return {
-    page: readParam(params.page) ?? "1",
-    page_size: readParam(params.page_size) ?? "20",
-    search: readParam(params.search),
-    category: readParam(params.category),
-    rarity: readParam(params.rarity),
-    is_active: readParam(params.is_active),
-    sort: readSort(params.sort),
-    order: readOrder(params.order)
-  };
+  return { page: readParam(params.page) ?? "1", page_size: readParam(params.page_size) ?? "20", search: readParam(params.search), category: readParam(params.category), rarity: readParam(params.rarity), is_active: readParam(params.is_active), sort: readSort(params.sort), order: readOrder(params.order) };
 }
 
-function readParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
+function readParam(value: string | string[] | undefined): string | undefined { return Array.isArray(value) ? value[0] : value; }
+function readSort(value: string | string[] | undefined): SortField { const sort = readParam(value); return sort === "created_at" || sort === "updated_at" ? sort : "name"; }
+function readOrder(value: string | string[] | undefined): SortOrder { return readParam(value) === "desc" ? "desc" : "asc"; }
+function cleanQuery(query: ItemListQuery): Record<string, string> { return Object.fromEntries(Object.entries(query).filter((entry): entry is [string, string] => Boolean(entry[1]))); }
 
-function readSort(value: string | string[] | undefined): SortField {
-  const sort = readParam(value);
-  return sort === "created_at" || sort === "updated_at" ? sort : "name";
-}
-
-function readOrder(value: string | string[] | undefined): SortOrder {
-  return readParam(value) === "desc" ? "desc" : "asc";
-}
-
-function cleanQuery(query: ItemListQuery): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(query).filter((entry): entry is [string, string] => Boolean(entry[1]))
-  );
-}
-
-async function loadItems(
-  query: ItemListQuery
-): Promise<{ data: PaginatedItemsResponse } | { error: ApiError }> {
-  try {
-    return { data: await getItems(query) };
-  } catch (error) {
-    return { error: toDisplayError(error) };
-  }
+async function loadItems(query: ItemListQuery): Promise<{ data: PaginatedItemsResponse } | { error: ApiError }> {
+  try { return { data: await getItems(query) }; } catch (error) { return { error: toDisplayError(error) }; }
 }

@@ -337,7 +337,7 @@ function getApiBaseUrl(): string {
     throw new ApiRequestError({
       status: 0,
       code: "api_configuration_error",
-      message: "API base URL is not configured."
+      message: "只读 API 地址尚未配置。"
     });
   }
   return baseUrl;
