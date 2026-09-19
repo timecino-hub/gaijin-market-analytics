@@ -36,8 +36,34 @@ class ItemSummary(BaseModel):
     latest_snapshot: SnapshotSummary | None
 
 
+class CatalogPriceResponse(BaseModel):
+    price_raw: int
+    canonical_display_text: str
+    quantity: int
+
+
+class CatalogOrderBookResponse(BaseModel):
+    schema_version: Literal["web_catalog_order_book_v1"]
+    captured_at: datetime
+    freshness: Literal["fresh", "stale"]
+    best_buy: CatalogPriceResponse
+    best_sell: CatalogPriceResponse
+    spread_display_text: str
+    currency_code: Literal["GJN"]
+    contract_id: str
+    contract_version: int
+    source_type: Literal["manual_response_json"]
+    review_status: Literal["confirmed_by_user"]
+    request_action: Literal["UNKNOWN"]
+
+
+class MarketItemSummary(ItemSummary):
+    current_order_book_status: Literal["available", "no_capture", "contract_error"]
+    current_order_book: CatalogOrderBookResponse | None
+
+
 class ItemListResponse(BaseModel):
-    items: list[ItemSummary]
+    items: list[MarketItemSummary]
     page: int
     page_size: int
     total: int

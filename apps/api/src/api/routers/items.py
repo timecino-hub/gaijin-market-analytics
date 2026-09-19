@@ -13,6 +13,9 @@ from api.schemas.historical_trades import (
 from api.schemas.items import (
     ItemDetailResponse,
     ItemListResponse,
+    MarketItemSummary,
+    CatalogOrderBookResponse,
+    CatalogPriceResponse,
     ItemSummary,
     CurrentOrderBookContractResponse,
     CurrentOrderBookLevelResponse,
@@ -376,7 +379,44 @@ def _parse_datetime_filter(value: str | None, field: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _item_summary(row: ItemWithLatestSnapshot) -> ItemSummary:
+def _item_summary(row: ItemWithLatestSnapshot) -> MarketItemSummary:
+    base = _base_item_summary(row)
+    order_book = row.current_order_book
+    current = None
+    if order_book.status == "available":
+        assert order_book.captured_at is not None
+        assert order_book.freshness is not None
+        assert order_book.best_buy is not None
+        assert order_book.best_sell is not None
+        assert order_book.spread_display_text is not None
+        assert order_book.currency_code is not None
+        assert order_book.contract_id is not None
+        assert order_book.contract_version is not None
+        assert order_book.source_type is not None
+        assert order_book.review_status is not None
+        assert order_book.request_action is not None
+        current = CatalogOrderBookResponse(
+            schema_version="web_catalog_order_book_v1",
+            captured_at=order_book.captured_at,
+            freshness=order_book.freshness,
+            best_buy=CatalogPriceResponse(**order_book.best_buy.__dict__),
+            best_sell=CatalogPriceResponse(**order_book.best_sell.__dict__),
+            spread_display_text=order_book.spread_display_text,
+            currency_code=order_book.currency_code,
+            contract_id=order_book.contract_id,
+            contract_version=order_book.contract_version,
+            source_type=order_book.source_type,
+            review_status=order_book.review_status,
+            request_action=order_book.request_action,
+        )
+    return MarketItemSummary(
+        **base.model_dump(),
+        current_order_book_status=order_book.status,
+        current_order_book=current,
+    )
+
+
+def _base_item_summary(row: ItemWithLatestSnapshot) -> ItemSummary:
     item = row.item
     return ItemSummary(
         id=item.id,
@@ -392,7 +432,7 @@ def _item_summary(row: ItemWithLatestSnapshot) -> ItemSummary:
 
 
 def _item_detail(detail: ItemDetailData) -> ItemDetailResponse:
-    summary = _item_summary(detail)
+    summary = _base_item_summary(detail)
     return ItemDetailResponse(
         **summary.model_dump(),
         snapshot_count=detail.snapshot_count,

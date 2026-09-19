@@ -379,6 +379,8 @@ def test_item_without_snapshots_has_null_latest_snapshot(
 
     assert response.status_code == 200
     assert response.json()["items"][0]["latest_snapshot"] is None
+    assert response.json()["items"][0]["current_order_book_status"] == "no_capture"
+    assert response.json()["items"][0]["current_order_book"] is None
 
 
 def test_item_detail_success(client: TestClient, migrated_database: str) -> None:

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from collections.abc import Mapping
 from typing import Literal, cast
@@ -7,8 +7,12 @@ from typing import Literal, cast
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import Item, MarketSnapshot, OrderBookObservation
+from api.db.models import Item, ManualOrderBookImport, MarketSnapshot, OrderBookObservation
 from api.schemas.items import SortField, SortOrder
+from api.services.current_order_book import (
+    CurrentOrderBookContractError,
+    interpret_current_order_book_capture,
+)
 
 
 class ItemNotFoundError(LookupError):
@@ -33,6 +37,30 @@ class SnapshotData:
 class ItemWithLatestSnapshot:
     item: Item
     latest_snapshot: SnapshotData | None
+    current_order_book: "CatalogOrderBookData"
+
+
+@dataclass(frozen=True)
+class CatalogPriceData:
+    price_raw: int
+    canonical_display_text: str
+    quantity: int
+
+
+@dataclass(frozen=True)
+class CatalogOrderBookData:
+    status: Literal["available", "no_capture", "contract_error"]
+    captured_at: datetime | None = None
+    freshness: Literal["fresh", "stale"] | None = None
+    best_buy: CatalogPriceData | None = None
+    best_sell: CatalogPriceData | None = None
+    spread_display_text: str | None = None
+    currency_code: Literal["GJN"] | None = None
+    contract_id: str | None = None
+    contract_version: int | None = None
+    source_type: Literal["manual_response_json"] | None = None
+    review_status: Literal["confirmed_by_user"] | None = None
+    request_action: Literal["UNKNOWN"] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,19 +120,28 @@ class ItemQueryService:
         total = await self._session.scalar(count_statement)
 
         latest = _latest_snapshot_subquery()
+        latest_order_book = _latest_manual_order_book_subquery()
         statement = (
-            select(Item, latest)
+            select(Item, latest, latest_order_book)
             .outerjoin(latest, latest.c.item_id == Item.id)
+            .outerjoin(latest_order_book, latest_order_book.c.order_book_item_id == Item.id)
             .where(*filters)
             .order_by(*_item_order_by(sort, order), Item.id.asc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
         result = await self._session.execute(statement)
-        items = [
-            ItemWithLatestSnapshot(item=row[0], latest_snapshot=_snapshot_from_row(row._mapping))
-            for row in result.all()
-        ]
+        observed_now = datetime.now(UTC)
+        items = []
+        for row in result.all():
+            mapping = row._mapping
+            items.append(
+                ItemWithLatestSnapshot(
+                    item=row[0],
+                    latest_snapshot=_snapshot_from_row(mapping),
+                    current_order_book=_catalog_order_book_from_row(mapping, now=observed_now),
+                )
+            )
         return ItemListData(items=items, total=total or 0)
 
     async def get_item_detail(self, item_id: int) -> ItemDetailData:
@@ -142,6 +179,7 @@ class ItemQueryService:
         return ItemDetailData(
             item=row[0],
             latest_snapshot=_snapshot_from_row(mapping),
+            current_order_book=CatalogOrderBookData(status="no_capture"),
             snapshot_count=mapping["snapshot_count"],
             first_snapshot_at=mapping["first_snapshot_at"],
             last_snapshot_at=mapping["last_snapshot_at"],
@@ -295,6 +333,81 @@ def _latest_snapshot_subquery():
         )
     ).subquery()
     return select(ranked).where(ranked.c.snapshot_rank == 1).subquery()
+
+
+def _latest_manual_order_book_subquery():
+    ranked = (
+        select(
+            ManualOrderBookImport.item_id.label("order_book_item_id"),
+            ManualOrderBookImport.captured_at.label("latest_order_book_captured_at"),
+            ManualOrderBookImport.capture_payload.label("latest_order_book_capture_payload"),
+            func.row_number()
+            .over(
+                partition_by=ManualOrderBookImport.item_id,
+                order_by=(
+                    ManualOrderBookImport.captured_at.desc(),
+                    ManualOrderBookImport.id.desc(),
+                ),
+            )
+            .label("order_book_rank"),
+        )
+    ).subquery()
+    return select(ranked).where(ranked.c.order_book_rank == 1).subquery()
+
+
+def _catalog_order_book_from_row(
+    mapping: Mapping[str, object],
+    *,
+    now: datetime,
+) -> CatalogOrderBookData:
+    captured_at = mapping["latest_order_book_captured_at"]
+    capture_payload = mapping["latest_order_book_capture_payload"]
+    if not isinstance(captured_at, datetime) or not isinstance(capture_payload, Mapping):
+        return CatalogOrderBookData(status="no_capture")
+
+    try:
+        interpreted = interpret_current_order_book_capture(
+            capture_payload=capture_payload,
+            captured_at=captured_at,
+            now=now,
+        )
+    except CurrentOrderBookContractError:
+        return CatalogOrderBookData(status="contract_error", captured_at=captured_at)
+
+    model = interpreted.read_model
+    levels = model["levels"]
+    buy = max(
+        (level for level in levels if level["side"] == "BUY"),
+        key=lambda level: level["price_raw"],
+    )
+    sell = min(
+        (level for level in levels if level["side"] == "SELL"),
+        key=lambda level: level["price_raw"],
+    )
+    contract = model["contract"]
+    capture = model["capture"]
+    return CatalogOrderBookData(
+        status="available",
+        captured_at=captured_at,
+        freshness=interpreted.freshness,
+        best_buy=CatalogPriceData(
+            price_raw=buy["price_raw"],
+            canonical_display_text=buy["canonical_display_text"],
+            quantity=buy["quantity"],
+        ),
+        best_sell=CatalogPriceData(
+            price_raw=sell["price_raw"],
+            canonical_display_text=sell["canonical_display_text"],
+            quantity=sell["quantity"],
+        ),
+        spread_display_text=interpreted.spread_display_text,
+        currency_code=contract["currency_code"],
+        contract_id=contract["contract_id"],
+        contract_version=contract["contract_version"],
+        source_type="manual_response_json",
+        review_status=capture["review_status"],
+        request_action=capture["request_action"],
+    )
 
 
 def _snapshot_from_row(mapping: Mapping[str, object]) -> SnapshotData | None:

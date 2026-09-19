@@ -155,3 +155,70 @@ def test_current_order_book_get_is_read_only(
         assert client.get(f"/api/v1/items/{item_id}/order-book").status_code == 200
 
     assert _counts(migrated_database) == before
+
+
+def test_item_catalog_includes_approved_current_order_book_summary(
+    client: TestClient, migrated_database: str
+) -> None:
+    item_id = _insert_item(migrated_database)
+    _import_fixture(migrated_database)
+
+    response = client.get("/api/v1/items?search=approved")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["id"] == item_id
+    assert item["current_order_book_status"] == "available"
+    summary = item["current_order_book"]
+    assert summary["schema_version"] == "web_catalog_order_book_v1"
+    assert summary["best_buy"] == {
+        "price_raw": 1_710_300,
+        "canonical_display_text": "171.03",
+        "quantity": 1,
+    }
+    assert summary["best_sell"] == {
+        "price_raw": 2_180_000,
+        "canonical_display_text": "218.00",
+        "quantity": 1,
+    }
+    assert summary["spread_display_text"] == "46.97"
+    assert summary["currency_code"] == "GJN"
+    assert summary["contract_id"] == "gaijin_market_1067_current_book_gjn_v1"
+    assert summary["contract_version"] == 1
+    assert summary["source_type"] == "manual_response_json"
+    assert summary["review_status"] == "confirmed_by_user"
+    assert summary["request_action"] == "UNKNOWN"
+
+
+def test_item_catalog_marks_latest_contract_failure_without_writing(
+    client: TestClient, migrated_database: str
+) -> None:
+    _insert_item(migrated_database)
+    _import_fixture(migrated_database)
+    engine = create_engine(migrated_database)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE manual_order_book_imports
+                    SET capture_payload = jsonb_set(
+                        capture_payload,
+                        '{request,path}',
+                        '"/unsupported"'::jsonb
+                    )
+                    """
+                )
+            )
+    finally:
+        engine.dispose()
+
+    before = _counts(migrated_database)
+    response = client.get("/api/v1/items")
+    after = _counts(migrated_database)
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["current_order_book_status"] == "contract_error"
+    assert item["current_order_book"] is None
+    assert after == before

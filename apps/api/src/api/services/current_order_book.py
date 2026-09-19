@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from sqlalchemy import select
@@ -34,6 +35,13 @@ class CurrentOrderBookData:
     spread_display_text: str
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentOrderBookInterpretation:
+    read_model: dict[str, Any]
+    freshness: Literal["fresh", "stale"]
+    spread_display_text: str
+
+
 async def get_current_order_book(
     session: AsyncSession,
     *,
@@ -57,9 +65,29 @@ async def get_current_order_book(
     if source is None:
         raise CurrentOrderBookNotFoundError("order_book_not_found")
 
+    interpreted = interpret_current_order_book_capture(
+        capture_payload=source.capture_payload,
+        captured_at=source.captured_at,
+        now=now,
+    )
+    return CurrentOrderBookData(
+        item=item,
+        source=source,
+        read_model=interpreted.read_model,
+        freshness=interpreted.freshness,
+        spread_display_text=interpreted.spread_display_text,
+    )
+
+
+def interpret_current_order_book_capture(
+    *,
+    capture_payload: Mapping[str, Any],
+    captured_at: datetime,
+    now: datetime | None = None,
+) -> CurrentOrderBookInterpretation:
     try:
         document = json.dumps(
-            source.capture_payload,
+            capture_payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -84,15 +112,13 @@ async def get_current_order_book(
         raise CurrentOrderBookContractError("price_contract_not_applicable") from exc
 
     observed_now = (now or datetime.now(UTC)).astimezone(UTC)
-    captured_at = source.captured_at.astimezone(UTC)
+    normalized_captured_at = captured_at.astimezone(UTC)
     freshness: Literal["fresh", "stale"] = (
         "stale"
-        if observed_now - captured_at > timedelta(seconds=STALE_AFTER_SECONDS)
+        if observed_now - normalized_captured_at > timedelta(seconds=STALE_AFTER_SECONDS)
         else "fresh"
     )
-    return CurrentOrderBookData(
-        item=item,
-        source=source,
+    return CurrentOrderBookInterpretation(
         read_model=read_model,
         freshness=freshness,
         spread_display_text=f"{spread:.2f}",

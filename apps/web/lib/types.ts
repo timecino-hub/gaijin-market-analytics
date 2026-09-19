@@ -29,6 +29,29 @@ export type ItemSummary = {
   created_at: string;
   updated_at: string;
   latest_snapshot: SnapshotSummary | null;
+  current_order_book_status?: "available" | "no_capture" | "contract_error";
+  current_order_book?: CatalogOrderBookSummary | null;
+};
+
+export type CatalogOrderBookSummary = {
+  schema_version: "web_catalog_order_book_v1";
+  captured_at: string;
+  freshness: "fresh" | "stale";
+  best_buy: CatalogPriceSummary;
+  best_sell: CatalogPriceSummary;
+  spread_display_text: string;
+  currency_code: "GJN";
+  contract_id: string;
+  contract_version: number;
+  source_type: "manual_response_json";
+  review_status: "confirmed_by_user";
+  request_action: "UNKNOWN";
+};
+
+export type CatalogPriceSummary = {
+  price_raw: number;
+  canonical_display_text: string;
+  quantity: number;
 };
 
 export type ItemDetail = ItemSummary & {
