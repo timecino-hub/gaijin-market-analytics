@@ -7,6 +7,7 @@ const headerUrl = new URL("./market-header.tsx", import.meta.url);
 const listUrl = new URL("./items/page.tsx", import.meta.url);
 const detailUrl = new URL("./items/[itemId]/page.tsx", import.meta.url);
 const cssUrl = new URL("./art-direction.css", import.meta.url);
+const layoutUrl = new URL("./layout.tsx", import.meta.url);
 
 test("public homepage is a read-only, evidence-backed catalog", async () => {
   const [source, header] = await Promise.all([readFile(homeUrl, "utf8"), readFile(headerUrl, "utf8")]);
@@ -38,12 +39,16 @@ test("item detail renders canonical prices and evidence provenance", async () =>
 });
 
 test("art direction uses the approved palette and responsive layouts", async () => {
-  const source = await readFile(cssUrl, "utf8");
+  const [source, layout] = await Promise.all([readFile(cssUrl, "utf8"), readFile(layoutUrl, "utf8")]);
   for (const color of ["#eee8dc", "#f6f2ea", "#182327", "#5c6665", "#b9b6ac", "#b96741"]) {
     assert.match(source, new RegExp(color));
   }
   assert.match(source, /@media \(max-width: 1024px\)/);
   assert.match(source, /@media \(max-width: 620px\)/);
   assert.match(source, /\.deco-orderbook-grid/);
+  assert.match(layout, /BarlowCondensed-Black\.ttf/);
+  assert.match(layout, /next\/font\/local/);
+  assert.match(source, /--font-art-display/);
+  assert.match(source, /--font-art-interface/);
   assert.doesNotMatch(source, /radial-gradient|linear-gradient/);
 });

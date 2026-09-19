@@ -7,6 +7,7 @@
   --art-copper: #b96741;
   --art-copper-dark: #995333;
   --art-copper-light: #c98965;
+  --font-art-interface: "Noto Sans SC";
 }
 
 body:has(.art-shell) {
@@ -19,6 +20,7 @@ body:has(.art-shell) {
 .art-shell * { box-sizing: border-box; }
 
 .art-shell {
+  font-family: var(--font-art-interface), "Microsoft YaHei", sans-serif;
   margin: 0 auto;
   max-width: 1440px;
   min-height: 100vh;
@@ -45,8 +47,8 @@ body:has(.art-shell) {
   min-height: 72px;
 }
 
-.deco-brand { align-items: center; display: flex; font-size: 0.82rem; gap: 13px; text-transform: uppercase; }
-.deco-monogram { display: flex; font-family: Impact, "Arial Narrow", sans-serif; font-size: 1.05rem; font-style: normal; font-weight: 900; }
+.deco-brand { align-items: center; display: flex; font-family: var(--font-art-display), "Arial Narrow", sans-serif; font-size: 1rem; font-weight: 800; gap: 13px; text-transform: uppercase; }
+.deco-monogram { display: flex; font-family: var(--font-art-display), "Arial Narrow", sans-serif; font-size: 1.15rem; font-style: normal; font-weight: 900; }
 .deco-monogram i { background: var(--art-ink); color: var(--art-paper); font-style: normal; line-height: 27px; text-align: center; width: 24px; }
 .deco-monogram i:nth-child(3) { background: var(--art-copper); }
 .deco-header nav { display: flex; gap: 28px; }
@@ -68,7 +70,7 @@ body:has(.art-shell) {
 .deco-intro h1,
 .deco-page-title h1,
 .deco-detail-title h1,
-.deco-state h1 { font-family: Impact, "Arial Narrow", "Noto Sans SC", sans-serif; font-size: 48px; font-weight: 900; line-height: 1; margin: 0 0 13px; text-transform: uppercase; }
+.deco-state h1 { font-family: var(--font-art-display), var(--font-art-interface), sans-serif; font-size: 48px; font-weight: 900; line-height: 1; margin: 0 0 13px; text-transform: uppercase; }
 .deco-intro > div > p:last-child,
 .deco-page-title > div > p:last-child { color: var(--art-muted); line-height: 1.7; margin: 0; max-width: 720px; }
 
@@ -95,13 +97,13 @@ body:has(.art-shell) {
 
 .deco-stage { align-items: center; background: #243033; display: grid; justify-items: center; overflow: hidden; position: relative; }
 .deco-stage::after { background: var(--art-copper); bottom: 0; content: ""; height: 13px; left: 0; position: absolute; right: 0; }
-.deco-stage strong { color: var(--art-paper); font-family: Impact, "Arial Narrow", sans-serif; font-size: 68px; position: relative; z-index: 2; }
+.deco-stage strong { color: var(--art-paper); font-family: var(--font-art-display), "Arial Narrow", sans-serif; font-size: 68px; font-weight: 900; position: relative; z-index: 2; }
 .deco-block { display: block; position: absolute; transform: skewX(-22deg); }
 .block-one { background: #344245; height: 96px; left: 10%; top: 42px; width: 68%; }
 .block-two { background: var(--art-copper-dark); bottom: 32px; height: 72px; right: 4%; width: 48%; }
 .deco-feature-copy { align-content: center; display: grid; padding: 34px 52px; }
 .deco-feature-copy .deco-kicker { color: var(--art-copper-light); }
-.deco-feature h2 { font-family: Impact, "Arial Narrow", "Noto Sans SC", sans-serif; font-size: 34px; line-height: 1.05; margin: 0 0 10px; }
+.deco-feature h2 { font-family: var(--font-art-display), var(--font-art-interface), sans-serif; font-size: 34px; font-weight: 900; line-height: 1.05; margin: 0 0 10px; }
 .deco-feature-copy > p:not(.deco-kicker) { color: #c7cecb; line-height: 1.55; margin-bottom: 20px; }
 .deco-feature-prices { border-bottom: 1px solid #435053; border-top: 1px solid #435053; display: grid; grid-template-columns: 1fr 1fr; margin: 4px 0 20px; }
 .deco-feature-prices > div { display: grid; gap: 4px; padding: 14px 0; }
@@ -128,7 +130,7 @@ body:has(.art-shell) {
 .deco-section-heading { align-items: end; display: flex; gap: 24px; justify-content: space-between; margin-bottom: 18px; }
 .deco-section-heading h2,
 .deco-deferred h2,
-.deco-provenance h2 { font-family: Impact, "Arial Narrow", "Noto Sans SC", sans-serif; font-size: 27px; margin: 0; text-transform: uppercase; }
+.deco-provenance h2 { font-family: var(--font-art-display), var(--font-art-interface), sans-serif; font-size: 27px; font-weight: 900; margin: 0; text-transform: uppercase; }
 .deco-section-heading > a { border-bottom: 2px solid var(--art-copper); font-size: 0.82rem; padding-bottom: 4px; }
 .deco-section-heading > span { color: var(--art-muted); font-size: 0.75rem; }
 
@@ -146,7 +148,7 @@ body:has(.art-shell) {
 .deco-row-action,
 .deco-catalog-row > b:last-child { color: var(--art-copper-dark); font-size: 0.74rem; text-align: right; }
 .deco-item-identity { align-items: center; display: flex; gap: 14px; min-width: 0; }
-.deco-item-mark { align-items: center; background: var(--art-ink); color: var(--art-paper); display: flex; flex: 0 0 44px; font-family: Impact, sans-serif; font-size: 22px; height: 54px; justify-content: center; }
+.deco-item-mark { align-items: center; background: var(--art-ink); color: var(--art-paper); display: flex; flex: 0 0 44px; font-family: var(--font-art-display), sans-serif; font-size: 22px; font-weight: 900; height: 54px; justify-content: center; }
 .deco-data-state { display: grid; gap: 4px; }
 .deco-data-state b { color: var(--art-ink); font-size: 0.76rem; }
 .deco-data-state b::before { background: var(--art-copper); content: ""; display: inline-block; height: 6px; margin-right: 7px; width: 6px; }
@@ -163,7 +165,7 @@ body:has(.art-shell) {
 
 .deco-page-title { align-items: end; display: flex; justify-content: space-between; padding: 52px 0 32px; }
 .deco-total { align-items: end; display: flex; gap: 10px; }
-.deco-total strong { font-family: Impact, sans-serif; font-size: 42px; }
+.deco-total strong { font-family: var(--font-art-display), sans-serif; font-size: 42px; font-weight: 900; }
 .deco-total span { color: var(--art-muted); font-size: 0.75rem; padding-bottom: 7px; }
 .deco-filter { align-items: end; border-bottom: 1px solid var(--art-line); border-top: 2px solid var(--art-ink); display: grid; gap: 12px; grid-template-columns: 1.25fr repeat(4, minmax(120px, 0.7fr)) auto auto; padding: 18px 0; }
 .deco-filter label { color: var(--art-muted); display: grid; font-size: 0.7rem; font-weight: 800; gap: 6px; text-transform: uppercase; }
@@ -176,7 +178,7 @@ body:has(.art-shell) {
 .deco-pagination a { border-bottom: 1px solid var(--art-copper); padding: 4px 0; }
 .deco-pagination [aria-disabled="true"] { color: var(--art-line); }
 .deco-empty-large { align-items: center; border-bottom: 1px solid var(--art-line); border-top: 2px solid var(--art-ink); display: grid; gap: 28px; grid-template-columns: 110px 1fr; min-height: 170px; padding: 24px; }
-.deco-empty-large > span { color: var(--art-line); font-family: Impact, sans-serif; font-size: 64px; }
+.deco-empty-large > span { color: var(--art-line); font-family: var(--font-art-display), sans-serif; font-size: 64px; font-weight: 900; }
 .deco-empty-large p { color: var(--art-muted); margin: 7px 0 12px; }
 .deco-empty-large a { border-bottom: 2px solid var(--art-copper); font-size: 0.78rem; }
 
@@ -186,7 +188,7 @@ body:has(.art-shell) {
 .deco-detail-geometry { background: #243033; overflow: hidden; position: relative; }
 .deco-detail-geometry i { background: #374448; display: block; height: 92px; left: -18px; position: absolute; top: 34px; transform: skewX(-22deg); width: 190px; }
 .deco-detail-geometry i:nth-child(2) { background: var(--art-copper-dark); left: 75px; top: 138px; width: 165px; }
-.deco-detail-geometry strong { bottom: 24px; font-family: Impact, sans-serif; font-size: 48px; left: 24px; position: absolute; }
+.deco-detail-geometry strong { bottom: 24px; font-family: var(--font-art-display), sans-serif; font-size: 48px; font-weight: 900; left: 24px; position: absolute; }
 .deco-detail-title { align-content: center; display: grid; padding: 30px 34px; }
 .deco-detail-title h1 { font-size: 40px; }
 .deco-detail-title > p:not(.deco-kicker) { color: #aeb7b4; font-size: 0.8rem; margin: 0 0 18px; overflow-wrap: anywhere; }
@@ -201,7 +203,7 @@ body:has(.art-shell) {
 .deco-price-metric strong { font-family: "Arial Narrow", Arial, sans-serif; font-size: 24px; }
 .deco-capture-time { align-content: center; display: grid; gap: 7px; grid-column: 1 / -1; padding: 18px 20px; }
 .deco-detail-no-price { align-content: center; border-left: 1px solid #435053; display: grid; gap: 8px; padding: 34px; }
-.deco-detail-no-price strong { font-family: Impact, "Noto Sans SC", sans-serif; font-size: 28px; }
+.deco-detail-no-price strong { font-family: var(--font-art-display), var(--font-art-interface), sans-serif; font-size: 28px; font-weight: 900; }
 .deco-detail-no-price span { color: #aeb7b4; font-size: 0.78rem; }
 
 .deco-orderbook-grid { display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
@@ -227,7 +229,7 @@ body:has(.art-shell) {
 .deco-provenance dd { font-size: 0.76rem; margin: 0; overflow-wrap: anywhere; }
 
 .deco-state { align-items: center; border-bottom: 1px solid var(--art-line); border-top: 6px solid var(--art-ink); display: grid; gap: 32px; grid-template-columns: 150px minmax(0, 1fr); margin-top: 72px; min-height: 300px; padding: 44px; }
-.deco-state > span { color: var(--art-copper-dark); font-family: Impact, sans-serif; font-size: 58px; }
+.deco-state > span { color: var(--art-copper-dark); font-family: var(--font-art-display), sans-serif; font-size: 58px; font-weight: 900; }
 .deco-state h1 { font-size: 36px; }
 .deco-state p { color: var(--art-muted); margin-bottom: 22px; }
 .deco-state a { border-bottom: 2px solid var(--art-copper); }
