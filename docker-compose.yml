@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +21,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   api:
     build:
@@ -33,6 +40,7 @@ services:
       timeout: 5s
       retries: 6
     restart: unless-stopped
+    logging: *default-logging
 
   web:
     build:
@@ -50,6 +58,7 @@ services:
       timeout: 5s
       retries: 6
     restart: unless-stopped
+    logging: *default-logging
 
   gateway:
     image: caddy:2-alpine
@@ -59,10 +68,15 @@ services:
       - "${HTTPS_PORT:-443}:443/udp"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       web:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
