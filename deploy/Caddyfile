@@ -10,7 +10,7 @@ bvvd-analysis.duckdns.org {
     @write_method method POST PUT PATCH DELETE CONNECT TRACE
     respond @write_method "Read-only preview" 405
 
-    @blocked_ui path /imports /imports/* /screen-recognition /screen-recognition/* /opportunities /opportunities/*
+    @blocked_ui path /imports /imports/* /screen-recognition /screen-recognition/*
     respond @blocked_ui "Not found" 404
 
     @item_list {
@@ -24,6 +24,12 @@ bvvd-analysis.duckdns.org {
       path_regexp public_item ^/api/v1/items/[0-9]+(?:/order-book)?$
     }
     reverse_proxy @item_detail api:8000
+
+    @opportunities {
+      method GET HEAD
+      path /api/v1/opportunities
+    }
+    reverse_proxy @opportunities api:8000
 
     @private_api path /api/*
     respond @private_api "Read-only preview" 405

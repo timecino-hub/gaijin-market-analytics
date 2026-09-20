@@ -25,6 +25,9 @@ import type {
   OpportunityRankingResponse
 } from "../../lib/types";
 import { OpportunityFilterForm } from "./opportunity-filter-form";
+import { MarketHeader } from "../market-header";
+
+export const dynamic = "force-dynamic";
 
 type OpportunitiesPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -36,8 +39,22 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
   const result = await loadOpportunities(state.query);
 
   return (
-    <main className="page-shell opportunity-page">
-      <Header />
+    <main className="art-shell deco-opportunity-page">
+      <MarketHeader active="opportunities" />
+      <header className="deco-page-title deco-opportunity-title">
+        <div>
+          <p className="deco-kicker">OPPORTUNITY SCORE V1</p>
+          <h1>潜力分析</h1>
+          <p>
+            按统一时间点、周期和 15% 固定费用口径比较真实市场观测。评分用于筛选与解释，
+            不代表盈利概率、价格预测或交易建议。
+          </p>
+        </div>
+        <div className="deco-opportunity-policy" aria-label="分析约束">
+          <span>只读分析</span>
+          <strong>真实观测达到门槛后排名</strong>
+        </div>
+      </header>
       <OpportunityFilterForm form={state.form} />
 
       {"error" in result ? (
@@ -46,30 +63,6 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
         <OpportunityResults data={result.data} query={state.query} />
       )}
     </main>
-  );
-}
-
-function Header() {
-  return (
-    <header className="page-header">
-      <nav className="page-nav" aria-label="页面导航">
-        <Link href="/" className="back-link">
-          返回首页
-        </Link>
-        <Link href="/items" className="back-link">
-          浏览商品
-        </Link>
-        <Link href="/screen-recognition" className="back-link">
-          屏幕识别复核
-        </Link>
-      </nav>
-      <p className="eyebrow">OpportunityScoreV1</p>
-      <h1>市场机会排行榜</h1>
-      <p>
-        使用相同的 as_of、周期、固定 15% 费用政策和可解释评分，对已导入商品进行横向比较。
-        结果只是确定性筛选基线，不是盈利概率、价格预测或交易建议。
-      </p>
-    </header>
   );
 }
 
@@ -85,8 +78,8 @@ function OpportunityResults({
 
   return (
     <>
-      <section className="panel opportunity-summary" aria-labelledby="opportunity-summary-heading">
-        <div className="section-heading">
+      <section className="deco-opportunity-summary" aria-labelledby="opportunity-summary-heading">
+        <div className="deco-section-heading">
           <div>
             <h2 id="opportunity-summary-heading">本次排名范围</h2>
             <p>
@@ -94,7 +87,7 @@ function OpportunityResults({
               资格；筛选后显示 {data.total} 个。
             </p>
           </div>
-          <div className="pagination" aria-label="排行榜分页">
+          <div className="deco-pagination" aria-label="排行榜分页">
             <PageLink disabled={!hasPrevious} page={Math.max(1, data.page - 1)} query={query}>
               上一页
             </PageLink>
@@ -104,7 +97,7 @@ function OpportunityResults({
           </div>
         </div>
 
-        <div className="detail-grid compact">
+        <div className="deco-opportunity-facts">
           <Info label="实际 as_of" value={formatDateTime(data.effective_inputs.as_of)} />
           <Info label="分析周期" value={`${data.effective_inputs.horizon} 天`} />
           <Info
@@ -126,7 +119,7 @@ function OpportunityResults({
       </section>
 
       <section aria-labelledby="opportunity-list-heading">
-        <div className="section-heading">
+        <div className="deco-section-heading deco-opportunity-list-heading">
           <div>
             <h2 id="opportunity-list-heading">排名结果</h2>
             <p>排序固定为：合格状态、综合分、收益、流动性、新鲜度、可信度和商品 ID。</p>
@@ -134,11 +127,16 @@ function OpportunityResults({
         </div>
 
         {data.items.length === 0 ? (
-          <div className="empty-state">
-            <h3>当前条件下没有机会</h3>
-            <p>
-              可以降低最低分、包含不合格诊断，或检查所选周期内是否已有足够的价格与流动性数据。
-            </p>
+          <div className="deco-opportunity-empty">
+            <span aria-hidden="true">00</span>
+            <div>
+              <h3>尚未形成可发布排名</h3>
+              <p>
+                当前订单簿可以正常浏览，但机会评分至少需要 3 个真实市场快照，且最新快照不能超过 24 小时。
+                数据不足时不会复制当前报价、补零或生成示例分数。
+              </p>
+              <Link href="/items">查看当前市场数据</Link>
+            </div>
           </div>
         ) : (
           <div className="opportunity-list">
@@ -149,11 +147,11 @@ function OpportunityResults({
         )}
       </section>
 
-      <div className="pagination opportunity-bottom-pagination" aria-label="排行榜底部分页">
+      <div className="deco-pagination deco-opportunity-bottom-pagination" aria-label="排行榜底部分页">
         <PageLink disabled={!hasPrevious} page={Math.max(1, data.page - 1)} query={query}>
           上一页
         </PageLink>
-        <span className="pagination-status">
+        <span>
           第 {data.page} 页，共 {Math.max(data.total_pages, 1)} 页
         </span>
         <PageLink disabled={!hasNext} page={data.page + 1} query={query}>
@@ -166,7 +164,7 @@ function OpportunityResults({
 
 function OpportunityCard({ item, horizon }: { item: OpportunityRankingItem; horizon: number }) {
   return (
-    <article className={`panel opportunity-card ${item.eligible ? "eligible" : "diagnostic"}`}>
+    <article className={`deco-opportunity-card ${item.eligible ? "eligible" : "diagnostic"}`}>
       <div className="opportunity-card-heading">
         <div className="rank-block" aria-label={`排名 ${item.rank}`}>
           <span>排名</span>
@@ -294,7 +292,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="info-tile">
+    <div className="deco-info-tile">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -303,9 +301,12 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function ErrorPanel({ error }: { error: ApiError }) {
   return (
-    <section className="error-state" aria-live="polite">
-      <h2>{error.code === "api_unreachable" ? "API 不可访问" : "无法生成排行榜"}</h2>
-      <p>{error.message}</p>
+    <section className="deco-state deco-state-error" aria-live="polite">
+      <span aria-hidden="true">!</span>
+      <div>
+        <h2>{error.code === "api_unreachable" ? "API 不可访问" : "无法生成排行榜"}</h2>
+        <p>{error.message}</p>
+      </div>
     </section>
   );
 }
@@ -323,14 +324,14 @@ function PageLink({
 }) {
   if (disabled) {
     return (
-      <span className="button-disabled" aria-disabled="true">
+      <span aria-disabled="true">
         {children}
       </span>
     );
   }
   return (
     <Link
-      className="button-link"
+      className="deco-page-link"
       href={{ pathname: "/opportunities", query: opportunityPageQuery(query, page) }}
     >
       {children}

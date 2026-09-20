@@ -14,13 +14,27 @@ test("public homepage is a read-only, evidence-backed catalog", async () => {
   assert.match(source, /export const dynamic = "force-dynamic"/);
   assert.match(source, /<form[^>]+action="\/items"/);
   assert.match(header, /只读预览/);
-  assert.match(source, /当前不生成示例评分、收益预测或历史图表/);
+  assert.match(source, /潜力分析已开放/);
   assert.match(source, /当前买价/);
   assert.match(source, /当前卖价/);
-  assert.match(header, /潜力分析 · 尚未开放/);
+  assert.match(header, /href="\/opportunities"/);
   assert.doesNotMatch(source, /最佳买价|最佳卖价/);
   assert.match(source, /市场数据暂不可用/);
   assert.doesNotMatch(source, /Math\.random/);
+});
+
+test("opportunity analysis is public, read-only, and honest about its evidence gate", async () => {
+  const [page, header, caddy] = await Promise.all([
+    readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
+    readFile(headerUrl, "utf8"),
+    readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8")
+  ]);
+  assert.match(page, /<MarketHeader active="opportunities"/);
+  assert.match(page, /至少需要 3 个真实市场快照/);
+  assert.match(page, /不会复制当前报价、补零或生成示例分数/);
+  assert.match(header, /潜力分析/);
+  assert.match(caddy, /path \/api\/v1\/opportunities/);
+  assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*opportunities/);
 });
 
 test("catalog prices only use the approved current order book", async () => {

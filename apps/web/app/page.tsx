@@ -17,7 +17,7 @@ export default async function Home() {
         <div>
           <p className="deco-kicker">VEHICLE MARKET OUTLOOK</p>
           <h1 id="home-title">载具市场概览</h1>
-          <p>浏览经人工确认的数据，以统一价格合同查看当前订单簿。潜力分析将在口径批准后开放。</p>
+          <p>浏览经人工确认的数据，以统一价格合同查看当前订单簿，并按真实历史观测筛选市场机会。</p>
         </div>
         <form className="deco-search" action="/items">
           <label htmlFor="home-search">搜索载具</label>
@@ -69,8 +69,8 @@ export default async function Home() {
       </section>
 
       <section className="deco-deferred" aria-labelledby="analytics-title">
-        <div><p className="deco-kicker">ANALYTICS</p><h2 id="analytics-title">潜力分析尚未开放</h2></div>
-        <p>当前不生成示例评分、收益预测或历史图表。分析窗口和评分口径批准后再接入。</p>
+        <div><p className="deco-kicker">ANALYTICS</p><h2 id="analytics-title">潜力分析已开放</h2></div>
+        <div><p>当前不生成示例评分或收益预测；真实市场观测达到评分门槛后才会进入排名。</p><Link href="/opportunities">查看分析口径 <span>→</span></Link></div>
       </section>
     </main>
   );

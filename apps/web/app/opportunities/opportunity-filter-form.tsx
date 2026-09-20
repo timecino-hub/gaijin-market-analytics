@@ -4,7 +4,7 @@ import { OPPORTUNITY_HORIZONS, OPPORTUNITY_PAGE_SIZES } from "../../lib/opportun
 
 export function OpportunityFilterForm({ form }: { form: OpportunityListState["form"] }) {
   return (
-    <form className="toolbar opportunity-toolbar" action="/opportunities" method="get">
+    <form className="deco-opportunity-filter" action="/opportunities" method="get">
       <input type="hidden" name="page" value="1" />
 
       <label>
@@ -69,7 +69,7 @@ export function OpportunityFilterForm({ form }: { form: OpportunityListState["fo
           placeholder="2026-06-29T00:00:00Z"
           inputMode="text"
         />
-        <span className="field-hint">带时区的 ISO-8601 时间；留空使用 API 当前 UTC。</span>
+        <span className="deco-field-hint">带时区的 ISO-8601 时间；留空使用当前 UTC。</span>
       </label>
 
       <label>
@@ -83,9 +83,9 @@ export function OpportunityFilterForm({ form }: { form: OpportunityListState["fo
         </select>
       </label>
 
-      <div className="form-actions opportunity-filter-actions">
+      <div className="deco-opportunity-actions">
         <button type="submit">计算排行榜</button>
-        <Link className="button-link plain-button" href="/opportunities">
+        <Link href="/opportunities">
           重置条件
         </Link>
       </div>
