@@ -13,4 +13,7 @@ def get_strategy_registry() -> StrategyRegistry:
 
 
 def get_rule_based_strategy() -> AnalysisStrategy:
-    return get_strategy_registry().get("rule_based", "1.0.0")
+    return get_strategy_registry().get(
+        RuleBasedV1.strategy_name,
+        RuleBasedV1.strategy_version,
+    )

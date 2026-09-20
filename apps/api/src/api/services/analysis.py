@@ -7,6 +7,7 @@ from gaijin_market_analytics.exceptions import AnalyticsError, ContractValidatio
 from gaijin_market_analytics.horizons import horizon_delta
 from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
 from gaijin_market_analytics.registry import StrategyRegistry
+from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,7 +126,10 @@ class ItemAnalysisService:
             raise AnalysisInputError("The analysis input contract was invalid.") from exc
 
         try:
-            strategy = self._registry.get("rule_based", "1.0.0")
+            strategy = self._registry.get(
+                RuleBasedV1.strategy_name,
+                RuleBasedV1.strategy_version,
+            )
         except AnalyticsError as exc:
             raise StrategyUnavailableError("The configured analysis strategy is unavailable.") from exc
 

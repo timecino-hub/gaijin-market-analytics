@@ -13,6 +13,7 @@ from typing import Any
 from gaijin_market_analytics.backtesting import BacktestConfig
 from gaijin_market_analytics.exceptions import AnalyticsError
 from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
+from gaijin_market_analytics.strategies.rule_based_v1 import RuleBasedV1
 from sqlalchemy.exc import SQLAlchemyError
 
 from api.analytics_registry import get_strategy_registry
@@ -119,8 +120,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", required=True, type=_parse_datetime)
     parser.add_argument("--end", required=True, type=_parse_datetime)
     parser.add_argument("--cadence-days", required=True, type=int)
-    parser.add_argument("--strategy-name", default="rule_based")
-    parser.add_argument("--strategy-version", default="1.0.0")
+    parser.add_argument("--strategy-name", default=RuleBasedV1.strategy_name)
+    parser.add_argument("--strategy-version", default=RuleBasedV1.strategy_version)
     parser.add_argument("--pretty", action="store_true")
     return parser
 
