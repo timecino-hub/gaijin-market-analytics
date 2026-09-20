@@ -42,6 +42,47 @@ class HistoricalTradeImportResult:
     unchanged_count: int
 
 
+@dataclass(frozen=True)
+class HistoricalTradeImportInspection:
+    database_item_id: int
+    item_key: str
+    source_series_sha256: str
+    point_count_1h: int
+    point_count_1d: int
+    overlap_day_count: int
+    overlap_mismatch_count: int
+    existing_import_id: int | None
+    would_create: bool
+
+
+async def inspect_historical_trades(
+    *,
+    session: AsyncSession,
+    request: HistoricalTradeImportRequest,
+) -> HistoricalTradeImportInspection:
+    _, item_key = _validated_source_identity(request)
+    item = await _resolve_existing_item(session, item_key)
+    series_hash = _series_sha256(request)
+    existing = await session.scalar(
+        select(HistoricalTradeImport).where(
+            HistoricalTradeImport.item_id == item.id,
+            HistoricalTradeImport.source_series_sha256 == series_hash,
+        )
+    )
+    overlap_days, mismatch_days = _overlap_consistency(request)
+    return HistoricalTradeImportInspection(
+        database_item_id=item.id,
+        item_key=item_key,
+        source_series_sha256=series_hash,
+        point_count_1h=len(request.series.one_hour),
+        point_count_1d=len(request.series.one_day),
+        overlap_day_count=overlap_days,
+        overlap_mismatch_count=mismatch_days,
+        existing_import_id=None if existing is None else existing.id,
+        would_create=existing is None,
+    )
+
+
 async def import_historical_trades(
     *,
     session: AsyncSession,
@@ -49,13 +90,7 @@ async def import_historical_trades(
     pairing_id: str,
     extension_version: str | None,
 ) -> HistoricalTradeImportResult:
-    source_url_safe, source_segment = _sanitize_market_source_url(request.source_url)
-    item_key = unquote(request.item_key).strip()
-    if not item_key or item_key != source_segment:
-        raise HistoricalTradeImportError(
-            "historical_trade_item_mismatch",
-            "The item key does not match the current Gaijin Market page.",
-        )
+    source_url_safe, item_key = _validated_source_identity(request)
 
     item = await _resolve_existing_item(session, item_key)
     series_hash = _series_sha256(request)
@@ -188,6 +223,19 @@ async def import_historical_trades(
     await session.commit()
     await session.refresh(import_record)
     return HistoricalTradeImportResult(import_record, item, False, inserted, updated, unchanged)
+
+
+def _validated_source_identity(
+    request: HistoricalTradeImportRequest,
+) -> tuple[str, str]:
+    source_url_safe, source_segment = _sanitize_market_source_url(request.source_url)
+    item_key = unquote(request.item_key).strip()
+    if not item_key or item_key != source_segment:
+        raise HistoricalTradeImportError(
+            "historical_trade_item_mismatch",
+            "The item key does not match the current Gaijin Market page.",
+        )
+    return source_url_safe, item_key
 
 
 async def list_historical_trade_buckets(

@@ -15,6 +15,7 @@ install -d -m 0700 \
   "$root" \
   "$root/catalog" \
   "$root/order-books" \
+  "$root/history" \
   "$root/processed" \
   "$root/rejected"
 printf '%s\n' "$root"
