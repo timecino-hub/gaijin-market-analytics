@@ -97,7 +97,7 @@ class OpportunityScoreResult:
 
 class OpportunityScoreV1:
     strategy_name = "opportunity_score"
-    strategy_version = "1.0.0"
+    strategy_version = "1.1.0"
     feature_version = "opportunity_features_v1"
 
     def __init__(self, config: OpportunityScoreConfig | None = None) -> None:
@@ -208,6 +208,7 @@ class OpportunityScoreV1:
         )
         if analysis.status != AnalysisStatus.OK:
             explanation_codes.append(f"analysis_status_{analysis.status.value}")
+            score = Decimal("0.00")
         if eligible:
             explanation_codes.append("eligible_positive_after_fee_opportunity")
         else:

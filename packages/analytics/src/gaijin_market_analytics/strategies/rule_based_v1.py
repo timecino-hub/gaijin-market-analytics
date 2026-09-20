@@ -37,7 +37,7 @@ class RuleBasedV1Config:
 
 class RuleBasedV1:
     strategy_name = "rule_based"
-    strategy_version = "1.0.0"
+    strategy_version = "1.1.0"
     feature_version = "market_features_v1"
 
     def __init__(self, config: RuleBasedV1Config | None = None) -> None:
@@ -105,9 +105,16 @@ class RuleBasedV1:
         risk_score = self._risk_score(ratio_spread, price_volatility, median_bid)
         confidence_score = self._confidence_score(coverage, liquidity_score, risk_score)
 
+        has_sufficient_history = not any(
+            reason in reason_codes
+            for reason in (
+                ReasonCode.INSUFFICIENT_SNAPSHOTS,
+                ReasonCode.INSUFFICIENT_TIME_COVERAGE,
+            )
+        )
         reference_sell_price = (
             floor_to_quantum(median_bid, request.fee_policy.currency_quantum)
-            if median_bid is not None
+            if median_bid is not None and has_sufficient_history
             else None
         )
         if not is_valid_market_price(reference_sell_price, request.market_rules):

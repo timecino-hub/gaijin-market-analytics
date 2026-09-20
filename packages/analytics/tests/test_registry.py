@@ -23,7 +23,7 @@ def test_registry_registers_gets_and_lists_in_stable_order() -> None:
     registry.register(rule)
     registry.register(dummy)
 
-    assert registry.get("rule_based", "1.0.0") is rule
+    assert registry.get("rule_based", "1.1.0") is rule
     assert [strategy.strategy_name for strategy in registry.list_strategies()] == ["dummy", "rule_based"]
 
 

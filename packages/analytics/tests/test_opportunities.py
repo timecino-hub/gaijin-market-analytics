@@ -151,6 +151,26 @@ def test_non_positive_after_fee_result_is_not_eligible() -> None:
     assert "not_eligible_for_opportunity_ranking" in result.explanation_codes
 
 
+def test_insufficient_history_publishes_zero_score_but_keeps_diagnostics() -> None:
+    observations = (
+        observation(0, ask="12", bid="11", ask_count=20, bid_count=20),
+    )
+    analysis = analysis_for(observations)
+    result = OpportunityScoreV1().score(
+        analysis=analysis,
+        observations=observations,
+        maximum_snapshot_age=timedelta(days=2),
+        minimum_snapshot_count=3,
+    )
+
+    assert analysis.reference_sell_price is None
+    assert analysis.net_profit is None
+    assert result.eligible is False
+    assert result.score == Decimal("0.00")
+    assert result.raw_score > Decimal("0.00")
+    assert "analysis_status_insufficient_data" in result.explanation_codes
+
+
 def test_stale_latest_observation_has_zero_freshness() -> None:
     observations = (
         observation(

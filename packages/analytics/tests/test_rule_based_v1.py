@@ -66,6 +66,11 @@ def test_snapshot_count_insufficient_returns_reason() -> None:
 
     assert result.status == AnalysisStatus.INSUFFICIENT_DATA
     assert ReasonCode.INSUFFICIENT_SNAPSHOTS in result.reason_codes
+    assert result.current_ask == Decimal("10")
+    assert result.current_bid == Decimal("9")
+    assert result.reference_sell_price is None
+    assert result.net_profit is None
+    assert result.net_roi is None
 
 
 def test_time_coverage_insufficient_returns_reason() -> None:
@@ -131,7 +136,7 @@ def test_normal_rule_based_result_uses_median_bid_reference_price_and_decimal_ou
 
     assert result.status == AnalysisStatus.OK
     assert result.strategy_name == "rule_based"
-    assert result.strategy_version == "1.0.0"
+    assert result.strategy_version == "1.1.0"
     assert result.feature_version == "market_features_v1"
     assert result.reference_sell_price == Decimal("9")
     assert result.current_ask == Decimal("12")

@@ -91,7 +91,7 @@ function OpportunityResults({
       <section className="deco-opportunity-summary" aria-labelledby="opportunity-summary-heading">
         <div className="deco-section-heading">
           <div>
-            <h2 id="opportunity-summary-heading">本次排名范围</h2>
+            <h2 id="opportunity-summary-heading">本次分析范围</h2>
             <p>
               在时间窗内评估 {data.evaluated_total} 个商品，其中 {data.eligible_total} 个满足 V1
               资格；筛选后显示 {data.total} 个。
@@ -133,7 +133,7 @@ function OpportunityResults({
       <section aria-labelledby="opportunity-list-heading">
         <div className="deco-section-heading deco-opportunity-list-heading">
           <div>
-            <h2 id="opportunity-list-heading">排名结果</h2>
+            <h2 id="opportunity-list-heading">分析结果</h2>
             <p>排序固定为：合格状态、综合分、收益、流动性、新鲜度、可信度和商品 ID。</p>
           </div>
         </div>
@@ -178,8 +178,8 @@ function OpportunityCard({ item, horizon }: { item: OpportunityRankingItem; hori
   return (
     <article className={`deco-opportunity-card ${item.eligible ? "eligible" : "diagnostic"}`}>
       <div className="opportunity-card-heading">
-        <div className="rank-block" aria-label={`排名 ${item.rank}`}>
-          <span>排名</span>
+        <div className="rank-block" aria-label={`${item.eligible ? "排名" : "诊断序号"} ${item.rank}`}>
+          <span>{item.eligible ? "排名" : "诊断序号"}</span>
           <strong>#{item.rank}</strong>
         </div>
         <div className="opportunity-title">
@@ -198,8 +198,10 @@ function OpportunityCard({ item, horizon }: { item: OpportunityRankingItem; hori
         </div>
         <div className="score-block">
           <span>综合分</span>
-          <strong>{formatScore(item.score)}</strong>
-          <small>原始 {formatScore(item.raw_score)}</small>
+          <strong>{item.eligible ? formatScore(item.score) : "—"}</strong>
+          <small>
+            {item.eligible ? `原始 ${formatScore(item.raw_score)}` : "历史不足，不发布评分"}
+          </small>
         </div>
       </div>
 

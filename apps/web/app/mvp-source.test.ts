@@ -36,6 +36,7 @@ test("opportunity analysis is public, read-only, and honest about its evidence g
   assert.match(page, /getItems/);
   assert.match(page, /一周内当前盘口/);
   assert.match(page, /它们不替代历史趋势或收益排名/);
+  assert.match(page, /历史不足，不发布评分/);
   assert.match(page, /不会复制当前报价、补零或生成示例分数/);
   assert.match(header, /潜力分析/);
   assert.match(caddy, /path \/api\/v1\/opportunities/);
