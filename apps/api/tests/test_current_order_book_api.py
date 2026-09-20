@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api.services.current_order_book import (
+    STALE_AFTER_SECONDS,
+    interpret_current_order_book_capture,
+)
 from api.services.manual_order_book_import import import_manual_order_book
 
 
@@ -65,6 +71,26 @@ def _counts(database_url: str) -> tuple[int, int, int]:
             )
     finally:
         engine.dispose()
+
+
+def test_current_order_book_freshness_uses_seven_day_window() -> None:
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    captured_at = datetime(2026, 9, 1, tzinfo=UTC)
+
+    within_window = interpret_current_order_book_capture(
+        capture_payload=payload,
+        captured_at=captured_at,
+        now=captured_at + timedelta(days=7),
+    )
+    outside_window = interpret_current_order_book_capture(
+        capture_payload=payload,
+        captured_at=captured_at,
+        now=captured_at + timedelta(days=7, seconds=1),
+    )
+
+    assert STALE_AFTER_SECONDS == 7 * 24 * 60 * 60
+    assert within_window.freshness == "fresh"
+    assert outside_window.freshness == "stale"
 
 
 def test_current_order_book_returns_approved_interpreted_levels_and_provenance(

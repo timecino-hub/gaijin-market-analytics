@@ -6,7 +6,7 @@ import {
   formatDecimalPercent,
   formatScore
 } from "../../lib/analysis-display";
-import { getOpportunities, toDisplayError } from "../../lib/api-client";
+import { getItems, getOpportunities, toDisplayError } from "../../lib/api-client";
 import { formatBoolean, formatDateTime, formatOptionalText } from "../../lib/formatters";
 import {
   opportunityEligibilityLabel,
@@ -20,6 +20,7 @@ import {
 } from "../../lib/opportunity-list-state";
 import type {
   ApiError,
+  ItemSummary,
   OpportunityRankingItem,
   OpportunityRankingQuery,
   OpportunityRankingResponse
@@ -36,7 +37,10 @@ type OpportunitiesPageProps = {
 export default async function OpportunitiesPage({ searchParams }: OpportunitiesPageProps) {
   const rawParams = await searchParams;
   const state = opportunityListStateFromParams(rawParams);
-  const result = await loadOpportunities(state.query);
+  const [result, currentReferences] = await Promise.all([
+    loadOpportunities(state.query),
+    loadCurrentReferences()
+  ]);
 
   return (
     <main className="art-shell deco-opportunity-page">
@@ -60,7 +64,11 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
       {"error" in result ? (
         <ErrorPanel error={result.error} />
       ) : (
-        <OpportunityResults data={result.data} query={state.query} />
+        <OpportunityResults
+          data={result.data}
+          query={state.query}
+          currentReferences={currentReferences}
+        />
       )}
     </main>
   );
@@ -68,10 +76,12 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
 
 function OpportunityResults({
   data,
-  query
+  query,
+  currentReferences
 }: {
   data: OpportunityRankingResponse;
   query: OpportunityRankingQuery;
+  currentReferences: ItemSummary[];
 }) {
   const hasPrevious = data.page > 1;
   const hasNext = data.total_pages > 0 && data.page < data.total_pages;
@@ -117,6 +127,8 @@ function OpportunityResults({
           <Info label="最低综合分" value={formatScore(data.filters.minimum_score)} />
         </div>
       </section>
+
+      <CurrentReferenceSection items={currentReferences} />
 
       <section aria-labelledby="opportunity-list-heading">
         <div className="deco-section-heading deco-opportunity-list-heading">
@@ -257,6 +269,50 @@ function formatCurrency(value: string | null): string {
   return value === null ? "—" : `${formatCurrencyDisplay(value)} GJN`;
 }
 
+function CurrentReferenceSection({ items }: { items: ItemSummary[] }) {
+  const current = items.filter(
+    (item) => item.current_order_book?.freshness === "fresh"
+  );
+  return (
+    <section className="deco-current-reference" aria-labelledby="current-reference-heading">
+      <div className="deco-section-heading">
+        <div>
+          <p className="deco-kicker">CURRENT MARKET EVIDENCE</p>
+          <h2 id="current-reference-heading">一周内当前盘口</h2>
+          <p>这些是可核验的近期订单簿，可作当前市场参考；它们不替代历史趋势或收益排名。</p>
+        </div>
+        <span>{current.length} 个有效盘口</span>
+      </div>
+      {current.length === 0 ? (
+        <div className="deco-empty-inline">
+          <strong>暂无一周内盘口</strong>
+          <p>新订单簿导入后会自动出现在这里。</p>
+        </div>
+      ) : (
+        <div className="deco-current-reference-list">
+          <div className="deco-current-reference-head" aria-hidden="true">
+            <span>商品</span><span>当前买价</span><span>当前卖价</span><span>价差</span><span>采集时间</span><span />
+          </div>
+          {current.map((item) => {
+            const book = item.current_order_book;
+            if (!book) return null;
+            return (
+              <Link className="deco-current-reference-row" href={`/items/${item.id}`} key={item.id}>
+                <div><strong>{item.name}</strong><small>{item.category}</small></div>
+                <b>{book.best_buy.canonical_display_text} GJN</b>
+                <b>{book.best_sell.canonical_display_text} GJN</b>
+                <span>{book.spread_display_text} GJN</span>
+                <span>{formatDateTime(book.captured_at)}</span>
+                <i aria-hidden="true">→</i>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function formatFreshnessLimit(seconds: number): string {
   const daySeconds = 24 * 60 * 60;
   return seconds % daySeconds === 0 ? `${seconds / daySeconds} 天` : `${seconds / 3600} 小时`;
@@ -351,5 +407,20 @@ async function loadOpportunities(
     return { data: await getOpportunities(query) };
   } catch (error) {
     return { error: toDisplayError(error) };
+  }
+}
+
+async function loadCurrentReferences(): Promise<ItemSummary[]> {
+  try {
+    const data = await getItems({
+      page: "1",
+      page_size: "100",
+      is_active: "true",
+      sort: "updated_at",
+      order: "desc"
+    });
+    return data.items;
+  } catch {
+    return [];
   }
 }

@@ -15,7 +15,7 @@ from api.pricing.manual_order_book_price import CONTRACT_ID, CONTRACT_VERSION, C
 from api.pricing.manual_order_book_read_model import render_manual_order_book_price_read_model
 
 
-STALE_AFTER_SECONDS = 24 * 60 * 60
+STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
 
 
 class CurrentOrderBookNotFoundError(LookupError):

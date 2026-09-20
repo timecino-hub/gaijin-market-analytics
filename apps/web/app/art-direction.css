@@ -255,6 +255,20 @@ body:has(.art-shell) {
 .deco-opportunity-summary { border-bottom: 1px solid var(--art-line); padding: 42px 0 30px; }
 .deco-opportunity-summary .deco-section-heading p,
 .deco-opportunity-list-heading p { color: var(--art-muted); font-size: 0.78rem; margin: 7px 0 0; }
+.deco-current-reference { border-bottom: 1px solid var(--art-line); padding: 40px 0 32px; }
+.deco-current-reference .deco-section-heading p:last-child { color: var(--art-muted); font-size: 0.78rem; margin: 7px 0 0; }
+.deco-current-reference-list { border-top: 2px solid var(--art-ink); }
+.deco-current-reference-head,
+.deco-current-reference-row { align-items: center; display: grid; gap: 16px; grid-template-columns: minmax(240px, 1.45fr) minmax(110px, 0.65fr) minmax(110px, 0.65fr) minmax(100px, 0.55fr) minmax(180px, 0.9fr) 28px; }
+.deco-current-reference-head { border-bottom: 1px solid var(--art-line); color: var(--art-muted); font-size: 0.66rem; min-height: 36px; padding: 0 12px; text-transform: uppercase; }
+.deco-current-reference-row { border-bottom: 1px solid var(--art-line); min-height: 72px; padding: 10px 12px; }
+.deco-current-reference-row:hover { background: var(--art-paper); }
+.deco-current-reference-row > div { display: grid; gap: 4px; min-width: 0; }
+.deco-current-reference-row strong { font-size: 0.88rem; overflow-wrap: anywhere; }
+.deco-current-reference-row small,
+.deco-current-reference-row span { color: var(--art-muted); font-size: 0.7rem; }
+.deco-current-reference-row b { font-family: "Arial Narrow", Arial, sans-serif; font-size: 0.82rem; }
+.deco-current-reference-row i { color: var(--art-copper-dark); font-style: normal; text-align: right; }
 .deco-opportunity-facts { border-top: 1px solid var(--art-line); display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 18px; }
 .deco-info-tile { border-bottom: 1px solid var(--art-line); border-right: 1px solid var(--art-line); display: grid; gap: 6px; min-height: 78px; padding: 15px; }
 .deco-info-tile:nth-child(4n) { border-right: 0; }
@@ -319,6 +333,10 @@ body:has(.art-shell) {
   .deco-info-tile:nth-child(3n) { border-right: 0; }
   .deco-opportunity-card .opportunity-financial-grid,
   .deco-opportunity-card .opportunity-evidence-grid { grid-template-columns: repeat(3, 1fr); }
+  .deco-current-reference-head,
+  .deco-current-reference-row { grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(90px, 0.6fr)) 28px; }
+  .deco-current-reference-head > :nth-child(5),
+  .deco-current-reference-row > :nth-child(5) { display: none; }
 }
 
 @media (max-width: 768px) {
@@ -348,6 +366,10 @@ body:has(.art-shell) {
   .deco-info-tile:nth-child(3n) { border-right: 1px solid var(--art-line); }
   .deco-info-tile:nth-child(2n) { border-right: 0; }
   .deco-opportunity-card .opportunity-components { grid-template-columns: 1fr 1fr; }
+  .deco-current-reference-head { display: none; }
+  .deco-current-reference-row { grid-template-columns: minmax(0, 1fr) minmax(100px, auto) minmax(100px, auto) 28px; }
+  .deco-current-reference-row > :nth-child(4),
+  .deco-current-reference-row > :nth-child(5) { display: none; }
 }
 
 @media (max-width: 620px) {
@@ -408,6 +430,10 @@ body:has(.art-shell) {
   .deco-opportunity-card .opportunity-evidence-grid,
   .deco-opportunity-card .opportunity-components { grid-template-columns: 1fr 1fr; }
   .deco-opportunity-card .opportunity-explanations { grid-template-columns: 1fr; }
+  .deco-current-reference-row { grid-template-columns: minmax(0, 1fr) minmax(92px, auto) 24px; padding-inline: 5px; }
+  .deco-current-reference-row > :nth-child(2),
+  .deco-current-reference-row > :nth-child(4),
+  .deco-current-reference-row > :nth-child(5) { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
