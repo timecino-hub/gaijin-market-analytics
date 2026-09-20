@@ -29,7 +29,7 @@ export function opportunityListStateFromParams(
   const search = safeText(readParam(params.search), 200);
   const category = safeText(readParam(params.category), 100);
   const rarity = safeText(readParam(params.rarity), 100);
-  const eligibleOnly = booleanText(readParam(params.eligible_only), true);
+  const eligibleOnly = booleanText(readParam(params.eligible_only), false);
   const includeInactive = booleanText(readParam(params.include_inactive), false);
 
   return {

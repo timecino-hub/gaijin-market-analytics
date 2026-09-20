@@ -13,7 +13,7 @@ test("opportunity list state applies reproducible defaults", () => {
     horizon: "30",
     page: "1",
     page_size: "25",
-    eligible_only: "true",
+    eligible_only: "false",
     min_score: "0",
     include_inactive: "false",
     as_of: undefined,
@@ -21,7 +21,7 @@ test("opportunity list state applies reproducible defaults", () => {
     category: undefined,
     rarity: undefined
   });
-  assert.equal(state.form.eligibleOnly, true);
+  assert.equal(state.form.eligibleOnly, false);
 });
 
 test("opportunity list state sanitizes invalid query values", () => {
@@ -39,7 +39,7 @@ test("opportunity list state sanitizes invalid query values", () => {
   assert.equal(state.query.page, "1");
   assert.equal(state.query.page_size, "25");
   assert.equal(state.query.min_score, "0");
-  assert.equal(state.query.eligible_only, "true");
+  assert.equal(state.query.eligible_only, "false");
   assert.equal(state.query.include_inactive, "false");
   assert.equal(state.query.search, "alpha");
 });
