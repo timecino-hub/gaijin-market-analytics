@@ -102,7 +102,7 @@ function OpportunityResults({
           <Info label="分析周期" value={`${data.effective_inputs.horizon} 天`} />
           <Info
             label="数据新鲜度上限"
-            value={`${data.effective_inputs.maximum_snapshot_age_seconds / 3600} 小时`}
+            value={formatFreshnessLimit(data.effective_inputs.maximum_snapshot_age_seconds)}
           />
           <Info label="最低快照数" value={String(data.effective_inputs.minimum_snapshot_count)} />
           <Info
@@ -132,7 +132,7 @@ function OpportunityResults({
             <div>
               <h3>尚未形成可发布排名</h3>
               <p>
-                当前订单簿可以正常浏览，但机会评分至少需要 3 个真实市场快照，且最新快照不能超过 24 小时。
+                当前订单簿可以正常浏览，但机会评分至少需要 3 个真实市场快照，且最新观测不能早于 7 天前。
                 数据不足时不会复制当前报价、补零或生成示例分数。
               </p>
               <Link href="/items">查看当前市场数据</Link>
@@ -255,6 +255,11 @@ function explanationTags(item: OpportunityRankingItem): Array<{ key: string; lab
 
 function formatCurrency(value: string | null): string {
   return value === null ? "—" : `${formatCurrencyDisplay(value)} GJN`;
+}
+
+function formatFreshnessLimit(seconds: number): string {
+  const daySeconds = 24 * 60 * 60;
+  return seconds % daySeconds === 0 ? `${seconds / daySeconds} 天` : `${seconds / 3600} 小时`;
 }
 
 function ScoreComponent({

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         alias="CORS_ALLOWED_ORIGINS",
     )
     analytics_maximum_snapshot_age_hours: int = Field(
-        default=24,
+        default=24 * 7,
         gt=0,
         alias="ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS",
     )

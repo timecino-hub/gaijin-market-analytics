@@ -31,6 +31,7 @@ services:
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-gaijin_market}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gaijin_market_analytics}
       CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://127.0.0.1}
+      ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS: ${ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS:-168}
     depends_on:
       postgres:
         condition: service_healthy

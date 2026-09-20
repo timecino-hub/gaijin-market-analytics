@@ -43,7 +43,7 @@ browser credentials. The local CORS policy allows trusted browser `GET` and
 Analytics API settings:
 
 ```sh
-ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS=24
+ANALYTICS_MAXIMUM_SNAPSHOT_AGE_HOURS=168
 ANALYTICS_MINIMUM_SNAPSHOT_COUNT=3
 ```
 

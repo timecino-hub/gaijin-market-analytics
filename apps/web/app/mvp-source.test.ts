@@ -31,6 +31,8 @@ test("opportunity analysis is public, read-only, and honest about its evidence g
   ]);
   assert.match(page, /<MarketHeader active="opportunities"/);
   assert.match(page, /至少需要 3 个真实市场快照/);
+  assert.match(page, /最新观测不能早于 7 天前/);
+  assert.match(page, /formatFreshnessLimit/);
   assert.match(page, /不会复制当前报价、补零或生成示例分数/);
   assert.match(header, /潜力分析/);
   assert.match(caddy, /path \/api\/v1\/opportunities/);

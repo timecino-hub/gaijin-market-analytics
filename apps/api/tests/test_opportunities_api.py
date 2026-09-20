@@ -248,6 +248,7 @@ def test_empty_opportunity_ranking_has_stable_metadata(client: TestClient) -> No
     assert body["evaluated_total"] == 0
     assert body["eligible_total"] == 0
     assert body["effective_inputs"]["horizon"] == 7
+    assert body["effective_inputs"]["maximum_snapshot_age_seconds"] == 7 * 24 * 60 * 60
     assert body["strategy_version"] == "1.0.0"
     assert body["feature_version"] == "opportunity_features_v1"
 
