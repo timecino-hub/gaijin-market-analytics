@@ -49,8 +49,9 @@ from .post_rerelease import PRICE_PROXY_SEMANTICS, sale_proceeds
 from .supply_cycles import SupplyPoolEvent
 
 
-RERELEASE_BOTTOM_FISHING_VERSION = "1.1.0"
+RERELEASE_BOTTOM_FISHING_VERSION = "1.2.0"
 
+_ZERO = Decimal("0")
 _ONE = Decimal("1")
 
 EntryRule = Literal[
@@ -100,6 +101,8 @@ OutcomeStatus = Literal[
     "SUPERSEDED_BY_NEXT_SUPPLY_EVENT",
     "OBSERVED",
 ]
+ExitRule = Literal["FIXED_HOLD", "TAKE_PROFIT"]
+EXIT_RULES: tuple[ExitRule, ...] = ("FIXED_HOLD", "TAKE_PROFIT")
 
 
 class BottomFishingError(ValueError):
@@ -120,6 +123,13 @@ class BottomFishingConfig:
     bid_fill_proxy: BidFillProxy = "DAY_VWAP"
     stabilised_days: int = 3
     holding_days: int = 30
+    # A resting sell order at a profit target. Unlike a bid, this one is
+    # representable on daily data: a day whose traded price reached the ask
+    # means the ask was lifted, and the fill is at the ask rather than at the
+    # day's price. ``target_net_roi`` is stated after the sale fee, so the
+    # price has to rise further than the target reads.
+    target_net_roi: Decimal = Decimal("0.25")
+    maximum_hold_days: int = 365
     minimum_pre_event_days: int = 3
     fee_rate: Decimal = Decimal("0.15")
     currency_quantum: Decimal = Decimal("0.01")
@@ -130,6 +140,7 @@ class BottomFishingConfig:
             "stabilised_days",
             "holding_days",
             "minimum_pre_event_days",
+            "maximum_hold_days",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -163,6 +174,12 @@ class BottomFishingConfig:
             raise BottomFishingError("bid_tolerance must be a finite Decimal in [0, 1).")
         if self.bid_fill_proxy not in BID_FILL_PROXIES:
             raise BottomFishingError("unsupported bid fill proxy.")
+        if (
+            not isinstance(self.target_net_roi, Decimal)
+            or not self.target_net_roi.is_finite()
+            or self.target_net_roi <= _ZERO
+        ):
+            raise BottomFishingError("target_net_roi must be a positive Decimal.")
         if (
             not isinstance(self.fee_rate, Decimal)
             or not self.fee_rate.is_finite()
@@ -220,9 +237,13 @@ class BottomFishingEntry:
 class BottomFishingOutcome:
     rule: EntryRule
     attainable: bool
+    exit_rule: ExitRule
     item_id: int
     event_key: str
     status: OutcomeStatus
+    target_price: Decimal | None
+    target_reached: bool
+    days_to_target: int | None
     entry_price: Decimal | None
     exit_day_start_utc: datetime | None
     exit_price: Decimal | None
@@ -498,16 +519,29 @@ def evaluate_bottom_fishing_outcome(
     as_of: datetime,
     config: BottomFishingConfig | None = None,
     next_same_family_event_opens_at: datetime | None = None,
+    exit_rule: ExitRule = "FIXED_HOLD",
 ) -> BottomFishingOutcome:
-    """Score one entry after holding it for the configured number of days.
+    """Score one entry, either after a fixed hold or at a profit target.
 
-    The holding period runs from the entry day, identically for every rule, so
-    a later entry is never charged for a shorter hold. The cost of waiting
-    shows up where it belongs: in ``days_waited`` and in the outcomes that a
-    late entry pushes past the end of the data.
+    ``FIXED_HOLD`` runs the holding period from the entry day, identically for
+    every rule, so a later entry is never charged for a shorter hold.
+
+    ``TAKE_PROFIT`` rests a sell order at the price that clears
+    ``target_net_roi`` after the fee, and exits on the first completed day
+    whose traded price reached it. The fill is at the ask, not at that day's
+    price: a day that traded at or above a resting offer lifted it. This is the
+    mirror of the bid case and, unlike it, the daily proxy can express it —
+    conservatively, since a day whose average stayed below the ask may still
+    have touched it intraday.
+
+    A target that is never reached is not dropped. The position is sold at
+    market once ``maximum_hold_days`` expires, and ``target_reached`` and
+    ``days_to_target`` say which of the two happened.
     """
 
     cfg = config or BottomFishingConfig()
+    if exit_rule not in EXIT_RULES:
+        raise BottomFishingError("unsupported exit rule.")
     moment = _utc(as_of, "as_of")
     codes: list[str] = ["rerelease_bottom_fishing_outcome_research_only"]
     if not entry.attainable:
@@ -517,9 +551,13 @@ def evaluate_bottom_fishing_outcome(
         return BottomFishingOutcome(
             rule=entry.rule,
             attainable=entry.attainable,
+            exit_rule=exit_rule,
             item_id=entry.item_id,
             event_key=entry.event_key,
             status=status,
+            target_price=None,
+            target_reached=False,
+            days_to_target=None,
             entry_price=entry.entry_price,
             exit_day_start_utc=None,
             exit_price=None,
@@ -535,7 +573,10 @@ def evaluate_bottom_fishing_outcome(
         return empty("NOT_ENTERED", "rerelease_bottom_fishing_nothing_was_bought")
     assert entry.entry_price is not None
 
-    target = entry.entry_day_start_utc + timedelta(days=cfg.holding_days)
+    horizon_days = (
+        cfg.holding_days if exit_rule == "FIXED_HOLD" else cfg.maximum_hold_days
+    )
+    target = entry.entry_day_start_utc + timedelta(days=horizon_days)
     next_open = (
         _utc(next_same_family_event_opens_at, "next_same_family_event_opens_at")
         if next_same_family_event_opens_at is not None
@@ -550,18 +591,43 @@ def evaluate_bottom_fishing_outcome(
     forward = _completed_days(
         historical_buckets, window_start=entry.entry_day_start_utc, as_of=cutoff
     )
-    exit_point = next(
-        (point for point in forward if point.day_start_utc >= target), None
-    )
+
+    target_price: Decimal | None = None
+    target_reached = False
+    days_to_target: int | None = None
+    if exit_rule == "TAKE_PROFIT":
+        target_price = _target_price(entry.entry_price, cfg)
+        within = [
+            point for point in forward if point.day_start_utc < target
+        ]
+        hit = next(
+            (point for point in within if point.vwap_price >= target_price), None
+        )
+        if hit is not None:
+            target_reached = True
+            days_to_target = (
+                hit.day_start_utc - entry.entry_day_start_utc
+            ).days
+            exit_point = hit
+        else:
+            exit_point = next(
+                (point for point in forward if point.day_start_utc >= target), None
+            )
+            codes.append("rerelease_bottom_fishing_target_never_reached_sold_at_market")
+    else:
+        exit_point = next(
+            (point for point in forward if point.day_start_utc >= target), None
+        )
     if exit_point is None:
         return empty(
             "OUTCOME_NOT_OBSERVABLE",
             "rerelease_bottom_fishing_holding_period_not_yet_complete",
         )
 
-    proceeds = sale_proceeds(
-        exit_point.vwap_price, cfg.fee_rate, cfg.currency_quantum
-    )
+    # A lifted offer fills at the offer, not at the day that lifted it.
+    realized_price = target_price if target_reached else exit_point.vwap_price
+    assert realized_price is not None
+    proceeds = sale_proceeds(realized_price, cfg.fee_rate, cfg.currency_quantum)
     profit = proceeds - entry.entry_price
     roi = profit / entry.entry_price
     codes.append(
@@ -569,22 +635,39 @@ def evaluate_bottom_fishing_outcome(
         if profit > Decimal("0")
         else "rerelease_bottom_fishing_exit_not_profitable_after_fee"
     )
+    if target_reached:
+        codes.append("rerelease_bottom_fishing_sold_into_a_resting_offer")
     return BottomFishingOutcome(
         rule=entry.rule,
         attainable=entry.attainable,
+        exit_rule=exit_rule,
         item_id=entry.item_id,
         event_key=entry.event_key,
         status="OBSERVED",
+        target_price=target_price,
+        target_reached=target_reached,
+        days_to_target=days_to_target,
         entry_price=entry.entry_price,
         exit_day_start_utc=exit_point.day_start_utc,
-        exit_price=exit_point.vwap_price,
+        exit_price=realized_price,
         sale_proceeds=proceeds,
         net_profit=profit,
         net_roi=roi,
         profitable=profit > Decimal("0"),
-        holding_days=cfg.holding_days,
+        holding_days=horizon_days,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
+
+
+def _target_price(entry_price: Decimal | None, config: BottomFishingConfig) -> Decimal:
+    """The offer price that clears ``target_net_roi`` after the sale fee.
+
+    Stated as a net return, the target is further away than it reads: at a 15%
+    fee, netting 25% needs the price to rise about 47%.
+    """
+
+    assert entry_price is not None
+    return (entry_price * (_ONE + config.target_net_roi)) / (_ONE - config.fee_rate)
 
 
 def compare_bottom_fishing_rules(

@@ -683,3 +683,101 @@ def test_a_bid_above_the_market_pays_the_market_not_the_bid() -> None:
         "rerelease_bottom_fishing_bid_sat_above_the_market_and_paid_it"
         in result.explanation_codes
     )
+
+
+# --- the take-profit exit ---------------------------------------------------
+
+
+TP_CONFIG = BottomFishingConfig(
+    target_net_roi=Decimal("0.25"), maximum_hold_days=120, fee_rate=Decimal("0.15")
+)
+
+
+def take_profit(buckets, *, config=TP_CONFIG, as_of_offset=400):
+    e = entry("IMMEDIATE", buckets, config=config, as_of_offset=as_of_offset)
+    return e, evaluate_bottom_fishing_outcome(
+        entry=e,
+        historical_buckets=buckets,
+        as_of=day(as_of_offset),
+        config=config,
+        exit_rule="TAKE_PROFIT",
+    )
+
+
+def test_the_target_price_carries_the_fee() -> None:
+    """A net target is further away than it reads: 25% net needs 47% of price."""
+
+    buckets = path(["100"] + ["100"] * 200)
+    _, result = take_profit(buckets)
+
+    assert result.target_price is not None
+    assert result.target_price == Decimal("100") * Decimal("1.25") / Decimal("0.85")
+    assert result.target_price > Decimal("147")
+    assert result.target_price < Decimal("148")
+
+
+def test_a_lifted_offer_fills_at_the_offer_not_at_the_day_that_lifted_it() -> None:
+    buckets = path(["100", "120", "160"] + ["200"] * 200)
+    _, result = take_profit(buckets)
+
+    assert result.target_reached is True
+    assert result.days_to_target == 2
+    # The day traded at 160, well through the 147.06 offer; the fill is at the
+    # offer, so the realized return is the target and not the windfall.
+    assert result.exit_price == result.target_price
+    assert result.net_roi is not None
+    assert abs(result.net_roi - Decimal("0.25")) < Decimal("0.001")
+    assert (
+        "rerelease_bottom_fishing_sold_into_a_resting_offer"
+        in result.explanation_codes
+    )
+
+
+def test_a_target_never_reached_is_sold_at_market_and_says_so() -> None:
+    buckets = path(["100"] + ["110"] * 200)
+    _, result = take_profit(buckets)
+
+    assert result.target_reached is False
+    assert result.days_to_target is None
+    assert result.exit_price == Decimal("110")
+    assert result.net_roi is not None and result.net_roi < Decimal("0")
+    assert (
+        "rerelease_bottom_fishing_target_never_reached_sold_at_market"
+        in result.explanation_codes
+    )
+
+
+def test_a_spike_after_the_maximum_hold_does_not_count() -> None:
+    """The offer is cancelled when the hold expires, not left resting."""
+
+    buckets = path(["100"] + ["110"] * 130 + ["500"] * 60)
+    _, result = take_profit(buckets)
+
+    assert result.target_reached is False
+    assert result.exit_price == Decimal("110")
+
+
+def test_the_fixed_hold_exit_is_unchanged_by_the_new_rule() -> None:
+    buckets = path(["100", "200"] + ["150"] * 200)
+    e = entry("IMMEDIATE", buckets, config=TP_CONFIG, as_of_offset=400)
+    fixed = evaluate_bottom_fishing_outcome(
+        entry=e, historical_buckets=buckets, as_of=day(400), config=TP_CONFIG
+    )
+
+    assert fixed.exit_rule == "FIXED_HOLD"
+    assert fixed.target_reached is False
+    assert fixed.target_price is None
+    assert fixed.exit_price == Decimal("150")
+
+
+def test_an_unsupported_exit_rule_is_rejected() -> None:
+    buckets = path(["100"] + ["100"] * 200)
+    e = entry("IMMEDIATE", buckets, config=TP_CONFIG, as_of_offset=400)
+    with pytest.raises(BottomFishingError, match="unsupported exit rule"):
+        evaluate_bottom_fishing_outcome(
+            entry=e,
+            historical_buckets=buckets,
+            as_of=day(400),
+            config=TP_CONFIG,
+            exit_rule="TRAILING_STOP",
+        )
