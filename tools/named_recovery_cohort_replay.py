@@ -32,6 +32,15 @@ from gaijin_market_analytics.reissue_exposure import (
 from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
     bind_supplemental_reissue_events,
 )
+from gaijin_market_analytics.rerelease_bottom_fishing import (
+    CAUSAL_ENTRY_RULES,
+    ENTRY_RULES,
+    BottomFishingConfig,
+    BottomFishingTrial,
+    compare_bottom_fishing_rules,
+    evaluate_bottom_fishing_outcome,
+    resolve_bottom_fishing_entry,
+)
 from gaijin_market_analytics.walk_forward import (
     ResolvedRatioForecast,
     WalkForwardCalibrationConfig,
@@ -58,7 +67,10 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v8"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v9"
+# A short hold and a long one: entry timing and holding length are
+# different levers and reporting only one would hide their interaction.
+BOTTOM_FISHING_HOLDS = (30, 90)
 PRICE_SCALE = Decimal("10000")
 Role = Literal["calibration", "diagnostic", "negative_control"]
 
@@ -119,6 +131,9 @@ def run_manifest(path: Path) -> dict[str, Any]:
         raise CohortReplayError("item_id values must be unique")
 
     built: list[BuiltExample] = []
+    bottom_fishing: dict[int, list[BottomFishingTrial]] = {
+        value: [] for value in BOTTOM_FISHING_HOLDS
+    }
     scarcity_examples: list[dict[str, Any]] = []
     item_reports: list[dict[str, Any]] = []
     reissue_events_by_item: dict[int, tuple[Any, ...]] = {}
@@ -223,6 +238,30 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 ),
                 default=None,
             )
+            for holding_days in BOTTOM_FISHING_HOLDS:
+                config = BottomFishingConfig(holding_days=holding_days)
+                for rule in ENTRY_RULES:
+                    bottom_entry = resolve_bottom_fishing_entry(
+                        rule=rule,
+                        item_id=spec.item_id,
+                        event=event,
+                        historical_buckets=buckets,
+                        as_of=spec.as_of,
+                        config=config,
+                        next_same_family_event_opens_at=next_open,
+                    )
+                    bottom_outcome = evaluate_bottom_fishing_outcome(
+                        entry=bottom_entry,
+                        historical_buckets=buckets,
+                        as_of=spec.as_of,
+                        config=config,
+                        next_same_family_event_opens_at=next_open,
+                    )
+                    bottom_fishing[holding_days].append(
+                        BottomFishingTrial(
+                            entry=bottom_entry, outcome=bottom_outcome
+                        )
+                    )
             for horizon in (30, 60, 90, 180):
                 ratio_observations = item_local_ratio_observations(
                     item_id=spec.item_id,
@@ -497,6 +536,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
     metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
     metrics["price_distribution"] = _price_distribution_metrics(decisions)
+    metrics["rerelease_bottom_fishing"] = _bottom_fishing_metrics(bottom_fishing)
     metrics["walk_forward_calibration"] = _walk_forward_metrics(
         item_local=tuple(resolved_item_local), family=tuple(resolved_family)
     )
@@ -574,6 +614,69 @@ def run_manifest(path: Path) -> dict[str, Any]:
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
     }
+
+
+def _bottom_fishing_metrics(
+    trials_by_hold: dict[int, list[BottomFishingTrial]]
+) -> dict[str, Any]:
+    """Compare entry timing rules against the fixed entry the stack uses today.
+
+    ``TROUGH_ORACLE`` appears in the table as an upper bound and is marked
+    unattainable. Reading it as a result would be reading a number that assumes
+    the buyer knew the future, and its only purpose is to say whether enough
+    room exists for any causal rule to be worth having.
+    """
+
+    result: dict[str, Any] = {
+        "note": (
+            "IMMEDIATE is the entry the opportunity stack uses today: the "
+            "first completed UTC day after the event closes. Every rule holds "
+            "for the same number of days from its own entry, so a later entry "
+            "is never charged for a shorter hold. TROUGH_ORACLE is an "
+            "unattainable bound, not a strategy."
+        ),
+        "causal_rules": list(CAUSAL_ENTRY_RULES),
+    }
+    for holding_days, trials in sorted(trials_by_hold.items()):
+        comparison = compare_bottom_fishing_rules(trials=trials)
+        result[f"hold_{holding_days}d"] = {
+            "event_count": comparison.event_count,
+            "summaries": [
+                {
+                    "rule": value.rule,
+                    "attainable": value.attainable,
+                    "trial_count": value.trial_count,
+                    "entered_count": value.entered_count,
+                    "not_triggered_count": value.not_triggered_count,
+                    "unavailable_count": value.unavailable_count,
+                    "observed_count": value.observed_count,
+                    "trigger_share": value.trigger_share,
+                    "mean_days_waited": value.mean_days_waited,
+                    "median_entry_discount": value.median_entry_discount,
+                    "profitable_count": value.profitable_count,
+                    "support_share": value.support_share,
+                    "median_net_roi": value.median_net_roi,
+                }
+                for value in comparison.summaries
+            ],
+            "matched_against_immediate": [
+                {
+                    "rule": value.rule,
+                    "attainable": value.attainable,
+                    "matched_count": value.matched_count,
+                    "rule_profitable_count": value.rule_profitable_count,
+                    "rule_support_share": value.rule_support_share,
+                    "rule_median_net_roi": value.rule_median_net_roi,
+                    "benchmark_profitable_count": value.benchmark_profitable_count,
+                    "benchmark_support_share": value.benchmark_support_share,
+                    "benchmark_median_net_roi": value.benchmark_median_net_roi,
+                    "median_net_roi_difference": value.median_net_roi_difference,
+                }
+                for value in comparison.matched
+            ],
+            "explanation_codes": list(comparison.explanation_codes),
+        }
+    return result
 
 
 def _collect_resolution(
