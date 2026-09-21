@@ -32,6 +32,12 @@ from gaijin_market_analytics.reissue_exposure import (
 from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
     bind_supplemental_reissue_events,
 )
+from gaijin_market_analytics.price_distribution import (
+    evaluate_price_distribution_outcome,
+    family_ratio_observations,
+    forecast_price_distribution,
+    item_local_ratio_observations,
+)
 from gaijin_market_analytics.post_rerelease import (
     estimate_post_rerelease_reference,
     evaluate_post_rerelease_outcome,
@@ -47,7 +53,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v6"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v7"
 PRICE_SCALE = Decimal("10000")
 Role = Literal["calibration", "diagnostic", "negative_control"]
 
@@ -75,6 +81,7 @@ class BuiltExample:
     horizon_days: int
     estimate: Any
     outcome: Any
+    item_local_ratio_observations: tuple[Any, ...]
 
 
 def main() -> None:
@@ -212,6 +219,15 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 default=None,
             )
             for horizon in (30, 60, 90, 180):
+                ratio_observations = item_local_ratio_observations(
+                    item_id=spec.item_id,
+                    target_event_key=event.event_key,
+                    family=event.family,
+                    horizon_days=horizon,
+                    prediction_as_of=prediction_as_of,
+                    visible_before=event.opens_at,
+                    recoveries=prediction_recovery.recoveries,
+                )
                 estimate = estimate_post_rerelease_reference(
                     event=event,
                     prediction_as_of=prediction_as_of,
@@ -237,6 +253,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
                         horizon_days=horizon,
                         estimate=estimate,
                         outcome=outcome,
+                        item_local_ratio_observations=ratio_observations,
                     )
                 )
         recovery_by_key = {value.event_key: value for value in recoveries.recoveries}
@@ -402,6 +419,37 @@ def run_manifest(path: Path) -> dict[str, Any]:
             sparse_fallback=fallback,
             audit=audit,
         )
+        item_local_forecast = forecast_price_distribution(
+            item_id=example.item_id,
+            event_key=example.event_key,
+            family=example.family,
+            prediction_as_of=example.estimate.prediction_as_of,
+            horizon_days=example.horizon_days,
+            basis="PRE_EVENT_MEDIAN",
+            anchor_price=example.estimate.current_pre_price_median,
+            entry_proxy_price=example.estimate.entry_proxy_price,
+            observations=example.item_local_ratio_observations,
+        )
+        family_observations = family_ratio_observations(
+            family=example.family,
+            horizon_days=example.horizon_days,
+            prediction_as_of=example.estimate.prediction_as_of,
+            exclude_item_id=example.item_id,
+            prior_outcomes=prior_evidence,
+        )
+        family_forecast = forecast_price_distribution(
+            item_id=example.item_id,
+            event_key=example.event_key,
+            family=example.family,
+            prediction_as_of=example.estimate.prediction_as_of,
+            horizon_days=example.horizon_days,
+            basis="ENTRY_PROXY",
+            anchor_price=example.estimate.entry_proxy_price,
+            entry_proxy_price=example.estimate.entry_proxy_price,
+            observations=family_observations,
+        )
+        item_local_score = _score_distribution(item_local_forecast, example.outcome)
+        family_score = _score_distribution(family_forecast, example.outcome)
         prediction_exposure = derive_reissue_exposure_features(
             item_id=example.item_id,
             as_of=example.estimate.prediction_as_of,
@@ -421,6 +469,14 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 "hierarchical": asdict(decision),
                 "sparse_baseline_fallback": asdict(fallback),
                 "family_prior_generalization": asdict(audit),
+                "price_distribution_item_local": asdict(item_local_forecast),
+                "price_distribution_family": asdict(family_forecast),
+                "price_distribution_outcome_item_local": (
+                    asdict(item_local_score) if item_local_score is not None else None
+                ),
+                "price_distribution_outcome_family": (
+                    asdict(family_score) if family_score is not None else None
+                ),
                 "generalization_aware": asdict(generalization),
                 "outcome": asdict(example.outcome),
             }
@@ -429,6 +485,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
     metrics = _metrics(decisions)
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
     metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
+    metrics["price_distribution"] = _price_distribution_metrics(decisions)
     metrics["negative_control_item_count"] = sum(
         value["role"] == "negative_control" for value in item_reports
     )
@@ -478,6 +535,18 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 "each held across a dwell window of consecutive observed UTC days; it "
                 "measures regime, never recovery level and never expected return"
             ),
+            "price_distribution_semantics": (
+                "weighted empirical predictive distribution over already observed "
+                "recovery ratios; quantiles are read off the inverse CDF without "
+                "interpolation and a quantile level is marked supported only inside "
+                "[1/(ESS+1), ESS/(ESS+1)]"
+            ),
+            "price_distribution_scoring": (
+                "mid probability integral transform for calibration, Brier score for "
+                "the fee-adjusted profit probability, and pinball loss on net ROI for "
+                "the supported quantiles; the binary research signal is scored on the "
+                "same outcomes as the comparison baseline"
+            ),
             "absorption_exit_policy_comparison": (
                 "LEGACY_ONLY reproduces the fixed one-event-duration withholding window; "
                 "EVIDENCE_EXTENDS_LEGACY can only withhold longer; "
@@ -491,6 +560,128 @@ def run_manifest(path: Path) -> dict[str, Any]:
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
     }
+
+
+def _score_distribution(forecast: Any, outcome: Any) -> Any:
+    """Score a forecast only when its outcome had actually become observable."""
+
+    if not forecast.available:
+        return None
+    if not outcome.target_available or outcome.exit_proxy_price is None:
+        return None
+    if outcome.observed_at is None or outcome.observed_at <= forecast.prediction_as_of:
+        return None
+    return evaluate_price_distribution_outcome(
+        forecast=forecast,
+        realized_exit_price=outcome.exit_proxy_price,
+        outcome_observed_at=outcome.observed_at,
+    )
+
+
+def _price_distribution_metrics(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare the predictive distribution against the binary research signal.
+
+    Both are scored with the Brier score on exactly the same rows, so a lower
+    distribution Brier is a like-for-like improvement rather than a different
+    question being answered. Rows repeat item/event/horizon combinations and are
+    not independent.
+    """
+
+    sources = {
+        "item_local": (
+            "price_distribution_item_local",
+            "price_distribution_outcome_item_local",
+        ),
+        "family_cross_item": (
+            "price_distribution_family",
+            "price_distribution_outcome_family",
+        ),
+    }
+    result: dict[str, Any] = {
+        "decision_count": len(decisions),
+        "interpretation": (
+            "descriptive only; a lower Brier or pinball loss on this cohort is a "
+            "calibration candidate, not an accepted production change"
+        ),
+    }
+    for name, (forecast_key, outcome_key) in sources.items():
+        status_counts: dict[str, int] = {}
+        for value in decisions:
+            status = value[forecast_key]["status"]
+            status_counts[status] = status_counts.get(status, 0) + 1
+        scored = [value for value in decisions if value[outcome_key] is not None]
+        distribution_brier = [
+            value[outcome_key]["brier_score"]
+            for value in scored
+            if value[outcome_key]["brier_score"] is not None
+        ]
+        signal_brier = [
+            (
+                Decimal("1") if value["primary"]["research_signal_positive"] else Decimal("0")
+            )
+            - (Decimal("1") if value[outcome_key]["realized_profitable"] else Decimal("0"))
+            for value in scored
+        ]
+        pinball = [
+            value[outcome_key]["mean_supported_pinball_loss"]
+            for value in scored
+            if value[outcome_key]["mean_supported_pinball_loss"] is not None
+        ]
+        pit = [
+            value[outcome_key]["probability_integral_transform"] for value in scored
+        ]
+        coverage: dict[str, dict[str, int]] = {}
+        for value in scored:
+            for interval in value[outcome_key]["interval_coverages"]:
+                if not interval["supported"]:
+                    continue
+                row = coverage.setdefault(
+                    format(interval["nominal_coverage"], "f"),
+                    {"supported_count": 0, "covered_count": 0},
+                )
+                row["supported_count"] += 1
+                row["covered_count"] += 1 if interval["covered"] else 0
+        result[name] = {
+            "status_counts": status_counts,
+            "scored_count": len(scored),
+            "mean_distribution_brier": _decimal_mean(tuple(distribution_brier)),
+            "mean_binary_signal_brier": _decimal_mean(
+                tuple(value * value for value in signal_brier)
+            ),
+            "mean_supported_pinball_loss": _decimal_mean(tuple(pinball)),
+            "probability_integral_transform_histogram": _pit_histogram(tuple(pit)),
+            "supported_interval_coverage": {
+                key: {
+                    **row,
+                    "empirical_coverage": (
+                        Decimal(row["covered_count"]) / Decimal(row["supported_count"])
+                        if row["supported_count"]
+                        else None
+                    ),
+                }
+                for key, row in sorted(coverage.items())
+            },
+        }
+    return result
+
+
+def _pit_histogram(values: tuple[Decimal, ...], bins: int = 5) -> dict[str, int]:
+    edges = [Decimal(index) / Decimal(bins) for index in range(bins + 1)]
+    histogram = {
+        f"{format(edges[index], 'f')}-{format(edges[index + 1], 'f')}": 0
+        for index in range(bins)
+    }
+    for value in values:
+        index = min(bins - 1, int(value * Decimal(bins)))
+        key = f"{format(edges[index], 'f')}-{format(edges[index + 1], 'f')}"
+        histogram[key] += 1
+    return histogram
+
+
+def _decimal_mean(values: tuple[Decimal, ...]) -> Decimal | None:
+    if not values:
+        return None
+    return sum(values, Decimal("0")) / Decimal(len(values))
 
 
 def _absorption_exit_metrics(examples: list[dict[str, Any]]) -> dict[str, Any]:
