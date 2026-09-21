@@ -32,6 +32,11 @@ from gaijin_market_analytics.reissue_exposure import (
 from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
     bind_supplemental_reissue_events,
 )
+from gaijin_market_analytics.policy_walk_forward import (
+    PolicyDecisionRow,
+    PolicyWalkForwardConfig,
+    evaluate_policy_walk_forward,
+)
 from gaijin_market_analytics.rerelease_bottom_fishing import (
     CAUSAL_ENTRY_RULES,
     ENTRY_RULES,
@@ -67,7 +72,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v10"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v11"
 # A short hold and a long one: entry timing and holding length are
 # different levers and reporting only one would hide their interaction.
 BOTTOM_FISHING_HOLDS = (30, 90)
@@ -542,6 +547,9 @@ def run_manifest(path: Path) -> dict[str, Any]:
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
     metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
     metrics["price_distribution"] = _price_distribution_metrics(decisions)
+    metrics["absorption_policy_walk_forward"] = _absorption_policy_walk_forward(
+        scarcity_examples
+    )
     metrics["rerelease_bottom_fishing"] = _bottom_fishing_metrics(bottom_fishing)
     metrics["walk_forward_calibration"] = _walk_forward_metrics(
         item_local=tuple(resolved_item_local), family=tuple(resolved_family)
@@ -620,6 +628,148 @@ def run_manifest(path: Path) -> dict[str, Any]:
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
     }
+
+
+_ABSORPTION_CANDIDATE_GROUPS = ("ABSORPTION_ACTIVE",)
+# The state that means "we could not tell" outperformed every real state at
+# every checkpoint on this cohort, off 26 rows and two vehicles. Leaving it in
+# the evidence lets a data-quality artifact decide a trading policy, so the
+# selection is run with and without it.
+_ABSORPTION_UNMEASURABLE_GROUPS = ("INSUFFICIENT_EVIDENCE",)
+
+
+def _absorption_policy_walk_forward(
+    examples: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Replay the absorption withholding decision strictly point-in-time.
+
+    Two entry conventions are reported and they answer different questions.
+    ``checkpoint_entry`` is the one a decision taken at a checkpoint could
+    actually act on, because the close price is already in the past by then.
+    ``post_close_entry`` is counterfactual at that instant and is here only to
+    say whether the state label carries information at all, separately from
+    whether acting on it at a checkpoint is possible.
+    """
+
+    result: dict[str, Any] = {
+        "note": (
+            "selection is fitted only on rows whose outcomes had closed at "
+            "each decision instant, stratified by checkpoint horizon so the "
+            "choice cannot rediscover that later checkpoints return more. "
+            "No matched comparison exists: withholding changes only which "
+            "rows are traded, so on the rows it publishes the baseline is "
+            "identical to it by construction."
+        ),
+        "candidate_groups": list(_ABSORPTION_CANDIDATE_GROUPS),
+        "actionable_convention": "checkpoint_entry",
+    }
+    for convention, outcome_key in (
+        ("checkpoint_entry", "forward_60d_outcome"),
+        ("post_close_entry", "forward_60d_outcome_from_close"),
+    ):
+        rows = _absorption_policy_rows(examples, outcome_key, drop_unmeasurable=False)
+        rows_measured = _absorption_policy_rows(
+            examples, outcome_key, drop_unmeasurable=True
+        )
+        result[convention] = {
+            "all_states": _policy_walk_forward_block(rows),
+            "excluding_unmeasurable_state": _policy_walk_forward_block(rows_measured),
+        }
+    return result
+
+
+def _absorption_policy_rows(
+    examples: list[dict[str, Any]],
+    outcome_key: str,
+    *,
+    drop_unmeasurable: bool,
+) -> list[PolicyDecisionRow]:
+    rows: list[PolicyDecisionRow] = []
+    for value in examples:
+        outcome = value[outcome_key]
+        if not outcome["outcome_available"] or outcome["net_roi"] is None:
+            continue
+        state = value["absorption_exit"]["state"]
+        if drop_unmeasurable and state in _ABSORPTION_UNMEASURABLE_GROUPS:
+            continue
+        closed_at = value["forward_60d_outcome"]["observed_at"]
+        if closed_at is None:
+            continue
+        roi = Decimal(outcome["net_roi"])
+        rows.append(
+            PolicyDecisionRow(
+                item_id=value["item_id"],
+                row_key=f"{value['event_key']}@{value['checkpoint_horizon_days']}",
+                group=state,
+                stratum=f"checkpoint_{value['checkpoint_horizon_days']}d",
+                decided_at=_parse_utc(value["snapshot"]["as_of"]),
+                outcome_closed_at=_parse_utc(closed_at),
+                net_roi=roi,
+                profitable=roi > Decimal("0"),
+            )
+        )
+    return rows
+
+
+def _policy_walk_forward_block(rows: list[PolicyDecisionRow]) -> dict[str, Any]:
+    baseline = evaluate_policy_walk_forward(
+        rows=rows, candidate_groups=_ABSORPTION_CANDIDATE_GROUPS
+    )
+    applied = evaluate_policy_walk_forward(
+        rows=rows,
+        candidate_groups=_ABSORPTION_CANDIDATE_GROUPS,
+        policy="APPLY",
+    )
+    relaxed = evaluate_policy_walk_forward(
+        rows=rows,
+        candidate_groups=_ABSORPTION_CANDIDATE_GROUPS,
+        config=PolicyWalkForwardConfig(
+            minimum_closed_rows=20,
+            minimum_distinct_items=3,
+            minimum_stratum_rows=3,
+            minimum_qualifying_strata=2,
+        ),
+        policy="APPLY",
+    )
+    return {
+        "row_count": len(rows),
+        "never_withhold": _policy_arms(baseline),
+        "shipped_defaults": _policy_arms(applied),
+        "relaxed_thresholds": _policy_arms(relaxed),
+    }
+
+
+def _policy_arms(report: Any) -> dict[str, Any]:
+    return {
+        "trial_count": report.trial_count,
+        "withholding_trial_count": report.withholding_trial_count,
+        "status_counts": dict(report.status_counts),
+        "baseline": _policy_arm(report.baseline),
+        "walk_forward": _policy_arm(report.walk_forward),
+        "by_stratum": [
+            {
+                "stratum": stratum,
+                "baseline": _policy_arm(base),
+                "walk_forward": _policy_arm(walk),
+            }
+            for stratum, base, walk in report.by_stratum
+        ],
+        "explanation_codes": list(report.explanation_codes),
+    }
+
+
+def _policy_arm(arm: Any) -> dict[str, Any]:
+    return {
+        "published_count": arm.published_count,
+        "withheld_count": arm.withheld_count,
+        "profitable_count": arm.profitable_count,
+        "support_share": arm.support_share,
+        "median_net_roi": arm.median_net_roi,
+    }
+
+
+def _parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 def _bottom_fishing_metrics(
