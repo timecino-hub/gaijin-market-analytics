@@ -13,10 +13,13 @@ from gaijin_market_analytics.opportunities_v2 import (
     OpportunityV2ContractError,
 )
 from gaijin_market_analytics.supply_channels import (
+    CURATED_VEHICLE_NAME_ALIASES,
     DEFAULT_SUPPLY_CHANNEL_OBSERVATIONS,
     SupplyChannelError,
     SupplyChannelObservation,
+    VehicleNameAlias,
     assess_supply_channel_coverage,
+    canonical_vehicle_name,
     derive_market_effect,
     observations_without_official_source,
     resolve_channel_coverage_withholding,
@@ -116,6 +119,19 @@ def test_coupons_reach_the_market_after_the_event_closes():
     )
 
 
+def test_the_earliest_tradeable_date_is_a_lower_bound_not_an_observation():
+    # Paintball Arena opened 22 January; stage 8 issues the coupon no earlier
+    # than 5 February and the article imposes a six-day sale cooldown.
+    coverage = assess_supply_channel_coverage(vehicle_name="T-72B3 Arena")
+    assert coverage.earliest_unmodelled_tradeable_from == datetime(
+        2026, 2, 11, 11, tzinfo=UTC
+    )
+    scimitar = assess_supply_channel_coverage(vehicle_name="Scimitar Mk.2")
+    assert scimitar.earliest_unmodelled_tradeable_from == datetime(
+        2026, 8, 9, 11, tzinfo=UTC
+    )
+
+
 def test_account_only_returns_are_not_a_claim_that_supply_never_arrives():
     # Ka-Chi has five catalogued returns, every one account-only, and is also in
     # a Battle Pass trophy. The catalog alone would read as "never tradeable".
@@ -169,24 +185,80 @@ def test_an_unreviewed_vehicle_outside_the_catalog_is_uncatalogued():
     assert "no_modelled_tradeable_supply_channel" in coverage.explanation_codes
 
 
-def test_operator_reviewed_observations_are_marked_as_unsourced():
-    coverage = assess_supply_channel_coverage(vehicle_name="T-72B3 Arena")
+def test_every_shipped_observation_now_has_an_official_source():
+    assert observations_without_official_source() == ()
+
+
+def test_an_unsourced_observation_is_flagged_when_one_exists():
+    coverage = assess_supply_channel_coverage(
+        vehicle_name="Kungstiger",
+        observations=(
+            _observation(provenance="OPERATOR_REVIEW", source_url=None),
+        ),
+    )
     assert coverage.reviewed is True
     assert (
         "supply_channel_observation_not_independently_sourced"
         in coverage.explanation_codes
     )
-    pending = dict(observations_without_official_source())
-    assert pending["T-72B3 Arena"] == "Paintball Arena 2026"
-    assert pending["Scimitar Mk 2"] == "Scimitar Strike 2026"
-    assert "MiG-25PD" not in pending
 
 
 def test_observations_that_do_not_bind_are_surfaced_not_hidden():
     names = unbound_observations()
+    # First-issue limited-event vehicles legitimately have no reissue history.
     assert "MiG-25PD" in names
     assert "LVT-4/40" in names
     assert "Ka-Chi" not in names
+    # Resolved by the curated alias, so no longer an unexplained gap.
+    assert "Type K-8 No.13i" not in names
+    assert "Type K-8 No.13" not in names
+
+
+def test_a_curated_alias_resolves_one_confirmed_spelling_only():
+    assert canonical_vehicle_name("Type K-8 No.13i") == "Type K-8 No.13"
+    # Never fuzzy: a near miss must stay unresolved rather than bind to a
+    # different vehicle's supply events.
+    assert canonical_vehicle_name("Type K-8 No.13x") == "Type K-8 No.13x"
+    assert canonical_vehicle_name("Type K-8") == "Type K-8"
+    assert canonical_vehicle_name("Kungstiger") == "Kungstiger"
+
+
+def test_both_spellings_resolve_to_the_same_coverage():
+    typo = assess_supply_channel_coverage(vehicle_name="Type K-8 No.13i")
+    canonical = assess_supply_channel_coverage(vehicle_name="Type K-8 No.13")
+    assert typo.observation_count == canonical.observation_count == 1
+    assert typo.unmodelled_demand_channels == canonical.unmodelled_demand_channels
+    assert typo.coverage == canonical.coverage
+
+
+def test_alias_contract_is_enforced():
+    values = {
+        "alias": "Type K-8 No.13i",
+        "canonical_name": "Type K-8 No.13",
+        "basis": "OFFICIAL_ARTICLE_TYPO",
+        "source_url": "https://warthunder.com/en/news/9334",
+        "source_label": "Battle Pass season 18",
+        "reviewed_at": AS_OF,
+    }
+    VehicleNameAlias(**values)
+    for override in (
+        {"alias": "  "},
+        {"canonical_name": "  "},
+        {"canonical_name": "Type K-8 No.13i"},
+        {"basis": "GUESS"},
+        {"source_url": "http://warthunder.com/x"},
+        {"source_label": " "},
+        {"reviewed_at": datetime(2026, 1, 1)},
+    ):
+        with pytest.raises(SupplyChannelError):
+            VehicleNameAlias(**{**values, **override})
+
+
+def test_the_alias_table_stays_hand_curated():
+    assert len(CURATED_VEHICLE_NAME_ALIASES) == 1
+    alias = CURATED_VEHICLE_NAME_ALIASES[0]
+    assert alias.basis == "OFFICIAL_ARTICLE_TYPO"
+    assert alias.source_url.startswith("https://warthunder.com/")
 
 
 def test_shipped_observations_keep_their_provenance_contract():
@@ -218,11 +290,12 @@ def test_observation_contract_is_enforced():
     with pytest.raises(SupplyChannelError):
         _observation(
             occurred_at=datetime(2026, 2, 1, tzinfo=UTC),
-            tradeable_from=datetime(2026, 1, 1, tzinfo=UTC),
+            earliest_tradeable_from=datetime(2026, 1, 1, tzinfo=UTC),
         )
     with pytest.raises(SupplyChannelError):
         _observation(
-            asset_scope="COSMETIC", tradeable_from=datetime(2026, 1, 1, tzinfo=UTC)
+            asset_scope="COSMETIC",
+            earliest_tradeable_from=datetime(2026, 1, 1, tzinfo=UTC),
         )
 
 
