@@ -32,6 +32,12 @@ from gaijin_market_analytics.reissue_exposure import (
 from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
     bind_supplemental_reissue_events,
 )
+from gaijin_market_analytics.close_entry_allocation import (
+    AllocationConfig,
+    CloseEntryCandidate,
+    ReturnAtom,
+    compare_allocation_rules,
+)
 from gaijin_market_analytics.policy_walk_forward import (
     PolicyDecisionRow,
     PolicyWalkForwardConfig,
@@ -61,6 +67,7 @@ from gaijin_market_analytics.post_rerelease import (
     estimate_post_rerelease_reference,
     evaluate_post_rerelease_outcome,
     first_post_event_trade_proxy,
+    sale_proceeds,
 )
 from gaijin_market_analytics.scarcity_rebuild import (
     evaluate_scarcity_rebuild_forward_outcome,
@@ -72,7 +79,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v11"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v12"
 # A short hold and a long one: entry timing and holding length are
 # different levers and reporting only one would hide their interaction.
 BOTTOM_FISHING_HOLDS = (30, 90)
@@ -547,6 +554,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
     metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
     metrics["price_distribution"] = _price_distribution_metrics(decisions)
+    metrics["close_entry_allocation"] = _close_entry_allocation(decisions)
     metrics["absorption_policy_walk_forward"] = _absorption_policy_walk_forward(
         scarcity_examples
     )
@@ -628,6 +636,108 @@ def run_manifest(path: Path) -> dict[str, Any]:
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
     }
+
+
+def _close_entry_allocation(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Simulate a finite account taking close-entry positions, per horizon.
+
+    Reported per horizon because the horizon is the one lever this cohort has
+    shown to matter, and a single pooled number would hide it. Both sizing arms
+    see exactly the same candidates in the same order, so any difference
+    between them is stake and nothing else.
+    """
+
+    result: dict[str, Any] = {
+        "note": (
+            "entry is the first completed day after the event closed, which is "
+            "the only price a decision taken then could reach. Capital is "
+            "finite and is released only when a position exits, so overlapping "
+            "holds compete for it and a candidate that arrives with the "
+            "account committed is recorded as skipped rather than dropped."
+        ),
+        "distribution_source": "price_distribution_item_local",
+    }
+    for horizon in (30, 60, 90, 180):
+        candidates = _allocation_candidates(decisions, horizon)
+        comparison = compare_allocation_rules(candidates=candidates)
+        result[f"horizon_{horizon}d"] = {
+            "candidate_count": comparison.candidate_count,
+            "arms": [
+                {
+                    "rule": arm.rule,
+                    "starting_capital": arm.starting_capital,
+                    "ending_capital": arm.ending_capital,
+                    "total_return": arm.total_return,
+                    "closed_count": arm.closed_count,
+                    "profitable_count": arm.profitable_count,
+                    "support_share": arm.support_share,
+                    "skipped_not_sized_count": arm.skipped_not_sized_count,
+                    "skipped_no_capital_count": arm.skipped_no_capital_count,
+                    "skipped_concurrency_count": arm.skipped_concurrency_count,
+                    "outcome_unavailable_count": arm.outcome_unavailable_count,
+                    "peak_concurrent_positions": arm.peak_concurrent_positions,
+                    "mean_position_fraction": arm.mean_deployed_fraction,
+                }
+                for arm in comparison.arms
+            ],
+            "explanation_codes": list(comparison.explanation_codes),
+        }
+    return result
+
+
+def _allocation_candidates(
+    decisions: list[dict[str, Any]], horizon: int
+) -> list[CloseEntryCandidate]:
+    cfg = AllocationConfig()
+    rows: list[CloseEntryCandidate] = []
+    for value in decisions:
+        if value["horizon_days"] != horizon:
+            continue
+        forecast = value["price_distribution_item_local"]
+        outcome = value["outcome"]
+        if not forecast["available"] or forecast["anchor_price"] is None:
+            continue
+        entry_price = forecast["entry_proxy_price"]
+        anchor = forecast["anchor_price"]
+        if entry_price is None or Decimal(entry_price) <= Decimal("0"):
+            continue
+        distribution = tuple(
+            ReturnAtom(
+                net_roi=_ratio_net_roi(
+                    Decimal(atom["ratio"]), Decimal(anchor), Decimal(entry_price)
+                ),
+                weight_share=Decimal(atom["weight_share"]),
+            )
+            for atom in forecast["support"]
+        )
+        realized = (
+            Decimal(outcome["realized_net_roi"])
+            if outcome.get("target_available")
+            and outcome.get("realized_net_roi") is not None
+            else None
+        )
+        rows.append(
+            CloseEntryCandidate(
+                item_id=value["item_id"],
+                event_key=value["event_key"],
+                horizon_days=horizon,
+                entry_at=_parse_utc(value["primary"]["prediction_as_of"]),
+                exit_at=_parse_utc(outcome["target_at"]),
+                distribution=distribution,
+                distribution_supported=any(
+                    quantile["supported"] for quantile in forecast["quantiles"]
+                ),
+                realized_net_roi=realized,
+            )
+        )
+    return rows
+
+
+def _ratio_net_roi(ratio: Decimal, anchor: Decimal, entry: Decimal) -> Decimal:
+    """Net ROI of one support atom, on the same fee arithmetic as everything else."""
+
+    proceeds = sale_proceeds(anchor * ratio, Decimal("0.15"), Decimal("0.01"))
+    return (proceeds - entry) / entry
 
 
 _ABSORPTION_CANDIDATE_GROUPS = ("ABSORPTION_ACTIVE",)
