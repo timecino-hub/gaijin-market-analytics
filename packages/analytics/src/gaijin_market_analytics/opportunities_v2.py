@@ -23,6 +23,12 @@ from .manual_context import (
     weighted_decimal_median,
 )
 from .reissue_exposure import ReissueExposureFeatures
+from .postevent_entry_rule import (
+    POSTEVENT_ENTRY_POLICIES,
+    PostEventEntryPolicy,
+    PostEventEntrySignal,
+    resolve_postevent_entry_withholding,
+)
 from .supply_channels import (
     ChannelCoveragePolicy,
     SupplyChannelCoverage,
@@ -92,6 +98,11 @@ class OpportunityV2Config:
     currency_quantum: Decimal = Decimal("0.01")
     absorption_withhold_policy: AbsorptionWithholdPolicy = "LEGACY_ONLY"
     channel_coverage_policy: ChannelCoveragePolicy = "IGNORE"
+    # The post-event drawdown rule ships inert. Its descriptive lift is large
+    # and its walk-forward lift is small, so ANNOTATE is what the site should
+    # run while the evidence accumulates; nothing should gate on it until the
+    # walk-forward is re-run on a larger cohort.
+    postevent_entry_policy: PostEventEntryPolicy = "IGNORE"
 
     def __post_init__(self) -> None:
         if self.maximum_current_market_age <= timedelta(0):
@@ -145,6 +156,8 @@ class OpportunityV2Config:
             "EVIDENCE_REPLACES_LEGACY",
         }:
             raise OpportunityV2ContractError("unsupported absorption_withhold_policy.")
+        if self.postevent_entry_policy not in POSTEVENT_ENTRY_POLICIES:
+            raise OpportunityV2ContractError("unsupported postevent_entry_policy.")
         if self.channel_coverage_policy not in {
             "IGNORE",
             "WITHHOLD_UNCATALOGUED",
@@ -269,6 +282,7 @@ class OpportunityScoreV2:
         manual_context_observations: Iterable[ManualMarketContextObservation] = (),
         absorption_exit: SupplyAbsorptionExitSnapshot | None = None,
         supply_channel_coverage: SupplyChannelCoverage | None = None,
+        postevent_entry: PostEventEntrySignal | None = None,
     ) -> OpportunityScoreV2Result:
         as_of = _utc(as_of, "as_of")
         window_start = _utc(window_start, "window_start")
@@ -402,12 +416,21 @@ class OpportunityScoreV2:
         if channel_decision.withhold:
             codes.append("strategy_withheld_for_unmodelled_supply_channel")
 
+        entry_withheld, entry_codes = resolve_postevent_entry_withholding(
+            signal=postevent_entry,
+            policy=self.config.postevent_entry_policy,
+        )
+        codes.extend(entry_codes)
+        if entry_withheld:
+            codes.append("strategy_withheld_for_shallow_post_event_drawdown")
+
         publishable = not any(
             code.startswith("missing_")
             or code.startswith("stale_")
             or code.startswith("insufficient_")
             or code == "strategy_withheld_for_supply_cycle_regime"
             or code == "strategy_withheld_for_unmodelled_supply_channel"
+            or code == "strategy_withheld_for_shallow_post_event_drawdown"
             for code in codes
         )
         if not publishable:

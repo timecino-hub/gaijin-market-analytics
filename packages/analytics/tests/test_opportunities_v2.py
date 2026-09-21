@@ -278,3 +278,97 @@ def test_hourly_resolution_does_not_give_one_day_multiple_price_votes():
     assert result.features.historical_bucket_count == 7
     assert result.features.historical_effective_day_count == 5
     assert result.reference_sell_price == Decimal("30")
+
+
+# --- the post-event entry rule ships inert ----------------------------------
+
+
+def _postevent_signal(*, shallow: bool):
+    from gaijin_market_analytics.postevent_entry_rule import evaluate_postevent_entry
+
+    opens = AS_OF - timedelta(days=20)
+    closes = AS_OF - timedelta(days=6)
+    pre = tuple(
+        bucket(start=opens - timedelta(days=14 - i), price="100") for i in range(14)
+    )
+    post = tuple(
+        bucket(start=closes + timedelta(days=i), price="90" if shallow else "60")
+        for i in range(3)
+    )
+    return evaluate_postevent_entry(
+        item_id=1,
+        as_of=AS_OF,
+        events=(
+            SupplyPoolEvent(
+                event_key="spring-2026",
+                family="spring",
+                known_at=opens - timedelta(days=7),
+                opens_at=opens,
+                closes_at=closes,
+            ),
+        ),
+        historical_buckets=(*pre, *post),
+    )
+
+
+def _scored(policy, signal):
+    window = AS_OF - timedelta(days=7)
+    past = tuple(
+        bucket(start=window + timedelta(days=i), price=str(20 + i)) for i in range(6)
+    )
+    return OpportunityScoreV2(OpportunityV2Config(postevent_entry_policy=policy)).score(
+        item_id=1,
+        as_of=AS_OF,
+        window_start=window,
+        current_market=current(),
+        historical_buckets=past,
+        postevent_entry=signal,
+    )
+
+
+def test_the_default_policy_is_unchanged_by_a_post_event_signal():
+    """The shipped default must produce what it produced before the rule existed."""
+
+    shallow = _postevent_signal(shallow=True)
+    assert shallow.state == "SHALLOW_DRAWDOWN"
+
+    without = _scored("IGNORE", None)
+    with_signal = _scored("IGNORE", shallow)
+
+    assert with_signal == without
+
+
+def test_annotate_adds_reasoning_without_changing_publication():
+    shallow = _postevent_signal(shallow=True)
+    ignored = _scored("IGNORE", shallow)
+    annotated = _scored("ANNOTATE", shallow)
+
+    assert annotated.score_published == ignored.publishable
+    assert annotated.score == ignored.score
+    assert "postevent_entry_drawdown_gate_failed" in annotated.explanation_codes
+    assert "postevent_entry_annotated_only" in annotated.explanation_codes
+
+
+def test_only_the_withholding_policy_unpublishes_a_shallow_drawdown():
+    shallow = _postevent_signal(shallow=True)
+    deep = _postevent_signal(shallow=False)
+    assert deep.state == "ENTRY_CANDIDATE"
+
+    withheld = _scored("WITHHOLD_SHALLOW_DRAWDOWN", shallow)
+    kept = _scored("WITHHOLD_SHALLOW_DRAWDOWN", deep)
+
+    assert withheld.score_published is False
+    assert (
+        "strategy_withheld_for_shallow_post_event_drawdown"
+        in withheld.explanation_codes
+    )
+    assert "strategy_withheld_for_shallow_post_event_drawdown" not in kept.explanation_codes
+
+
+def test_an_unsupported_post_event_policy_is_rejected():
+    import pytest
+
+    from gaijin_market_analytics.opportunities_v2 import OpportunityV2ContractError
+
+    with pytest.raises(OpportunityV2ContractError, match="postevent_entry_policy"):
+        OpportunityV2Config(postevent_entry_policy="ALWAYS_BUY")
