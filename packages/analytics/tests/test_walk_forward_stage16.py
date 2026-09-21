@@ -650,3 +650,147 @@ def test_the_calibration_carries_its_version() -> None:
     assert isinstance(result, DispersionCalibration)
     assert result.version == WALK_FORWARD_CALIBRATION_VERSION
     assert result.status == "INSUFFICIENT_RESOLVED_SAMPLE"
+
+
+# --- support reach ----------------------------------------------------------
+
+
+def test_scaling_a_two_atom_support_can_only_move_the_upper_atom() -> None:
+    """The median convention makes the correction one-sided on an even support.
+
+    With two equally weighted atoms the no-interpolation inverse CDF puts the
+    median on the lower one, so it is the fixed point and widening pushes only
+    upward. This is a real limit of the correction and is asserted rather than
+    worked around: moving the centre would move the published median quantile.
+    """
+
+    support = atoms(((Decimal("0.80"), Decimal("1")), (Decimal("1.25"), Decimal("1"))))
+    widened = scale_support(support, Decimal("3"))
+
+    assert widened[0].ratio == Decimal("0.80")
+    assert widened[1].ratio > Decimal("1.25")
+
+
+def test_the_report_counts_how_often_the_support_reaches_the_realization() -> None:
+    report = evaluate_walk_forward_calibration(
+        resolutions=narrow_pool(),
+        config=WalkForwardCalibrationConfig(
+            minimum_resolved_forecasts=3, minimum_distinct_items=2
+        ),
+    )
+    reach = report.support_reach
+
+    assert reach.trial_count == 9
+    assert reach.support_atom_counts == ((3, 9),)
+    assert (
+        reach.raw_below_count + reach.raw_inside_count + reach.raw_above_count == 9
+    )
+    assert reach.raw_below_count == 3
+    assert reach.raw_above_count == 3
+
+
+def test_a_support_that_never_reaches_the_realization_says_so() -> None:
+    pool = tuple(
+        resolution(
+            item_id=1 + index % 3,
+            event=f"event-{index}",
+            day=index * 5,
+            realized=Decimal("5.00"),
+        )
+        for index in range(9)
+    )
+    report = evaluate_walk_forward_calibration(
+        resolutions=pool,
+        config=WalkForwardCalibrationConfig(
+            minimum_resolved_forecasts=3, minimum_distinct_items=2
+        ),
+    )
+
+    assert report.support_reach.raw_inside_count == 0
+    assert (
+        "walk_forward_support_never_reached_the_realization"
+        in report.explanation_codes
+    )
+    assert (
+        "walk_forward_support_too_coarse_for_dispersion_to_be_the_defect"
+        in report.explanation_codes
+    )
+
+
+def test_a_support_with_an_interior_is_not_flagged_as_too_coarse() -> None:
+    wide = atoms(tuple((Decimal("0.5") + Decimal(index) / Decimal("10"), Decimal("1")) for index in range(10)))
+    pool = tuple(
+        resolution(
+            item_id=1 + index % 3,
+            event=f"event-{index}",
+            day=index * 5,
+            realized=Decimal("0.95"),
+            support=wide,
+        )
+        for index in range(9)
+    )
+    report = evaluate_walk_forward_calibration(resolutions=pool)
+
+    assert report.support_reach.support_atom_counts == ((10, 9),)
+    assert report.support_reach.raw_inside_count == 9
+    assert (
+        "walk_forward_support_too_coarse_for_dispersion_to_be_the_defect"
+        not in report.explanation_codes
+    )
+
+
+# --- location bias ----------------------------------------------------------
+
+
+def test_location_bias_is_measured_on_both_sides_of_the_centre() -> None:
+    report = evaluate_walk_forward_calibration(resolutions=narrow_pool())
+    bias = report.location_bias
+
+    assert bias.trial_count == 9
+    assert bias.below_centre_count == 4
+    assert bias.at_centre_count == 1
+    assert bias.above_centre_count == 4
+    assert bias.median_transform is not None
+    # Exactly one half in exact arithmetic; a third is not representable.
+    assert abs(bias.median_transform - Decimal("0.5")) <= Decimal("1E-20")
+    assert (
+        "walk_forward_realizations_fall_entirely_on_one_side"
+        not in report.explanation_codes
+    )
+
+
+def test_realizations_entirely_on_one_side_are_flagged_as_a_location_defect() -> None:
+    pool = tuple(
+        resolution(
+            item_id=1 + index % 3,
+            event=f"event-{index}",
+            day=index * 5,
+            realized=Decimal("0.10"),
+        )
+        for index in range(9)
+    )
+    report = evaluate_walk_forward_calibration(resolutions=pool)
+    bias = report.location_bias
+
+    assert bias.below_centre_count == 9
+    assert bias.above_centre_count == 0
+    assert bias.median_transform == Decimal("0")
+    assert (
+        "walk_forward_realizations_fall_entirely_on_one_side"
+        in report.explanation_codes
+    )
+
+
+def test_location_bias_is_reported_but_never_corrected() -> None:
+    """No policy and no factor reaches the centre; only the counts are published."""
+
+    samples = observations((Decimal("0.8"), Decimal("1.0"), Decimal("1.25")))
+    calibration = calibrate_dispersion(
+        resolutions=narrow_pool(), as_of=BASE + timedelta(days=200)
+    )
+    applied, _ = resolve_dispersion_observations(
+        observations=samples, calibration=calibration, policy="APPLY"
+    )
+
+    assert calibration.factor is not None
+    assert applied[1].ratio == samples[1].ratio == Decimal("1.0")

@@ -34,6 +34,18 @@ distance between the recomputed transform values and the uniform distribution,
 with ties broken toward ``1`` so that an indifferent sample leaves the forecast
 alone.
 
+The scaling centre is the published median, and the published median is read
+off the inverse CDF without interpolation, which on an even-weighted support
+lands on the lower of the two central atoms. Scaling is therefore *one-sided*
+on a support of two atoms: it can push the upper atom up but cannot pull the
+lower one down. That asymmetry is kept deliberately rather than repaired with
+an interpolated centre, because an interpolated centre would move the 0.50
+quantile the forecast actually published and the whole safety of this
+correction rests on that quantile not moving. A support with no interior is a
+sample size problem, and this module reports it as one: see
+``SupportReachSummary``, which counts how many realizations the support
+reaches before and after scaling.
+
 As with every production-affecting layer in this package, the default policy is
 ``RAW_ONLY``: the calibration is computed and reported but changes nothing
 until an out-of-time comparison says it should.
@@ -60,6 +72,11 @@ DispersionCalibrationStatus = Literal[
     "INSUFFICIENT_DISTINCT_ITEMS",
     "NO_DISPERSION_INFORMATION",
     "CALIBRATED",
+]
+RealizedSupportPosition = Literal[
+    "BELOW_SUPPORT",
+    "INSIDE_SUPPORT",
+    "ABOVE_SUPPORT",
 ]
 DispersionCalibrationPolicy = Literal["RAW_ONLY", "SHADOW", "APPLY"]
 DISPERSION_CALIBRATION_POLICIES: tuple[DispersionCalibrationPolicy, ...] = (
@@ -165,6 +182,14 @@ class WalkForwardCalibrationConfig:
     dispersion_grid_step: Decimal = Decimal("0.25")
     coverage_probabilities: tuple[Decimal, ...] = (Decimal("0.50"), Decimal("0.80"))
     ratio_quantum: Decimal = Decimal("1E-18")
+    # A mid-transform of exactly one half is arithmetically common -- three
+    # equally weighted atoms with the realization on the middle one give
+    # 1/3 + 1/6 -- but a weight share of 1/3 is not representable, so the value
+    # arrives a rounding step below the centre and would be counted as a
+    # downward miss. The tolerance is twenty places out, far past anything a
+    # dozen events can resolve, so it can absorb representation error and
+    # nothing else.
+    centre_tolerance: Decimal = Decimal("1E-20")
 
     def __post_init__(self) -> None:
         for name in ("minimum_resolved_forecasts", "minimum_distinct_items"):
@@ -184,6 +209,7 @@ class WalkForwardCalibrationConfig:
             "dispersion_grid_maximum",
             "dispersion_grid_step",
             "ratio_quantum",
+            "centre_tolerance",
         ):
             value = getattr(self, name)
             if (
@@ -295,6 +321,9 @@ class WalkForwardTrialOutcome:
     calibrated_transform: Decimal
     raw_coverages: tuple[RatioIntervalCoverage, ...]
     calibrated_coverages: tuple[RatioIntervalCoverage, ...]
+    support_atom_count: int
+    raw_position: RealizedSupportPosition
+    calibrated_position: RealizedSupportPosition
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +332,51 @@ class IntervalCoverageSummary:
     trial_count: int
     raw_covered_count: int
     calibrated_covered_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SupportReachSummary:
+    """How often the predictive support contains the realization at all.
+
+    A distribution built from two prior events has two atoms and therefore no
+    interior: every realization is either one of those two numbers or outside
+    the pair. When ``raw_inside_count`` is near zero the forecast is not
+    mis-scaled, it is under-resolved, and widening it is treating the wrong
+    disease. ``calibrated_inside_count`` says whether scaling helped, and on a
+    two-atom support it usually cannot, because scaling about the lower central
+    atom only moves the upper tail.
+    """
+
+    trial_count: int
+    support_atom_counts: tuple[tuple[int, int], ...]
+    raw_below_count: int
+    raw_inside_count: int
+    raw_above_count: int
+    calibrated_below_count: int
+    calibrated_inside_count: int
+    calibrated_above_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LocationBiasSummary:
+    """Whether the realizations sit to one side of the forecast, not just wide.
+
+    Measured, never corrected. A median-preserving dispersion factor cannot
+    move a distribution that is simply in the wrong place, and the correction
+    that could — shifting the centre — is the one degree of freedom able to
+    turn a losing median into a winning one. That is not a knob to fit on a
+    handful of overlapping events, so this summary exists to name the defect
+    and to accumulate the evidence a later decision would need.
+
+    Rows repeat items and events and are not independent, so the counts here
+    describe this cohort and support no significance claim.
+    """
+
+    trial_count: int
+    median_transform: Decimal | None
+    below_centre_count: int
+    at_centre_count: int
+    above_centre_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +395,8 @@ class WalkForwardCalibrationReport:
     calibrated_uniformity_criterion: Decimal | None
     mean_applied_factor: Decimal | None
     coverage: tuple[IntervalCoverageSummary, ...]
+    support_reach: SupportReachSummary
+    location_bias: LocationBiasSummary
     trials: tuple[WalkForwardTrialOutcome, ...]
     explanation_codes: tuple[str, ...]
     version: str = WALK_FORWARD_CALIBRATION_VERSION
@@ -654,6 +730,11 @@ def evaluate_walk_forward_calibration(
                 calibrated_coverages=_coverages(
                     calibrated_support, trial.realized_ratio, cfg.coverage_probabilities
                 ),
+                support_atom_count=len(trial.support),
+                raw_position=_position(trial.support, trial.realized_ratio),
+                calibrated_position=_position(
+                    calibrated_support, trial.realized_ratio
+                ),
             )
         )
 
@@ -682,12 +763,53 @@ def evaluate_walk_forward_calibration(
         )
         for probability in cfg.coverage_probabilities
     )
+    histogram: dict[int, int] = {}
+    for row in trials:
+        histogram[row.support_atom_count] = (
+            histogram.get(row.support_atom_count, 0) + 1
+        )
+    reach = SupportReachSummary(
+        trial_count=len(trials),
+        support_atom_counts=tuple(sorted(histogram.items())),
+        raw_below_count=sum(row.raw_position == "BELOW_SUPPORT" for row in trials),
+        raw_inside_count=sum(row.raw_position == "INSIDE_SUPPORT" for row in trials),
+        raw_above_count=sum(row.raw_position == "ABOVE_SUPPORT" for row in trials),
+        calibrated_below_count=sum(
+            row.calibrated_position == "BELOW_SUPPORT" for row in trials
+        ),
+        calibrated_inside_count=sum(
+            row.calibrated_position == "INSIDE_SUPPORT" for row in trials
+        ),
+        calibrated_above_count=sum(
+            row.calibrated_position == "ABOVE_SUPPORT" for row in trials
+        ),
+    )
+
+    transforms = tuple(row.raw_transform for row in trials)
+    half = Decimal("0.5")
+    tolerance = cfg.centre_tolerance
+    location = LocationBiasSummary(
+        trial_count=len(trials),
+        median_transform=_median(transforms),
+        below_centre_count=sum(value < half - tolerance for value in transforms),
+        at_centre_count=sum(abs(value - half) <= tolerance for value in transforms),
+        above_centre_count=sum(value > half + tolerance for value in transforms),
+    )
+
     codes = ["walk_forward_calibration_report_research_only"]
     if not trials:
         codes.append("walk_forward_no_resolutions_to_replay")
     calibrated_rows = sum(row.factor is not None for row in trials)
     if not calibrated_rows:
         codes.append("walk_forward_no_row_had_a_usable_calibration_sample")
+    if trials and not reach.raw_inside_count:
+        codes.append("walk_forward_support_never_reached_the_realization")
+    if calibrated_rows and reach.calibrated_inside_count == reach.raw_inside_count:
+        codes.append("walk_forward_scaling_moved_no_realization_inside_support")
+    if trials and max(histogram) <= 3:
+        codes.append("walk_forward_support_too_coarse_for_dispersion_to_be_the_defect")
+    if trials and not (location.below_centre_count and location.above_centre_count):
+        codes.append("walk_forward_realizations_fall_entirely_on_one_side")
     return WalkForwardCalibrationReport(
         trial_count=len(trials),
         calibrated_trial_count=calibrated_rows,
@@ -706,6 +828,8 @@ def evaluate_walk_forward_calibration(
             sum(applied, Decimal("0")) / Decimal(len(applied)) if applied else None
         ),
         coverage=coverage,
+        support_reach=reach,
+        location_bias=location,
         trials=tuple(trials),
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
@@ -780,6 +904,26 @@ def _coverages(
             )
         )
     return tuple(results)
+
+
+def _median(values: tuple[Decimal, ...]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal("2")
+
+
+def _position(
+    support: tuple[PredictiveRatioAtom, ...], realized: Decimal
+) -> RealizedSupportPosition:
+    if realized < support[0].ratio:
+        return "BELOW_SUPPORT"
+    if realized > support[-1].ratio:
+        return "ABOVE_SUPPORT"
+    return "INSIDE_SUPPORT"
 
 
 def _inverse_cdf(

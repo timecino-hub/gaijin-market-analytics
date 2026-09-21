@@ -32,6 +32,11 @@ from gaijin_market_analytics.reissue_exposure import (
 from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
     bind_supplemental_reissue_events,
 )
+from gaijin_market_analytics.walk_forward import (
+    ResolvedRatioForecast,
+    WalkForwardCalibrationConfig,
+    evaluate_walk_forward_calibration,
+)
 from gaijin_market_analytics.price_distribution import (
     evaluate_price_distribution_outcome,
     family_ratio_observations,
@@ -53,7 +58,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v7"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v8"
 PRICE_SCALE = Decimal("10000")
 Role = Literal["calibration", "diagnostic", "negative_control"]
 
@@ -387,6 +392,8 @@ def run_manifest(path: Path) -> dict[str, Any]:
             prior_evidence.append(evidence)
 
     decisions: list[dict[str, Any]] = []
+    resolved_item_local: list[ResolvedRatioForecast] = []
+    resolved_family: list[ResolvedRatioForecast] = []
     for example in built:
         family_prior = estimate_family_recovery_prior(
             target_item_id=example.item_id,
@@ -450,6 +457,10 @@ def run_manifest(path: Path) -> dict[str, Any]:
         )
         item_local_score = _score_distribution(item_local_forecast, example.outcome)
         family_score = _score_distribution(family_forecast, example.outcome)
+        _collect_resolution(
+            resolved_item_local, item_local_forecast, item_local_score
+        )
+        _collect_resolution(resolved_family, family_forecast, family_score)
         prediction_exposure = derive_reissue_exposure_features(
             item_id=example.item_id,
             as_of=example.estimate.prediction_as_of,
@@ -486,6 +497,9 @@ def run_manifest(path: Path) -> dict[str, Any]:
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
     metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
     metrics["price_distribution"] = _price_distribution_metrics(decisions)
+    metrics["walk_forward_calibration"] = _walk_forward_metrics(
+        item_local=tuple(resolved_item_local), family=tuple(resolved_family)
+    )
     metrics["negative_control_item_count"] = sum(
         value["role"] == "negative_control" for value in item_reports
     )
@@ -559,6 +573,112 @@ def run_manifest(path: Path) -> dict[str, Any]:
         "decisions": decisions,
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
+    }
+
+
+def _collect_resolution(
+    sink: list[ResolvedRatioForecast], forecast: Any, score: Any
+) -> None:
+    """Record a forecast whose label has closed, for walk-forward calibration.
+
+    Only a scored forecast qualifies: an unscored one either was never
+    available or its outcome had not become observable, and in both cases there
+    is no label to calibrate against.
+    """
+
+    if score is None:
+        return
+    sink.append(
+        ResolvedRatioForecast(
+            item_id=forecast.item_id,
+            event_key=forecast.event_key,
+            horizon_days=forecast.horizon_days,
+            basis=forecast.basis,
+            prediction_as_of=forecast.prediction_as_of,
+            outcome_observed_at=score.outcome_observed_at,
+            realized_ratio=score.realized_ratio,
+            support=forecast.support,
+        )
+    )
+
+
+def _walk_forward_metrics(
+    *,
+    item_local: tuple[ResolvedRatioForecast, ...],
+    family: tuple[ResolvedRatioForecast, ...],
+) -> dict[str, Any]:
+    """Replay dispersion calibration with no row contributing to its own fit.
+
+    Two configurations are reported. ``shipped_defaults`` is what production
+    would do, and on a cohort this size it refuses on every row, which is the
+    honest result rather than a missing one. ``relaxed_thresholds`` lowers the
+    sample floors purely to show the direction the correction moves in; its
+    numbers are a direction, not a licence to switch the policy on.
+    """
+
+    relaxed = WalkForwardCalibrationConfig(
+        minimum_resolved_forecasts=3, minimum_distinct_items=2
+    )
+    return {
+        "note": (
+            "every factor is fitted only on labels that had closed at that "
+            "row's own decision instant; a row never contributes to the fit "
+            "that scores it"
+        ),
+        "item_local": {
+            "resolved_forecast_count": len(item_local),
+            "shipped_defaults": _walk_forward_block(item_local, None),
+            "relaxed_thresholds": _walk_forward_block(item_local, relaxed),
+        },
+        "family_cross_item": {
+            "resolved_forecast_count": len(family),
+            "shipped_defaults": _walk_forward_block(family, None),
+            "relaxed_thresholds": _walk_forward_block(family, relaxed),
+        },
+    }
+
+
+def _walk_forward_block(
+    resolutions: tuple[ResolvedRatioForecast, ...],
+    config: WalkForwardCalibrationConfig | None,
+) -> dict[str, Any]:
+    report = evaluate_walk_forward_calibration(
+        resolutions=resolutions, config=config
+    )
+    return {
+        "trial_count": report.trial_count,
+        "calibrated_trial_count": report.calibrated_trial_count,
+        "status_counts": dict(report.status_counts),
+        "raw_uniformity_criterion": report.raw_uniformity_criterion,
+        "calibrated_uniformity_criterion": report.calibrated_uniformity_criterion,
+        "mean_applied_factor": report.mean_applied_factor,
+        "interval_coverage": [
+            {
+                "nominal_coverage": value.nominal_coverage,
+                "trial_count": value.trial_count,
+                "raw_covered_count": value.raw_covered_count,
+                "calibrated_covered_count": value.calibrated_covered_count,
+            }
+            for value in report.coverage
+        ],
+        "support_reach": {
+            "support_atom_counts": {
+                str(size): count for size, count in report.support_reach.support_atom_counts
+            },
+            "raw_below_count": report.support_reach.raw_below_count,
+            "raw_inside_count": report.support_reach.raw_inside_count,
+            "raw_above_count": report.support_reach.raw_above_count,
+            "calibrated_below_count": report.support_reach.calibrated_below_count,
+            "calibrated_inside_count": report.support_reach.calibrated_inside_count,
+            "calibrated_above_count": report.support_reach.calibrated_above_count,
+        },
+        "location_bias": {
+            "median_transform": report.location_bias.median_transform,
+            "below_centre_count": report.location_bias.below_centre_count,
+            "at_centre_count": report.location_bias.at_centre_count,
+            "above_centre_count": report.location_bias.above_centre_count,
+        },
+        "explanation_codes": list(report.explanation_codes),
     }
 
 

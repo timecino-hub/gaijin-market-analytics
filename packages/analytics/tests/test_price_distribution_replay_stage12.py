@@ -126,7 +126,7 @@ def report(tmp_path_factory) -> dict:
 
 
 def test_replay_publishes_item_local_and_family_price_distributions(report):
-    assert report["schema_version"] == "named_recovery_cohort_report_v7"
+    assert report["schema_version"] == "named_recovery_cohort_report_v8"
     decisions = report["decisions"]
     assert decisions
     item_local = [
