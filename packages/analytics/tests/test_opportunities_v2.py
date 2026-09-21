@@ -343,7 +343,7 @@ def test_annotate_adds_reasoning_without_changing_publication():
     ignored = _scored("IGNORE", shallow)
     annotated = _scored("ANNOTATE", shallow)
 
-    assert annotated.score_published == ignored.publishable
+    assert annotated.score_published == ignored.score_published
     assert annotated.score == ignored.score
     assert "postevent_entry_drawdown_gate_failed" in annotated.explanation_codes
     assert "postevent_entry_annotated_only" in annotated.explanation_codes
