@@ -509,12 +509,14 @@ BID_CONFIG = BottomFishingConfig(
 )
 
 
-def test_a_filled_bid_is_bought_at_the_bid_not_at_the_days_price() -> None:
-    """The whole point of resting a bid: you pay your own price.
+def test_the_daily_proxy_can_never_fill_at_the_bid() -> None:
+    """A structural consequence worth pinning, not a defect of this case.
 
-    Baseline is 100, so the anchor is 70 and the bid 73.50. The day that
-    reaches it traded at 72 on average, and a market buyer would have paid 72;
-    the resting bid is filled at 73.50 because that is the price it rested at.
+    Under the daily proxy the fill condition is that the day's price reached
+    the bid, so the day's price is at or below it, so ``min(bid, price)`` is
+    always the price. The bid rule therefore degenerates to a drawdown trigger
+    at a different threshold, and only an intraday low can express a bid that
+    someone sold down into.
     """
 
     buckets = path(["90", "85", "72", "80"])
@@ -523,8 +525,8 @@ def test_a_filled_bid_is_bought_at_the_bid_not_at_the_days_price() -> None:
     assert result.status == "ENTERED"
     assert result.pre_event_median == Decimal("100")
     assert result.bid_price == Decimal("73.500")
-    assert result.filled_at_bid is True
-    assert result.entry_price == Decimal("73.500")
+    assert result.filled_at_bid is False
+    assert result.entry_price == Decimal("72")
     assert result.days_waited == 2
 
 
@@ -559,12 +561,12 @@ def test_the_same_path_crosses_the_spread_in_mode_b() -> None:
     )
 
 
-def test_mode_b_still_fills_at_the_bid_when_the_bid_is_reached() -> None:
+def test_mode_b_takes_the_reached_price_rather_than_waiting_out_the_window() -> None:
     buckets = path(["90", "72", "80", "85"])
     forced = entry("WINDOWED_BID_FORCED", buckets, config=BID_CONFIG)
 
-    assert forced.filled_at_bid is True
-    assert forced.entry_price == Decimal("73.500")
+    assert forced.entry_price == Decimal("72")
+    assert forced.days_waited == 1
 
 
 def test_the_window_bounds_how_long_the_bid_rests() -> None:
@@ -605,7 +607,12 @@ def test_the_hourly_proxy_fills_where_the_daily_average_does_not() -> None:
 
     assert daily.status == "NOT_TRIGGERED"
     assert hourly.status == "ENTERED"
+    # This is the only shape that is genuinely a resting bid: an hour traded
+    # down into it while the day as a whole stayed above, so the fill is at the
+    # bid and strictly better than any market buyer got that day.
+    assert hourly.filled_at_bid is True
     assert hourly.entry_price == Decimal("73.500")
+    assert hourly.entry_price < Decimal("94")
     assert (
         "rerelease_bottom_fishing_bid_filled_on_hourly_low"
         in hourly.explanation_codes
@@ -641,8 +648,9 @@ def test_a_wider_tolerance_fills_more_often_and_pays_more() -> None:
 
     assert tight.status == "NOT_TRIGGERED"
     assert loose.status == "ENTERED"
-    assert loose.entry_price == Decimal("77.000")
-    assert loose.entry_price > Decimal("70")
+    # 76 cleared the looser 77.00 bid and not the tight 70.00 one, and the
+    # fill is at the market price it cleared rather than at the bid.
+    assert loose.entry_price == Decimal("76")
 
 
 def test_an_unsupported_fill_proxy_is_rejected() -> None:
@@ -653,3 +661,25 @@ def test_an_unsupported_fill_proxy_is_rejected() -> None:
 def test_a_negative_tolerance_is_rejected() -> None:
     with pytest.raises(BottomFishingError, match="bid_tolerance"):
         BottomFishingConfig(bid_tolerance=Decimal("-0.01"))
+
+
+def test_a_bid_above_the_market_pays_the_market_not_the_bid() -> None:
+    """A resting order cannot fill above the best offer.
+
+    The event has already driven the price to 55 while the bid rests at 73.50.
+    Crediting a fill at 73.50 would report the strategy paying more than any
+    buyer had to, and would make an overpay look like a discount.
+    """
+
+    buckets = path(["55", "58", "60"])
+    result = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+
+    assert result.status == "ENTERED"
+    assert result.bid_price == Decimal("73.500")
+    assert result.filled_at_bid is False
+    assert result.entry_price == Decimal("55")
+    assert result.entry_discount == Decimal("0")
+    assert (
+        "rerelease_bottom_fishing_bid_sat_above_the_market_and_paid_it"
+        in result.explanation_codes
+    )

@@ -417,8 +417,16 @@ def resolve_bottom_fishing_entry(
             None,
         )
         if chosen is not None:
-            filled_at_bid = True
-            codes.append(f"rerelease_bottom_fishing_bid_filled_on_{cfg.bid_fill_proxy.lower()}")
+            # A resting bid can never fill above the market. When the event has
+            # already driven the price below the anchor, the bid is simply a
+            # worse market order, and modelling it as a fill at the bid would
+            # credit the strategy with paying more than anyone had to.
+            filled_at_bid = bid_price < chosen.vwap_price
+            codes.append(
+                f"rerelease_bottom_fishing_bid_filled_on_{cfg.bid_fill_proxy.lower()}"
+                if filled_at_bid
+                else "rerelease_bottom_fishing_bid_sat_above_the_market_and_paid_it"
+            )
         elif rule == "WINDOWED_BID_FORCED":
             # The window expired unfilled. Mode B crosses the spread on the
             # last day it can rather than give up the position, and pays the
