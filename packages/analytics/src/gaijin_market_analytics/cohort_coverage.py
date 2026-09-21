@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Iterable
@@ -170,6 +171,18 @@ def suggest_catalog_vehicle_names(
     These are suggestions for an operator to confirm, never an automatic
     binding: a wrong binding would silently attach one vehicle's history to
     another vehicle's supply events.
+
+    The catalog's own name resolution is consulted first, because it knows
+    about spellings token overlap cannot see. ``T-34E`` resolves through the
+    catalog's alias table to ``Т-34E``, whose name is written with a Cyrillic
+    Te; sharing no ASCII tokens with it, the overlap score buries the correct
+    answer under unrelated vehicles. An exact resolution is therefore offered
+    first, at a score of one.
+
+    Token overlap remains what it is: a fuzzy match on a designation. It
+    cannot tell two aircraft that share a designation apart, and a fragment
+    matching across nations or manufacturers is not identity. That is why
+    these stay suggestions.
     """
 
     if limit <= 0:
@@ -178,6 +191,11 @@ def suggest_catalog_vehicle_names(
     tokens = _slug_tokens(item_key)
     if not tokens:
         return ()
+    exact: list[str] = []
+    for probe in _resolution_probes(item_key):
+        name, status = resolved.resolve_vehicle_name(probe)
+        if status == "MATCHED" and name is not None and name not in exact:
+            exact.append(name)
     scored: list[tuple[float, str]] = []
     for name in _catalog_vehicle_names(resolved):
         candidate = _slug_tokens(name)
@@ -189,7 +207,34 @@ def suggest_catalog_vehicle_names(
         score = len(shared) / len(tokens | candidate)
         scored.append((score, name))
     scored.sort(key=lambda value: (-value[0], value[1]))
-    return tuple((name, score) for score, name in scored[:limit])
+    ranked = [(name, 1.0) for name in exact]
+    ranked.extend(
+        (name, score) for score, name in scored if name not in set(exact)
+    )
+    return tuple(ranked[:limit])
+
+
+def _resolution_probes(item_key: str) -> tuple[str, ...]:
+    """Spellings of an item key worth asking the catalog to resolve exactly.
+
+    Marketplace keys come in two shapes: an operator label that is already the
+    vehicle name, and a slug like ``id50361_f_6c_china``. Both are tried as
+    written, and the slug also without its numeric prefix, because the prefix
+    is a marketplace id and never part of a name.
+    """
+
+    probes = [item_key, item_key.strip()]
+    stripped = re.sub(r"^id\d+_", "", item_key.strip())
+    if stripped != item_key.strip():
+        probes.append(stripped)
+        probes.append(stripped.replace("_", " "))
+    probes.append(re.sub(r"^items_", "", item_key.strip()))
+    seen: list[str] = []
+    for probe in probes:
+        value = probe.strip()
+        if value and value not in seen:
+            seen.append(value)
+    return tuple(seen)
 
 
 def _catalog_vehicle_names(catalog: SupplyPoolCatalog) -> tuple[str, ...]:

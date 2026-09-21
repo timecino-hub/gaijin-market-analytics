@@ -156,3 +156,43 @@ def test_slug_suggestions_return_nothing_for_an_unrecognizable_key():
     assert suggest_catalog_vehicle_names(item_key="12345") == ()
     with pytest.raises(CohortCoverageError):
         suggest_catalog_vehicle_names(item_key="kungstiger", limit=0)
+
+
+def test_a_name_behind_a_catalog_alias_is_suggested_first() -> None:
+    """The catalog writes Т-34E with a Cyrillic Te and aliases the ASCII form.
+
+    Token overlap shares nothing with that spelling, so before the catalog's
+    own resolution was consulted the correct answer sat below unrelated
+    vehicles and an operator reading the top suggestion would have bound the
+    wrong tank.
+    """
+
+    suggestions = suggest_catalog_vehicle_names(item_key="T-34E")
+
+    assert suggestions[0][0] == "Т-34E"
+    assert suggestions[0][1] == 1.0
+
+
+def test_fuzzy_suggestions_still_rank_below_an_exact_resolution() -> None:
+    suggestions = suggest_catalog_vehicle_names(item_key="T-34E", limit=3)
+
+    assert [score for _, score in suggestions[1:]] == sorted(
+        (score for _, score in suggestions[1:]), reverse=True
+    )
+    assert all(score < 1.0 for _, score in suggestions[1:])
+
+
+def test_a_designation_shared_across_nations_is_not_resolved_exactly() -> None:
+    """What the fix cannot do, asserted so nobody expects it to.
+
+    ``id50361_f_6c_china`` is the Chinese J-6C. ``F-6C-10-NA`` is a
+    reconnaissance Mustang built by North American Aviation. They share a
+    designation fragment and nothing else, and no amount of string matching
+    can tell them apart, so the catalog offers no exact resolution and every
+    suggestion stays a fuzzy one for an operator to reject.
+    """
+
+    suggestions = suggest_catalog_vehicle_names(item_key="id50361_f_6c_china")
+
+    assert suggestions
+    assert all(score < 1.0 for _, score in suggestions)
