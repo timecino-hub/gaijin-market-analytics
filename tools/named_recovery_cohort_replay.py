@@ -79,7 +79,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v12"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v13"
 # A short hold and a long one: entry timing and holding length are
 # different levers and reporting only one would hide their interaction.
 BOTTOM_FISHING_HOLDS = (30, 90)
@@ -655,10 +655,29 @@ def _close_entry_allocation(decisions: list[dict[str, Any]]) -> dict[str, Any]:
             "holds compete for it and a candidate that arrives with the "
             "account committed is recorded as skipped rather than dropped."
         ),
-        "distribution_source": "price_distribution_item_local",
+        "distribution_sources": {
+            "item_local": "the item's own prior recovery ratios; best scored",
+            "family": (
+                "same-family cross-item ratios; available on more events and "
+                "scored worse (Brier 0.291 against 0.214)"
+            ),
+            "item_local_then_family": (
+                "the production rule: prefer the item's own evidence and fall "
+                "back to the family only where it does not exist"
+            ),
+        },
     }
+    for source in ("item_local", "family", "item_local_then_family"):
+        result[source] = _close_entry_allocation_source(decisions, source)
+    return result
+
+
+def _close_entry_allocation_source(
+    decisions: list[dict[str, Any]], source: str
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for horizon in (30, 60, 90, 180):
-        candidates = _allocation_candidates(decisions, horizon)
+        candidates = _allocation_candidates(decisions, horizon, source)
         comparison = compare_allocation_rules(candidates=candidates)
         result[f"horizon_{horizon}d"] = {
             "candidate_count": comparison.candidate_count,
@@ -685,17 +704,34 @@ def _close_entry_allocation(decisions: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+_ALLOCATION_SOURCE_KEYS = {
+    "item_local": ("price_distribution_item_local",),
+    "family": ("price_distribution_family",),
+    "item_local_then_family": (
+        "price_distribution_item_local",
+        "price_distribution_family",
+    ),
+}
+
+
 def _allocation_candidates(
-    decisions: list[dict[str, Any]], horizon: int
+    decisions: list[dict[str, Any]], horizon: int, source: str
 ) -> list[CloseEntryCandidate]:
-    cfg = AllocationConfig()
+    keys = _ALLOCATION_SOURCE_KEYS[source]
     rows: list[CloseEntryCandidate] = []
     for value in decisions:
         if value["horizon_days"] != horizon:
             continue
-        forecast = value["price_distribution_item_local"]
         outcome = value["outcome"]
-        if not forecast["available"] or forecast["anchor_price"] is None:
+        forecast = next(
+            (
+                value[key]
+                for key in keys
+                if value[key]["available"] and value[key]["anchor_price"] is not None
+            ),
+            None,
+        )
+        if forecast is None:
             continue
         entry_price = forecast["entry_proxy_price"]
         anchor = forecast["anchor_price"]
