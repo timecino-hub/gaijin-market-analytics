@@ -138,14 +138,14 @@ def test_capture_without_a_binding_is_never_bound_automatically(tmp_path: Path):
     )
 
 
-def test_binding_to_a_vehicle_outside_the_catalog_is_rejected(tmp_path: Path):
+def test_binding_to_a_vehicle_outside_the_reissue_catalog_is_flagged(tmp_path: Path):
     _capture(tmp_path)
     binding = _binding(
         tmp_path,
         [{"item_key": KUNGSTIGER_KEY, "vehicle_name": "Not A Catalogued Vehicle"}],
     )
     capture = _plan(tmp_path, binding=binding)["captures"][0]
-    assert capture["verdict"] == "UNBOUND_VEHICLE"
+    assert capture["verdict"] == "NO_REISSUE_CATALOG_BINDING"
     assert (
         "named_history_not_bound_to_supply_catalog" in capture["explanation_codes"]
     )

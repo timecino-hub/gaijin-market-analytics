@@ -148,6 +148,7 @@ class OpportunityV2Config:
         if self.channel_coverage_policy not in {
             "IGNORE",
             "WITHHOLD_UNCATALOGUED",
+            "WITHHOLD_UNMODELLED_SUPPLY",
             "WITHHOLD_UNREVIEWED",
         }:
             raise OpportunityV2ContractError("unsupported channel_coverage_policy.")

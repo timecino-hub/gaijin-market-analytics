@@ -198,7 +198,11 @@ def build_plan(
                 "event, or a negative control that is not expected to bind"
             ),
             "BINDING_REQUIRED": "valid, but no operator binding to a catalogued vehicle",
-            "UNBOUND_VEHICLE": "bound name does not match the supply-pool catalog",
+            "NO_REISSUE_CATALOG_BINDING": (
+                "valid and reviewed, but the vehicle has no historical re-release "
+                "pool membership; a first-issue limited-event vehicle legitimately "
+                "has none, so check the channel coverage before assuming a typo"
+            ),
             "EVENT_NOT_COMPLETED": (
                 "bound, but every catalogued supply event is still open; re-run "
                 "after it closes rather than recapturing"
@@ -345,7 +349,7 @@ def _review_capture(
         if coverage.match_status == "MATCHED":
             codes.append("negative_control_unexpectedly_binds_to_catalog")
     elif coverage.match_status != "MATCHED":
-        verdict = "UNBOUND_VEHICLE"
+        verdict = "NO_REISSUE_CATALOG_BINDING"
     elif coverage.fully_usable_event_count == 0:
         # A vehicle whose only supply events are still open has nothing to
         # measure yet, which is a reason to come back rather than to recapture.
@@ -382,7 +386,7 @@ def _review_capture(
         fully_usable_event_count=coverage.fully_usable_event_count,
         supply_channel_coverage=channels.coverage,
         supply_channels_reviewed=channels.reviewed,
-        unmodelled_supply_channels=channels.unmodelled_channels,
+        unmodelled_supply_channels=channels.unmodelled_supply_channels,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
 
