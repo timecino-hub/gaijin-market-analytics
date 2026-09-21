@@ -140,7 +140,7 @@ def test_named_recovery_tool_accepts_gaijin_trade_history_v1(tmp_path: Path) -> 
         env=env,
     )
     report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["schema_version"] == "named_recovery_cohort_report_v5"
+    assert report["schema_version"] == "named_recovery_cohort_report_v6"
     source = report["items"][0]["source"]
     assert source["history_source_schema"] == "gaijin_trade_history_v1"
     assert source["source_item_key"] == "unmatched-test-item"

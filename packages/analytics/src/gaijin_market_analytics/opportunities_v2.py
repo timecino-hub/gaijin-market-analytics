@@ -11,6 +11,11 @@ from .historical_trades import (
     aggregate_trade_evidence_by_utc_day,
     select_historical_trade_evidence,
 )
+from .absorption_exit import (
+    AbsorptionWithholdPolicy,
+    SupplyAbsorptionExitSnapshot,
+    resolve_absorption_withholding,
+)
 from .manual_context import (
     ManualMarketContextObservation,
     context_comparability,
@@ -80,6 +85,7 @@ class OpportunityV2Config:
     risk_penalty_weight: Decimal = Decimal("0.20")
     fee_rate: Decimal = Decimal("0.15")
     currency_quantum: Decimal = Decimal("0.01")
+    absorption_withhold_policy: AbsorptionWithholdPolicy = "LEGACY_ONLY"
 
     def __post_init__(self) -> None:
         if self.maximum_current_market_age <= timedelta(0):
@@ -127,6 +133,12 @@ class OpportunityV2Config:
             raise OpportunityV2ContractError("fee_rate must be in [0, 1).")
         if self.currency_quantum <= Decimal("0"):
             raise OpportunityV2ContractError("currency_quantum must be positive.")
+        if self.absorption_withhold_policy not in {
+            "LEGACY_ONLY",
+            "EVIDENCE_EXTENDS_LEGACY",
+            "EVIDENCE_REPLACES_LEGACY",
+        }:
+            raise OpportunityV2ContractError("unsupported absorption_withhold_policy.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,10 +227,16 @@ class OpportunityScoreV2:
     reference_sell_method = "context_weighted_historical_trade_median"
     reference_sell_version = "2.0.0"
 
-    _WITHHELD_SUPPLY_STATES = {
+    # Pre-close regimes are withheld unconditionally: supply is still being
+    # announced or injected, so no post-event absorption evidence exists yet.
+    # ``POST_EVENT_ABSORPTION`` is handled separately because it is the one
+    # regime whose duration can be decided from the item's own trade evidence.
+    _PRE_CLOSE_WITHHELD_SUPPLY_STATES = {
         "SEASONAL_WINDOW_APPROACHING",
         "ANNOUNCED_PRE_OPEN",
         "ACTIVE_SUPPLY_INJECTION",
+    }
+    _WITHHELD_SUPPLY_STATES = _PRE_CLOSE_WITHHELD_SUPPLY_STATES | {
         "POST_EVENT_ABSORPTION",
     }
 
@@ -236,6 +254,7 @@ class OpportunityScoreV2:
         supply_cycle: SupplyCycleFeatures | None = None,
         reissue_exposure: ReissueExposureFeatures | None = None,
         manual_context_observations: Iterable[ManualMarketContextObservation] = (),
+        absorption_exit: SupplyAbsorptionExitSnapshot | None = None,
     ) -> OpportunityScoreV2Result:
         as_of = _utc(as_of, "as_of")
         window_start = _utc(window_start, "window_start")
@@ -245,6 +264,13 @@ class OpportunityScoreV2:
             raise OpportunityV2ContractError("supply_cycle item_id does not match.")
         if reissue_exposure is not None and reissue_exposure.item_id != item_id:
             raise OpportunityV2ContractError("reissue_exposure item_id does not match.")
+        if absorption_exit is not None:
+            if absorption_exit.item_id != item_id:
+                raise OpportunityV2ContractError("absorption_exit item_id does not match.")
+            if absorption_exit.as_of > as_of:
+                raise OpportunityV2ContractError(
+                    "absorption_exit must not contain future information."
+                )
         context_observations = tuple(manual_context_observations)
         if any(value.item_id != item_id for value in context_observations):
             raise OpportunityV2ContractError("manual context item_id does not match.")
@@ -334,7 +360,20 @@ class OpportunityScoreV2:
             < features.historical_context_effective_day_count
         ):
             codes.append("historical_context_quality_discount_applied")
-        if cycle_state in self._WITHHELD_SUPPLY_STATES:
+        absorption_decision = resolve_absorption_withholding(
+            legacy_absorption_active=cycle_state == "POST_EVENT_ABSORPTION",
+            snapshot=absorption_exit,
+            policy=self.config.absorption_withhold_policy,
+        )
+        if (
+            absorption_exit is not None
+            or self.config.absorption_withhold_policy != "LEGACY_ONLY"
+        ):
+            codes.extend(absorption_decision.explanation_codes)
+        if (
+            cycle_state in self._PRE_CLOSE_WITHHELD_SUPPLY_STATES
+            or absorption_decision.withhold
+        ):
             codes.append("strategy_withheld_for_supply_cycle_regime")
 
         publishable = not any(

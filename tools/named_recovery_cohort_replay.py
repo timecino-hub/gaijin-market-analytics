@@ -19,6 +19,10 @@ from gaijin_market_analytics.hierarchical_recovery import (
     estimate_family_recovery_prior,
     return_outcome_evidence,
 )
+from gaijin_market_analytics.absorption_exit import (
+    ABSORPTION_WITHHOLD_POLICIES,
+    measure_supply_absorption_exit,
+)
 from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
 from gaijin_market_analytics.reissue_exposure import (
     derive_reissue_exposure_features,
@@ -43,7 +47,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v5"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v6"
 PRICE_SCALE = Decimal("10000")
 Role = Literal["calibration", "diagnostic", "negative_control"]
 
@@ -238,6 +242,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
         recovery_by_key = {value.event_key: value for value in recoveries.recoveries}
         event_by_key = {value.event_key: value for value in events}
         current_scarcity_rebuild = None
+        current_absorption_exit = None
         completed_events = tuple(value for value in events if value.closes_at <= spec.as_of)
         if completed_events:
             latest_event = max(completed_events, key=lambda value: (value.closes_at, value.event_key))
@@ -261,6 +266,13 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 as_of=spec.as_of,
                 next_same_family_event_opens_at=latest_next_open,
                 reissue_exposure=latest_exposure,
+            )
+            current_absorption_exit = measure_supply_absorption_exit(
+                item_id=spec.item_id,
+                event=latest_event,
+                historical_buckets=buckets,
+                as_of=spec.as_of,
+                next_same_family_event_opens_at=latest_next_open,
             )
 
         for event_key, recovery in recovery_by_key.items():
@@ -291,6 +303,13 @@ def run_manifest(path: Path) -> dict[str, Any]:
                     next_same_family_event_opens_at=next_open,
                     reissue_exposure=snapshot_exposure,
                 )
+                absorption = measure_supply_absorption_exit(
+                    item_id=spec.item_id,
+                    event=event,
+                    historical_buckets=buckets,
+                    as_of=checkpoint.observed_at,
+                    next_same_family_event_opens_at=next_open,
+                )
                 forward = evaluate_scarcity_rebuild_forward_outcome(
                     snapshot=snapshot,
                     historical_buckets=buckets,
@@ -307,6 +326,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
                         "family": event.family,
                         "checkpoint_horizon_days": checkpoint.horizon_days,
                         "snapshot": asdict(snapshot),
+                        "absorption_exit": asdict(absorption),
                         "forward_60d_outcome": asdict(forward),
                     }
                 )
@@ -319,6 +339,11 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 "current_scarcity_rebuild": (
                     asdict(current_scarcity_rebuild)
                     if current_scarcity_rebuild is not None
+                    else None
+                ),
+                "current_absorption_exit": (
+                    asdict(current_absorption_exit)
+                    if current_absorption_exit is not None
                     else None
                 ),
                 "walk_forward_example_count": sum(
@@ -403,6 +428,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
 
     metrics = _metrics(decisions)
     metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
+    metrics["absorption_exit"] = _absorption_exit_metrics(scarcity_examples)
     metrics["negative_control_item_count"] = sum(
         value["role"] == "negative_control" for value in item_reports
     )
@@ -445,12 +471,128 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 "60-day historical trade VWAP proxy after 15% fee; evaluation-only, "
                 "never used to construct the point-in-time scarcity snapshot"
             ),
+            "absorption_exit_semantics": (
+                "stopping-condition regime test: absorption is declared over only when "
+                "the activity spike has decayed toward the pre-event baseline and the "
+                "post-event price is neither making fresh lows nor still trending down, "
+                "each held across a dwell window of consecutive observed UTC days; it "
+                "measures regime, never recovery level and never expected return"
+            ),
+            "absorption_exit_policy_comparison": (
+                "LEGACY_ONLY reproduces the fixed one-event-duration withholding window; "
+                "EVIDENCE_EXTENDS_LEGACY can only withhold longer; "
+                "EVIDENCE_REPLACES_LEGACY lets confirmed evidence also release inside "
+                "the legacy window"
+            ),
             "network_access": False,
         },
         "items": item_reports,
         "decisions": decisions,
         "scarcity_rebuild_examples": scarcity_examples,
         "metrics": metrics,
+    }
+
+
+def _absorption_exit_metrics(examples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize absorption-exit states and what each withholding policy would do.
+
+    Rows repeat item/event/horizon combinations, so every share below is
+    descriptive support, not an independent estimate.
+    """
+
+    by_state: dict[str, list[dict[str, Any]]] = {}
+    legacy_agreement = {
+        "legacy_active_evidence_active": 0,
+        "legacy_active_evidence_exited": 0,
+        "legacy_expired_evidence_active": 0,
+        "legacy_expired_evidence_exited": 0,
+        "evidence_undetermined": 0,
+    }
+    for value in examples:
+        snapshot = value["absorption_exit"]
+        by_state.setdefault(snapshot["state"], []).append(value)
+        evidence_active = _evidence_absorption_active(snapshot["state"])
+        if evidence_active is None:
+            legacy_agreement["evidence_undetermined"] += 1
+        else:
+            legacy_side = (
+                "legacy_active"
+                if snapshot["legacy_absorption_active"]
+                else "legacy_expired"
+            )
+            evidence_side = "evidence_active" if evidence_active else "evidence_exited"
+            legacy_agreement[f"{legacy_side}_{evidence_side}"] += 1
+
+    state_rows = [
+        {
+            "state": state,
+            "example_count": len(by_state[state]),
+            **_forward_outcome_summary(by_state[state]),
+        }
+        for state in sorted(by_state)
+    ]
+    policy_rows = []
+    for policy in ABSORPTION_WITHHOLD_POLICIES:
+        published = [
+            value
+            for value in examples
+            if not _policy_withhold(policy, value["absorption_exit"])
+        ]
+        policy_rows.append(
+            {
+                "policy": policy,
+                "withheld_example_count": len(examples) - len(published),
+                "published_example_count": len(published),
+                **_forward_outcome_summary(published),
+            }
+        )
+    return {
+        "example_count": len(examples),
+        "state_metrics": state_rows,
+        "legacy_agreement": legacy_agreement,
+        "policy_metrics": policy_rows,
+        "interpretation": (
+            "descriptive only; a policy that publishes fewer but better checkpoints is "
+            "a candidate, not an accepted production change"
+        ),
+    }
+
+
+def _evidence_absorption_active(state: str) -> bool | None:
+    if state == "ABSORPTION_ACTIVE":
+        return True
+    if state in {"ABSORPTION_EXIT_CONFIRMED", "NO_CLEAR_SUPPLY_SHOCK"}:
+        return False
+    return None
+
+
+def _policy_withhold(policy: str, snapshot: dict[str, Any]) -> bool:
+    legacy_active = bool(snapshot["legacy_absorption_active"])
+    evidence_active = _evidence_absorption_active(snapshot["state"])
+    if policy == "LEGACY_ONLY":
+        return legacy_active
+    if policy == "EVIDENCE_EXTENDS_LEGACY":
+        return legacy_active or evidence_active is True
+    if evidence_active is None:
+        return legacy_active
+    return evidence_active
+
+
+def _forward_outcome_summary(values: list[dict[str, Any]]) -> dict[str, Any]:
+    rois = tuple(
+        value["forward_60d_outcome"]["net_roi"]
+        for value in values
+        if value["forward_60d_outcome"]["outcome_available"]
+        and value["forward_60d_outcome"]["net_roi"] is not None
+    )
+    profitable = sum(value > Decimal("0") for value in rois)
+    return {
+        "forward_outcome_count": len(rois),
+        "forward_profitable_after_fee_count": profitable,
+        "forward_profitability_support_share": (
+            Decimal(profitable) / Decimal(len(rois)) if rois else None
+        ),
+        "median_forward_net_roi": _decimal_median(rois),
     }
 
 
