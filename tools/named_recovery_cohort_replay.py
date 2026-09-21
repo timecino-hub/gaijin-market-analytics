@@ -1,0 +1,793 @@
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Literal
+
+from gaijin_market_analytics.family_prior_generalization import (
+    audit_family_prior_generalization,
+    classify_generalization_aware_decision,
+)
+from gaijin_market_analytics.hierarchical_recovery import (
+    HistoricalReturnOutcomeEvidence,
+    corroborate_post_rerelease_signal,
+    evaluate_sparse_baseline_family_fallback,
+    estimate_family_recovery_prior,
+    return_outcome_evidence,
+)
+from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
+from gaijin_market_analytics.reissue_exposure import (
+    derive_reissue_exposure_features,
+    merge_reissue_exposure_events,
+    reissue_events_from_supply_pool,
+)
+from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
+    bind_supplemental_reissue_events,
+)
+from gaijin_market_analytics.post_rerelease import (
+    estimate_post_rerelease_reference,
+    evaluate_post_rerelease_outcome,
+    first_post_event_trade_proxy,
+)
+from gaijin_market_analytics.scarcity_rebuild import (
+    evaluate_scarcity_rebuild_forward_outcome,
+    measure_scarcity_rebuild,
+)
+from gaijin_market_analytics.supply_cycle_impacts import analyze_item_supply_cycle_impacts
+from gaijin_market_analytics.supply_cycle_recovery import analyze_item_supply_recovery
+from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_CATALOG
+
+
+MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v5"
+PRICE_SCALE = Decimal("10000")
+Role = Literal["calibration", "diagnostic", "negative_control"]
+
+
+class CohortReplayError(ValueError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ItemSpec:
+    item_id: int
+    item_name: str
+    history_path: Path
+    as_of: datetime
+    role: Role
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltExample:
+    item_id: int
+    item_name: str
+    role: Role
+    event_key: str
+    family: str
+    horizon_days: int
+    estimate: Any
+    outcome: Any
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Offline named-item supply-return cohort replay. Reads only local JSON "
+            "history exports and never accesses Gaijin or any network endpoint."
+        )
+    )
+    parser.add_argument("manifest", type=Path)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    report = run_manifest(args.manifest)
+    payload = json.dumps(_normalize(report), ensure_ascii=False, indent=2) + "\n"
+    if args.output is None:
+        print(payload, end="")
+    else:
+        args.output.write_text(payload, encoding="utf-8")
+
+
+def run_manifest(path: Path) -> dict[str, Any]:
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise CohortReplayError("unsupported manifest schema_version")
+    raw_items = manifest.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise CohortReplayError("manifest items must be a non-empty list")
+    specs = tuple(_parse_spec(value, path.parent) for value in raw_items)
+    if len({value.item_id for value in specs}) != len(specs):
+        raise CohortReplayError("item_id values must be unique")
+
+    built: list[BuiltExample] = []
+    scarcity_examples: list[dict[str, Any]] = []
+    item_reports: list[dict[str, Any]] = []
+    reissue_events_by_item: dict[int, tuple[Any, ...]] = {}
+    for spec in specs:
+        buckets, source_meta = _load_history(spec)
+        facts = DEFAULT_SUPPLY_POOL_CATALOG.bind_item(
+            item_id=spec.item_id,
+            item_name=spec.item_name,
+        )
+        supply_reissues = reissue_events_from_supply_pool(
+            item_id=spec.item_id,
+            events=facts.events,
+            memberships=facts.memberships,
+        )
+        supplemental_reissues = bind_supplemental_reissue_events(
+            item_id=spec.item_id,
+            item_name=spec.item_name,
+        )
+        reissue_events = merge_reissue_exposure_events(
+            supply_reissues, supplemental_reissues
+        )
+        reissue_events_by_item[spec.item_id] = reissue_events
+        current_exposure = derive_reissue_exposure_features(
+            item_id=spec.item_id,
+            as_of=spec.as_of,
+            events=reissue_events,
+        )
+        item_report: dict[str, Any] = {
+            "item_id": spec.item_id,
+            "item_name": spec.item_name,
+            "role": spec.role,
+            "catalog_match_status": facts.match_status,
+            "matched_catalog_name": facts.matched_catalog_name,
+            "membership_count": len(facts.memberships),
+            "reissue_exposure_current": asdict(current_exposure),
+            "source": source_meta,
+        }
+        if facts.match_status != "MATCHED" or not facts.memberships:
+            item_report.update(
+                {
+                    "event_impacts": [],
+                    "recovery_profile": None,
+                    "walk_forward_example_count": 0,
+                    "explanation_codes": ["no_tradeable_supply_pool_history_bound"],
+                }
+            )
+            item_reports.append(item_report)
+            continue
+
+        impacts = analyze_item_supply_cycle_impacts(
+            item_id=spec.item_id,
+            events=facts.events,
+            memberships=facts.memberships,
+            historical_buckets=buckets,
+            as_of=spec.as_of,
+        )
+        recoveries = analyze_item_supply_recovery(
+            item_id=spec.item_id,
+            events=facts.events,
+            memberships=facts.memberships,
+            historical_buckets=buckets,
+            as_of=spec.as_of,
+        )
+        member_keys = {value.event_key for value in facts.memberships}
+        events = tuple(
+            sorted(
+                (value for value in facts.events if value.event_key in member_keys),
+                key=lambda value: (value.opens_at, value.event_key),
+            )
+        )
+        for index, event in enumerate(events):
+            entry = first_post_event_trade_proxy(
+                event=event,
+                historical_buckets=buckets,
+                as_of=spec.as_of,
+            )
+            if entry is None:
+                continue
+            prediction_as_of, entry_price = entry
+            prediction_recovery = analyze_item_supply_recovery(
+                item_id=spec.item_id,
+                events=facts.events,
+                memberships=facts.memberships,
+                historical_buckets=buckets,
+                as_of=prediction_as_of,
+            )
+            current_recovery = next(
+                (
+                    value
+                    for value in prediction_recovery.recoveries
+                    if value.event_key == event.event_key
+                ),
+                None,
+            )
+            if current_recovery is None:
+                continue
+            next_open = min(
+                (
+                    value.opens_at
+                    for value in events
+                    if value.family == event.family and value.opens_at > event.opens_at
+                ),
+                default=None,
+            )
+            for horizon in (30, 60, 90, 180):
+                estimate = estimate_post_rerelease_reference(
+                    event=event,
+                    prediction_as_of=prediction_as_of,
+                    horizon_days=horizon,
+                    entry_proxy_price=entry_price,
+                    current_recovery=current_recovery,
+                    prior_recoveries=prediction_recovery.recoveries,
+                )
+                outcome = evaluate_post_rerelease_outcome(
+                    estimate=estimate,
+                    event=event,
+                    historical_buckets=buckets,
+                    evaluation_as_of=spec.as_of,
+                    next_same_family_event_opens_at=next_open,
+                )
+                built.append(
+                    BuiltExample(
+                        item_id=spec.item_id,
+                        item_name=spec.item_name,
+                        role=spec.role,
+                        event_key=event.event_key,
+                        family=event.family,
+                        horizon_days=horizon,
+                        estimate=estimate,
+                        outcome=outcome,
+                    )
+                )
+        recovery_by_key = {value.event_key: value for value in recoveries.recoveries}
+        event_by_key = {value.event_key: value for value in events}
+        current_scarcity_rebuild = None
+        completed_events = tuple(value for value in events if value.closes_at <= spec.as_of)
+        if completed_events:
+            latest_event = max(completed_events, key=lambda value: (value.closes_at, value.event_key))
+            latest_next_open = min(
+                (
+                    value.opens_at
+                    for value in events
+                    if value.family == latest_event.family and value.opens_at > latest_event.opens_at
+                ),
+                default=None,
+            )
+            latest_exposure = derive_reissue_exposure_features(
+                item_id=spec.item_id,
+                as_of=spec.as_of,
+                events=reissue_events,
+            )
+            current_scarcity_rebuild = measure_scarcity_rebuild(
+                item_id=spec.item_id,
+                event=latest_event,
+                historical_buckets=buckets,
+                as_of=spec.as_of,
+                next_same_family_event_opens_at=latest_next_open,
+                reissue_exposure=latest_exposure,
+            )
+
+        for event_key, recovery in recovery_by_key.items():
+            event = event_by_key.get(event_key)
+            if event is None:
+                continue
+            next_open = min(
+                (
+                    value.opens_at
+                    for value in events
+                    if value.family == event.family and value.opens_at > event.opens_at
+                ),
+                default=None,
+            )
+            for checkpoint in recovery.checkpoints:
+                if not checkpoint.available or checkpoint.observed_at is None:
+                    continue
+                snapshot_exposure = derive_reissue_exposure_features(
+                    item_id=spec.item_id,
+                    as_of=checkpoint.observed_at,
+                    events=reissue_events,
+                )
+                snapshot = measure_scarcity_rebuild(
+                    item_id=spec.item_id,
+                    event=event,
+                    historical_buckets=buckets,
+                    as_of=checkpoint.observed_at,
+                    next_same_family_event_opens_at=next_open,
+                    reissue_exposure=snapshot_exposure,
+                )
+                forward = evaluate_scarcity_rebuild_forward_outcome(
+                    snapshot=snapshot,
+                    historical_buckets=buckets,
+                    evaluation_as_of=spec.as_of,
+                    forward_horizon_days=60,
+                    next_same_family_event_opens_at=next_open,
+                )
+                scarcity_examples.append(
+                    {
+                        "item_id": spec.item_id,
+                        "item_name": spec.item_name,
+                        "role": spec.role,
+                        "event_key": event.event_key,
+                        "family": event.family,
+                        "checkpoint_horizon_days": checkpoint.horizon_days,
+                        "snapshot": asdict(snapshot),
+                        "forward_60d_outcome": asdict(forward),
+                    }
+                )
+
+        item_report.update(
+            {
+                "event_impacts": [asdict(value) for value in impacts.impacts],
+                "impact_profile": asdict(impacts.profile),
+                "recovery_profile": asdict(recoveries.profile),
+                "current_scarcity_rebuild": (
+                    asdict(current_scarcity_rebuild)
+                    if current_scarcity_rebuild is not None
+                    else None
+                ),
+                "walk_forward_example_count": sum(
+                    value.item_id == spec.item_id for value in built
+                ),
+                "scarcity_rebuild_example_count": sum(
+                    value["item_id"] == spec.item_id for value in scarcity_examples
+                ),
+                "explanation_codes": ["named_history_bound_to_official_supply_catalog"],
+            }
+        )
+        item_reports.append(item_report)
+
+    prior_evidence: list[HistoricalReturnOutcomeEvidence] = []
+    for example in built:
+        if example.role != "calibration":
+            continue
+        evidence = return_outcome_evidence(
+            item_id=example.item_id,
+            estimate=example.estimate,
+            outcome=example.outcome,
+        )
+        if evidence is not None:
+            prior_evidence.append(evidence)
+
+    decisions: list[dict[str, Any]] = []
+    for example in built:
+        family_prior = estimate_family_recovery_prior(
+            target_item_id=example.item_id,
+            target_event_key=example.event_key,
+            family=example.family,
+            prediction_as_of=example.estimate.prediction_as_of,
+            horizon_days=example.horizon_days,
+            entry_proxy_price=example.estimate.entry_proxy_price,
+            prior_outcomes=prior_evidence,
+        )
+        decision = corroborate_post_rerelease_signal(
+            primary=example.estimate,
+            family_prior=family_prior,
+        )
+        fallback = evaluate_sparse_baseline_family_fallback(
+            primary=example.estimate,
+            family_prior=family_prior,
+        )
+        audit = audit_family_prior_generalization(
+            target_item_id=example.item_id,
+            target_event_key=example.event_key,
+            family=example.family,
+            prediction_as_of=example.estimate.prediction_as_of,
+            horizon_days=example.horizon_days,
+            entry_proxy_price=example.estimate.entry_proxy_price,
+            prior_outcomes=prior_evidence,
+        )
+        generalization = classify_generalization_aware_decision(
+            hierarchical=decision,
+            sparse_fallback=fallback,
+            audit=audit,
+        )
+        prediction_exposure = derive_reissue_exposure_features(
+            item_id=example.item_id,
+            as_of=example.estimate.prediction_as_of,
+            events=reissue_events_by_item[example.item_id],
+        )
+        decisions.append(
+            {
+                "item_id": example.item_id,
+                "item_name": example.item_name,
+                "role": example.role,
+                "event_key": example.event_key,
+                "family": example.family,
+                "horizon_days": example.horizon_days,
+                "reissue_exposure_at_prediction": asdict(prediction_exposure),
+                "primary": asdict(example.estimate),
+                "family_prior": asdict(family_prior),
+                "hierarchical": asdict(decision),
+                "sparse_baseline_fallback": asdict(fallback),
+                "family_prior_generalization": asdict(audit),
+                "generalization_aware": asdict(generalization),
+                "outcome": asdict(example.outcome),
+            }
+        )
+
+    metrics = _metrics(decisions)
+    metrics["scarcity_rebuild"] = _scarcity_rebuild_metrics(scarcity_examples)
+    metrics["negative_control_item_count"] = sum(
+        value["role"] == "negative_control" for value in item_reports
+    )
+    metrics["unmatched_negative_control_item_count"] = sum(
+        value["role"] == "negative_control"
+        and value["catalog_match_status"] == "UNMATCHED"
+        for value in item_reports
+    )
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "catalog_version": DEFAULT_SUPPLY_POOL_CATALOG.version,
+        "methodology": {
+            "primary_model": "item-specific prior-return recovery",
+            "secondary_model": "same-family independent cross-item observed outcome ratio prior",
+            "family_prior_target_item_policy": "exclude all historical outcomes from target_item_id",
+            "hierarchy": "family prior may confirm/veto but never promote a non-positive primary",
+            "family_prior_minimum_examples": 2,
+            "family_prior_minimum_distinct_items": 2,
+            "family_profitability_support_rule": "strictly greater than 0.5",
+            "generalization_audit": (
+                "leave-one-item-out and leave-one-event-out; family evidence is "
+                "generalization-ready only when every fold remains available and positive"
+            ),
+            "generalization_minimum_item_breadth": 3,
+            "generalization_minimum_event_breadth": 2,
+            "fee_rate": "0.15",
+            "price_proxy_semantics": "historical trade VWAP proxy; not executable quote or fill",
+            "reissue_exposure_semantics": (
+                "descriptive point-in-time counts; tradeable coupon supply and "
+                "account-only demand substitution are separate and never converted "
+                "into a price multiplier or automatic penalty"
+            ),
+            "scarcity_rebuild_semantics": (
+                "research-only two-axis state: price rebuild is normalized from the "
+                "active-event trough toward the item-local pre-event median; activity "
+                "absorption is normalized from active-event activity toward the pre-event "
+                "activity median; the weaker clipped axis is rebuild_progress_floor"
+            ),
+            "scarcity_rebuild_forward_label": (
+                "60-day historical trade VWAP proxy after 15% fee; evaluation-only, "
+                "never used to construct the point-in-time scarcity snapshot"
+            ),
+            "network_access": False,
+        },
+        "items": item_reports,
+        "decisions": decisions,
+        "scarcity_rebuild_examples": scarcity_examples,
+        "metrics": metrics,
+    }
+
+
+def _scarcity_rebuild_metrics(examples: list[dict[str, Any]]) -> dict[str, Any]:
+    by_state: dict[str, list[dict[str, Any]]] = {}
+    current_progress: list[Decimal] = []
+    for value in examples:
+        snapshot = value["snapshot"]
+        state = snapshot["state"]
+        by_state.setdefault(state, []).append(value)
+        progress = snapshot["rebuild_progress_floor"]
+        if progress is not None:
+            current_progress.append(progress)
+
+    state_rows: list[dict[str, Any]] = []
+    for state in sorted(by_state):
+        values = by_state[state]
+        outcomes = [
+            value["forward_60d_outcome"]
+            for value in values
+            if value["forward_60d_outcome"]["outcome_available"]
+            and value["forward_60d_outcome"]["net_roi"] is not None
+        ]
+        rois = tuple(value["net_roi"] for value in outcomes)
+        state_rows.append(
+            {
+                "state": state,
+                "example_count": len(values),
+                "forward_outcome_count": len(rois),
+                "forward_profitable_after_fee_count": sum(
+                    value > Decimal("0") for value in rois
+                ),
+                "forward_profitability_support_share": (
+                    Decimal(sum(value > Decimal("0") for value in rois)) / Decimal(len(rois))
+                    if rois
+                    else None
+                ),
+                "median_forward_net_roi": _decimal_median(rois),
+            }
+        )
+    association_pairs = tuple(
+        (
+            value["snapshot"]["rebuild_progress_floor"],
+            value["forward_60d_outcome"]["net_roi"],
+        )
+        for value in examples
+        if value["snapshot"]["rebuild_progress_floor"] is not None
+        and value["forward_60d_outcome"]["net_roi"] is not None
+    )
+    return {
+        "example_count": len(examples),
+        "forward_outcome_count": sum(
+            value["forward_60d_outcome"]["outcome_available"] for value in examples
+        ),
+        "progress_forward_roi_pair_count": len(association_pairs),
+        "progress_forward_roi_spearman": _spearman_decimal(association_pairs),
+        "state_metrics": state_rows,
+        "interpretation": (
+            "descriptive only; repeated item/event/horizon rows are not independent and "
+            "scarcity rebuild state is not a buy signal"
+        ),
+    }
+
+
+def _spearman_decimal(
+    pairs: tuple[tuple[Decimal, Decimal], ...],
+) -> Decimal | None:
+    if len(pairs) < 2:
+        return None
+    x_ranks = _average_ranks(tuple(value[0] for value in pairs))
+    y_ranks = _average_ranks(tuple(value[1] for value in pairs))
+    x_mean = sum(x_ranks, Decimal("0")) / Decimal(len(x_ranks))
+    y_mean = sum(y_ranks, Decimal("0")) / Decimal(len(y_ranks))
+    numerator = sum(
+        ((x - x_mean) * (y - y_mean) for x, y in zip(x_ranks, y_ranks, strict=True)),
+        Decimal("0"),
+    )
+    x_ss = sum(((value - x_mean) ** 2 for value in x_ranks), Decimal("0"))
+    y_ss = sum(((value - y_mean) ** 2 for value in y_ranks), Decimal("0"))
+    if x_ss == Decimal("0") or y_ss == Decimal("0"):
+        return None
+    # Decimal has no cross-version issue for sqrt of positive finite values.
+    return numerator / (x_ss * y_ss).sqrt()
+
+
+def _average_ranks(values: tuple[Decimal, ...]) -> tuple[Decimal, ...]:
+    ordered = sorted(range(len(values)), key=lambda index: values[index])
+    ranks = [Decimal("0")] * len(values)
+    offset = 0
+    while offset < len(ordered):
+        end = offset
+        while end + 1 < len(ordered) and values[ordered[end + 1]] == values[ordered[offset]]:
+            end += 1
+        average = (Decimal(offset + 1) + Decimal(end + 1)) / Decimal("2")
+        for position in range(offset, end + 1):
+            ranks[ordered[position]] = average
+        offset = end + 1
+    return tuple(ranks)
+
+
+def _decimal_median(values: tuple[Decimal, ...]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal("2")
+
+
+def _parse_spec(value: object, base: Path) -> ItemSpec:
+    if not isinstance(value, dict):
+        raise CohortReplayError("manifest item must be an object")
+    item_id = value.get("item_id")
+    item_name = value.get("item_name")
+    history_path = value.get("history_path")
+    as_of = value.get("as_of")
+    role = value.get("role")
+    if isinstance(item_id, bool) or not isinstance(item_id, int) or item_id <= 0:
+        raise CohortReplayError("item_id must be a positive integer")
+    if not isinstance(item_name, str) or not item_name.strip():
+        raise CohortReplayError("item_name must be non-empty")
+    if not isinstance(history_path, str) or not history_path.strip():
+        raise CohortReplayError("history_path must be non-empty")
+    if role not in {"calibration", "diagnostic", "negative_control"}:
+        raise CohortReplayError("invalid role")
+    return ItemSpec(
+        item_id=item_id,
+        item_name=item_name,
+        history_path=(base / history_path).resolve(),
+        as_of=_parse_datetime(as_of),
+        role=role,
+    )
+
+
+def _load_history(
+    spec: ItemSpec,
+) -> tuple[tuple[HistoricalTradeBucketEvidence, ...], dict[str, Any]]:
+    payload = json.loads(spec.history_path.read_text(encoding="utf-8"))
+    source_schema = "legacy_gaijin_history_response"
+    source_item_key = None
+    source_url = None
+    if payload.get("schema_version") == "gaijin_trade_history_v1":
+        response = payload.get("series")
+        source_schema = "gaijin_trade_history_v1"
+        source_item_key = payload.get("item_key")
+        source_url = payload.get("source_url")
+        if not isinstance(response, dict):
+            raise CohortReplayError(
+                f"gaijin_trade_history_v1 series invalid for item {spec.item_id}"
+            )
+    else:
+        response = payload.get("response")
+        if not isinstance(response, dict) or response.get("success") is not True:
+            raise CohortReplayError(f"history response invalid for item {spec.item_id}")
+    buckets: list[HistoricalTradeBucketEvidence] = []
+    counts: dict[str, int] = {}
+    for granularity, duration in (("1d", timedelta(days=1)), ("1h", timedelta(hours=1))):
+        points = response.get(granularity)
+        if not isinstance(points, list):
+            raise CohortReplayError(f"missing {granularity} points for item {spec.item_id}")
+        counts[granularity] = len(points)
+        for point in points:
+            if not isinstance(point, list) or len(point) != 3:
+                raise CohortReplayError("historical trade point must be [timestamp, price_raw, volume]")
+            timestamp, price_raw, volume = point
+            buckets.append(
+                HistoricalTradeBucketEvidence(
+                    item_id=spec.item_id,
+                    granularity=granularity,  # type: ignore[arg-type]
+                    bucket_start_utc=datetime.fromtimestamp(timestamp, UTC),
+                    bucket_duration=duration,
+                    vwap_price=Decimal(price_raw) / PRICE_SCALE,
+                    reported_trade_volume=volume,
+                )
+            )
+    return tuple(buckets), {
+        "history_file": spec.history_path.name,
+        "history_source_schema": source_schema,
+        "source_item_key": source_item_key,
+        "source_url": source_url,
+        "as_of": spec.as_of,
+        "point_count_1d": counts["1d"],
+        "point_count_1h": counts["1h"],
+        "point_count_total": counts["1d"] + counts["1h"],
+    }
+
+
+def _metrics(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    evaluated = [
+        value
+        for value in decisions
+        if value["role"] == "calibration"
+        and value["outcome"]["target_available"]
+        and value["outcome"]["realized_net_roi"] is not None
+    ]
+    primary_confusion = _confusion(evaluated, "primary")
+    hierarchical_confusion = _confusion(evaluated, "hierarchical")
+    fallback_confusion = _confusion(evaluated, "fallback")
+    family_only_counterfactual = _confusion(evaluated, "family")
+    generalization_ready_strict = _confusion(evaluated, "generalization_strict")
+    generalization_ready_with_sparse = _confusion(evaluated, "generalization_sparse")
+    status_counts: dict[str, int] = {}
+    for value in decisions:
+        status = value["family_prior_generalization"]["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "evaluated_calibration_examples": len(evaluated),
+        "primary": primary_confusion,
+        "hierarchical": hierarchical_confusion,
+        "strict_plus_sparse_review_candidate": fallback_confusion,
+        "generalization_ready_strict": generalization_ready_strict,
+        "generalization_ready_strict_plus_sparse": generalization_ready_with_sparse,
+        "family_only_counterfactual": family_only_counterfactual,
+        "generalization_status_counts": status_counts,
+        "generalization_ready_decision_count": sum(
+            value["family_prior_generalization"]["generalization_ready"]
+            for value in decisions
+        ),
+        "diagnostic_example_count": sum(value["role"] == "diagnostic" for value in decisions),
+        "reissue_exposure_outcome_diagnostics": _reissue_exposure_outcome_diagnostics(evaluated),
+    }
+
+
+def _reissue_exposure_outcome_diagnostics(
+    values: list[dict[str, Any]],
+) -> dict[str, Any]:
+    by_tradeable: dict[int, list[Decimal]] = {}
+    by_horizon: dict[int, dict[int, list[Decimal]]] = {}
+    for value in values:
+        exposure = value["reissue_exposure_at_prediction"]
+        count = exposure["completed_tradeable_supply_count"]
+        roi = value["outcome"]["realized_net_roi"]
+        if not isinstance(count, int) or not isinstance(roi, Decimal):
+            continue
+        by_tradeable.setdefault(count, []).append(roi)
+        by_horizon.setdefault(value["horizon_days"], {}).setdefault(count, []).append(roi)
+
+    def summary(points: list[Decimal]) -> dict[str, Any]:
+        ordered = sorted(points)
+        middle = len(ordered) // 2
+        median = (
+            ordered[middle]
+            if len(ordered) % 2
+            else (ordered[middle - 1] + ordered[middle]) / Decimal("2")
+        )
+        profitable = sum(value > Decimal("0") for value in points)
+        return {
+            "example_count": len(points),
+            "profitable_example_count": profitable,
+            "profitable_support_share": Decimal(profitable) / Decimal(len(points)),
+            "median_realized_net_roi": median,
+        }
+
+    return {
+        "interpretation": (
+            "descriptive only; repeated horizons/items are not independent and this "
+            "table must not be interpreted as a causal reissue penalty"
+        ),
+        "by_completed_tradeable_supply_count": {
+            str(key): summary(points) for key, points in sorted(by_tradeable.items())
+        },
+        "by_horizon_and_completed_tradeable_supply_count": {
+            str(horizon): {
+                str(key): summary(points)
+                for key, points in sorted(groups.items())
+            }
+            for horizon, groups in sorted(by_horizon.items())
+        },
+    }
+
+
+def _confusion(values: list[dict[str, Any]], key: str) -> dict[str, int]:
+    result = {"true_positive": 0, "false_positive": 0, "true_negative": 0, "false_negative": 0}
+    for value in values:
+        if key == "primary":
+            predicted = bool(value["primary"]["research_signal_positive"])
+        elif key == "hierarchical":
+            predicted = bool(value["hierarchical"]["research_signal_positive"])
+        elif key == "fallback":
+            predicted = bool(value["hierarchical"]["research_signal_positive"]) or bool(
+                value["sparse_baseline_fallback"]["candidate_positive"]
+            )
+        elif key == "family":
+            predicted = bool(value["family_prior"]["family_support_positive"])
+        elif key == "generalization_strict":
+            predicted = bool(
+                value["generalization_aware"][
+                    "generalization_ready_research_signal"
+                ]
+            )
+        elif key == "generalization_sparse":
+            predicted = bool(
+                value["generalization_aware"][
+                    "generalization_ready_research_signal"
+                ]
+            ) or bool(
+                value["generalization_aware"][
+                    "generalization_ready_sparse_review_candidate"
+                ]
+            )
+        else:
+            raise CohortReplayError(f"unknown confusion mode: {key}")
+        realized = value["outcome"]["realized_net_roi"] > Decimal("0")
+        if predicted and realized:
+            result["true_positive"] += 1
+        elif predicted and not realized:
+            result["false_positive"] += 1
+        elif not predicted and realized:
+            result["false_negative"] += 1
+        else:
+            result["true_negative"] += 1
+    return result
+
+
+def _parse_datetime(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise CohortReplayError("as_of must be an ISO-8601 string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise CohortReplayError("as_of must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def _normalize(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    if isinstance(value, Path):
+        return value.name
+    if isinstance(value, dict):
+        return {key: _normalize(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize(item) for item in value]
+    return value
+
+
+if __name__ == "__main__":
+    main()

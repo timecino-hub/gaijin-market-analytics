@@ -1,21 +1,36 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Mapping
 
 from gaijin_market_analytics.enums import AnalysisHorizon
+from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
 from gaijin_market_analytics.horizons import horizon_delta
-from gaijin_market_analytics.opportunities import (
-    OpportunityScoreResult,
-    OpportunityScoreV1,
-    rank_opportunity_scores,
+from gaijin_market_analytics.manual_context import ManualMarketContextObservation
+from gaijin_market_analytics.opportunities_v2 import (
+    CurrentMarketEvidence,
+    OpportunityScoreV2,
+    OpportunityScoreV2Result,
+    OpportunityV2Config,
+    rank_opportunity_scores_v2,
 )
 from gaijin_market_analytics.registry import StrategyRegistry
+from gaijin_market_analytics.reissue_exposure import (
+    derive_reissue_exposure_features,
+    merge_reissue_exposure_events,
+    reissue_events_from_supply_pool,
+)
+from gaijin_market_analytics.reissue_exposure_catalog_v1 import (
+    bind_supplemental_reissue_events,
+)
+from gaijin_market_analytics.supply_cycles import derive_supply_cycle_features
+from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_CATALOG
 from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import Settings
-from api.db.models import Item, MarketSnapshot, OrderBookObservation
+from api.db.models import HistoricalTradeBucket, Item, MarketSnapshot, OrderBookObservation
 from api.services.analysis import (
     AnalysisServiceResult,
     InvalidAnalyticsConfigurationError,
@@ -36,14 +51,14 @@ class OpportunityCandidateLimitError(ValueError):
 @dataclass(frozen=True)
 class OpportunityServiceResult:
     analysis: AnalysisServiceResult
-    opportunity: OpportunityScoreResult
+    opportunity: OpportunityScoreV2Result
 
 
 @dataclass(frozen=True)
 class RankedOpportunityServiceItem:
     rank: int
     analysis: AnalysisServiceResult
-    opportunity: OpportunityScoreResult
+    opportunity: OpportunityScoreV2Result
 
 
 @dataclass(frozen=True)
@@ -77,11 +92,14 @@ class ItemOpportunityService:
         session: AsyncSession,
         settings: Settings,
         registry: StrategyRegistry,
+        manual_context_by_item: Mapping[
+            int, tuple[ManualMarketContextObservation, ...]
+        ] | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
         self._analysis_service = ItemAnalysisService(session, settings, registry)
-        self._scorer = OpportunityScoreV1()
+        self._manual_context_by_item = dict(manual_context_by_item or {})
 
     async def score_item(
         self,
@@ -95,11 +113,18 @@ class ItemOpportunityService:
             horizon=horizon,
             as_of=as_of,
         )
-        opportunity = self._score_analysis(analysis)
-        return OpportunityServiceResult(
-            analysis=analysis,
-            opportunity=opportunity,
+        window_start = as_of - horizon_delta(horizon)
+        historical_rows = await self._list_historical_rows(
+            item_ids=(item_id,),
+            window_start=window_start,
+            as_of=as_of,
         )
+        opportunity = self._score_analysis(
+            analysis,
+            historical_rows.get(item_id, []),
+            window_start=window_start,
+        )
+        return OpportunityServiceResult(analysis=analysis, opportunity=opportunity)
 
     async def list_ranked(
         self,
@@ -129,14 +154,20 @@ class ItemOpportunityService:
             include_inactive=include_inactive,
             maximum_candidates=maximum_candidates,
         )
+        item_ids = tuple(item.id for item in items)
         rows_by_item = await self._list_observation_rows(
-            item_ids=tuple(item.id for item in items),
+            item_ids=item_ids,
+            window_start=window_start,
+            as_of=as_of,
+        )
+        history_by_item = await self._list_historical_rows(
+            item_ids=item_ids,
             window_start=window_start,
             as_of=as_of,
         )
 
         analyses_by_item: dict[int, AnalysisServiceResult] = {}
-        opportunities: list[OpportunityScoreResult] = []
+        opportunities: list[OpportunityScoreV2Result] = []
         for item in items:
             analysis = self._analysis_service.analyze_loaded_rows(
                 item=item,
@@ -147,9 +178,15 @@ class ItemOpportunityService:
                 minimum_snapshot_count=minimum_snapshot_count,
             )
             analyses_by_item[item.id] = analysis
-            opportunities.append(self._score_analysis(analysis))
+            opportunities.append(
+                self._score_analysis(
+                    analysis,
+                    history_by_item.get(item.id, []),
+                    window_start=window_start,
+                )
+            )
 
-        ranked = rank_opportunity_scores(
+        ranked = rank_opportunity_scores_v2(
             tuple(opportunities),
             eligible_only=eligible_only,
             minimum_score=minimum_score,
@@ -161,11 +198,11 @@ class ItemOpportunityService:
         page_entries = ranked[page_start : page_start + page_size]
         result_items = tuple(
             RankedOpportunityServiceItem(
-                rank=entry.rank,
-                analysis=analyses_by_item[entry.opportunity.item_id],
-                opportunity=entry.opportunity,
+                rank=page_start + index,
+                analysis=analyses_by_item[opportunity.item_id],
+                opportunity=opportunity,
             )
-            for entry in page_entries
+            for index, opportunity in enumerate(page_entries, start=1)
         )
         return OpportunityRankingServiceResult(
             items=result_items,
@@ -187,12 +224,100 @@ class ItemOpportunityService:
             rarity=rarity,
         )
 
-    def _score_analysis(self, analysis: AnalysisServiceResult) -> OpportunityScoreResult:
-        return self._scorer.score(
-            analysis=analysis.result,
-            observations=analysis.observations,
-            maximum_snapshot_age=timedelta(hours=analysis.maximum_snapshot_age_hours),
-            minimum_snapshot_count=analysis.minimum_snapshot_count,
+    def _score_analysis(
+        self,
+        analysis: AnalysisServiceResult,
+        historical_rows: list[HistoricalTradeBucket],
+        *,
+        window_start: datetime,
+    ) -> OpportunityScoreV2Result:
+        current = self._current_market_evidence(analysis)
+        history = tuple(self._historical_evidence(row) for row in historical_rows)
+        scorer = OpportunityScoreV2(
+            OpportunityV2Config(
+                maximum_current_market_age=timedelta(
+                    hours=analysis.maximum_snapshot_age_hours
+                )
+            )
+        )
+        catalog_facts = DEFAULT_SUPPLY_POOL_CATALOG.bind_item(
+            item_id=analysis.item.id,
+            item_name=analysis.item.name,
+        )
+        supply_cycle = derive_supply_cycle_features(
+            item_id=analysis.item.id,
+            as_of=analysis.result.as_of,
+            events=catalog_facts.events,
+            memberships=catalog_facts.memberships,
+        )
+        supply_cycle = replace(
+            supply_cycle,
+            explanation_codes=tuple(
+                dict.fromkeys((
+                    *supply_cycle.explanation_codes,
+                    f"supply_pool_catalog_{catalog_facts.match_status.lower()}",
+                    f"supply_pool_catalog_version_{DEFAULT_SUPPLY_POOL_CATALOG.version.replace('.', '_')}",
+                ))
+            ),
+        )
+        reissue_events = merge_reissue_exposure_events(
+            reissue_events_from_supply_pool(
+                item_id=analysis.item.id,
+                events=catalog_facts.events,
+                memberships=catalog_facts.memberships,
+            ),
+            bind_supplemental_reissue_events(
+                item_id=analysis.item.id,
+                item_name=analysis.item.name,
+            ),
+        )
+        reissue_exposure = derive_reissue_exposure_features(
+            item_id=analysis.item.id,
+            as_of=analysis.result.as_of,
+            events=reissue_events,
+        )
+        return scorer.score(
+            item_id=analysis.item.id,
+            as_of=analysis.result.as_of,
+            window_start=window_start,
+            current_market=current,
+            historical_buckets=history,
+            supply_cycle=supply_cycle,
+            reissue_exposure=reissue_exposure,
+            manual_context_observations=self._manual_context_by_item.get(
+                analysis.item.id, ()
+            ),
+        )
+
+    @staticmethod
+    def _current_market_evidence(
+        analysis: AnalysisServiceResult,
+    ) -> CurrentMarketEvidence | None:
+        if not analysis.observations:
+            return None
+        latest = analysis.observations[-1]
+        return CurrentMarketEvidence(
+            item_id=analysis.item.id,
+            observed_at=latest.observed_at,
+            best_ask=latest.best_ask,
+            best_bid=latest.best_bid,
+            ask_count=latest.ask_count,
+            bid_count=latest.bid_count,
+            observed_ask_quantity=latest.observed_ask_quantity,
+            observed_bid_quantity=latest.observed_bid_quantity,
+        )
+
+    @staticmethod
+    def _historical_evidence(row: HistoricalTradeBucket) -> HistoricalTradeBucketEvidence:
+        return HistoricalTradeBucketEvidence(
+            item_id=row.item_id,
+            granularity=row.granularity,  # type: ignore[arg-type]
+            bucket_start_utc=row.bucket_start_utc,
+            bucket_duration=timedelta(seconds=row.bucket_duration_seconds),
+            vwap_price=row.reported_vwap_price,
+            reported_trade_volume=row.reported_trade_volume,
+            price_semantics=row.price_semantics,
+            volume_semantics=row.volume_semantics,
         )
 
     async def _list_candidate_items(
@@ -273,6 +398,35 @@ class ItemOpportunityService:
         ] = defaultdict(list)
         for snapshot, observation in result.all():
             grouped[snapshot.item_id].append((snapshot, observation))
+        return dict(grouped)
+
+    async def _list_historical_rows(
+        self,
+        *,
+        item_ids: tuple[int, ...],
+        window_start: datetime,
+        as_of: datetime,
+    ) -> dict[int, list[HistoricalTradeBucket]]:
+        if not item_ids:
+            return {}
+        statement = (
+            select(HistoricalTradeBucket)
+            .where(
+                HistoricalTradeBucket.item_id.in_(item_ids),
+                HistoricalTradeBucket.bucket_start_utc >= window_start,
+                HistoricalTradeBucket.bucket_start_utc <= as_of,
+            )
+            .order_by(
+                HistoricalTradeBucket.item_id.asc(),
+                HistoricalTradeBucket.bucket_start_utc.asc(),
+                HistoricalTradeBucket.granularity.asc(),
+                HistoricalTradeBucket.id.asc(),
+            )
+        )
+        result = await self._session.scalars(statement)
+        grouped: defaultdict[int, list[HistoricalTradeBucket]] = defaultdict(list)
+        for row in result.all():
+            grouped[row.item_id].append(row)
         return dict(grouped)
 
     def _maximum_snapshot_age_hours(self) -> int:

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from gaijin_market_analytics.enums import AnalysisHorizon
 from gaijin_market_analytics.market_rules import GAIJIN_MARKET_RULES_V1
-from gaijin_market_analytics.opportunities import OpportunityScoreV1
+from gaijin_market_analytics.opportunities_v2 import OpportunityScoreV2
 from gaijin_market_analytics.registry import StrategyRegistry
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -131,9 +131,9 @@ def _ranking_response(result: OpportunityRankingServiceResult) -> OpportunityRan
         evaluated_total=result.evaluated_total,
         eligible_total=result.eligible_total,
         effective_inputs=_effective_inputs(result),
-        strategy_name=OpportunityScoreV1.strategy_name,
-        strategy_version=OpportunityScoreV1.strategy_version,
-        feature_version=OpportunityScoreV1.feature_version,
+        strategy_name=OpportunityScoreV2.strategy_name,
+        strategy_version=OpportunityScoreV2.strategy_version,
+        feature_version=OpportunityScoreV2.feature_version,
         filters=OpportunityRankingFilters(
             eligible_only=result.eligible_only,
             minimum_score=result.minimum_score,
@@ -162,23 +162,94 @@ def _ranking_item(data: RankedOpportunityServiceItem) -> OpportunityRankingItem:
         first_observation_at=analysis.first_observation_at,
         last_observation_at=analysis.last_observation_at,
         eligible=opportunity.eligible,
+        score_published=opportunity.score_published,
         score=opportunity.score,
         raw_score=opportunity.raw_score,
         profitability_score=opportunity.profitability_score,
         liquidity_score=opportunity.liquidity_score,
         stability_score=opportunity.stability_score,
+        activity_score=opportunity.activity_score,
         data_confidence_score=opportunity.data_confidence_score,
         freshness_score=opportunity.freshness_score,
         risk_penalty=opportunity.risk_penalty,
-        liquidity_source=opportunity.liquidity_source,
-        quantity_observation_count=opportunity.quantity_observation_count,
-        latest_observed_bid_quantity=opportunity.latest_observed_bid_quantity,
-        latest_observed_ask_quantity=opportunity.latest_observed_ask_quantity,
-        current_ask=analysis.current_ask,
-        current_bid=analysis.current_bid,
-        reference_sell_price=analysis.reference_sell_price,
-        net_profit=analysis.net_profit,
-        net_roi=analysis.net_roi,
+        liquidity_source=opportunity.features.liquidity_source,
+        quantity_observation_count=(
+            1 if opportunity.features.liquidity_source == "reviewed_screenshot_quantity" else 0
+        ),
+        latest_observed_bid_quantity=(
+            analysis.observations[-1].observed_bid_quantity if analysis.observations else None
+        ),
+        latest_observed_ask_quantity=(
+            analysis.observations[-1].observed_ask_quantity if analysis.observations else None
+        ),
+        current_ask=opportunity.current_ask,
+        current_bid=opportunity.current_bid,
+        reference_sell_price=opportunity.reference_sell_price,
+        reference_sell_method=opportunity.reference_sell_method,
+        reference_sell_version=opportunity.reference_sell_version,
+        net_profit=opportunity.net_profit,
+        net_roi=opportunity.net_roi,
+        historical_bucket_count=opportunity.features.historical_bucket_count,
+        historical_effective_day_count=opportunity.features.historical_effective_day_count,
+        historical_hourly_bucket_count=opportunity.features.hourly_bucket_count,
+        historical_daily_bucket_count=opportunity.features.daily_bucket_count,
+        historical_start_at=opportunity.features.historical_start_at,
+        historical_end_at=opportunity.features.historical_end_at,
+        historical_latest_age_seconds=opportunity.features.historical_latest_age_seconds,
+        historical_observed_span_ratio=opportunity.features.observed_span_ratio,
+        historical_price_median=opportunity.features.historical_price_median,
+        context_weighted_historical_price_median=(
+            opportunity.features.context_weighted_historical_price_median
+        ),
+        historical_mad_ratio=opportunity.features.historical_mad_ratio,
+        context_weighted_historical_mad_ratio=(
+            opportunity.features.context_weighted_historical_mad_ratio
+        ),
+        historical_max_drawdown=opportunity.features.historical_max_drawdown,
+        median_reported_trade_volume=opportunity.features.median_reported_trade_volume,
+        manual_strength_index=opportunity.features.manual_strength_index,
+        manual_attention_index=opportunity.features.manual_attention_index,
+        manual_context_defaulted=opportunity.features.manual_context_defaulted,
+        historical_context_comparability=(
+            opportunity.features.historical_context_comparability
+        ),
+        historical_context_effective_day_count=(
+            opportunity.features.historical_context_effective_day_count
+        ),
+        historical_context_effective_sample_size=(
+            opportunity.features.historical_context_effective_sample_size
+        ),
+        historical_context_high_quality_day_count=(
+            opportunity.features.historical_context_high_quality_day_count
+        ),
+        historical_profitable_context_weight_share=(
+            opportunity.features.historical_profitable_context_weight_share
+        ),
+        supply_cycle_state=opportunity.supply_cycle_state,
+        supply_pool_family=opportunity.supply_pool_family,
+        supply_coupon_mode=opportunity.supply_coupon_mode,
+        supply_confirmed_current_membership=opportunity.supply_confirmed_current_membership,
+        supply_observed_return_count=opportunity.supply_observed_return_count,
+        supply_observed_tradeable_return_count=opportunity.supply_observed_tradeable_return_count,
+        supply_eligible_family_event_count=opportunity.supply_eligible_family_event_count,
+        supply_recurrence_rate=opportunity.supply_recurrence_rate,
+        supply_current_event_key=opportunity.supply_current_event_key,
+        supply_current_event_opens_at=opportunity.supply_current_event_opens_at,
+        supply_current_event_closes_at=opportunity.supply_current_event_closes_at,
+        reissue_known_return_count=opportunity.reissue_known_return_count,
+        reissue_completed_tradeable_supply_count=(
+            opportunity.reissue_completed_tradeable_supply_count
+        ),
+        reissue_completed_account_only_return_count=(
+            opportunity.reissue_completed_account_only_return_count
+        ),
+        reissue_distinct_family_count=opportunity.reissue_distinct_family_count,
+        reissue_trailing_1095d_tradeable_supply_count=(
+            opportunity.reissue_trailing_1095d_tradeable_supply_count
+        ),
+        reissue_days_since_last_tradeable_supply_close=(
+            opportunity.reissue_days_since_last_tradeable_supply_close
+        ),
         explanation_codes=list(opportunity.explanation_codes),
         analysis_reason_codes=[code.value for code in analysis.reason_codes],
     )

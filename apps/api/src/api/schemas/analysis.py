@@ -107,14 +107,16 @@ class OpportunityResponse(BaseModel):
     strategy_version: str
     feature_version: str
     eligible: bool
-    score: Decimal
-    raw_score: Decimal
-    profitability_score: Decimal
-    liquidity_score: Decimal
-    stability_score: Decimal
-    data_confidence_score: Decimal
-    freshness_score: Decimal
-    risk_penalty: Decimal
+    score_published: bool
+    score: Decimal | None
+    raw_score: Decimal | None
+    profitability_score: Decimal | None
+    liquidity_score: Decimal | None
+    stability_score: Decimal | None
+    activity_score: Decimal | None
+    data_confidence_score: Decimal | None
+    freshness_score: Decimal | None
+    risk_penalty: Decimal | None
     liquidity_source: Literal[
         "reviewed_screenshot_quantity",
         "snapshot_counts",
@@ -126,8 +128,49 @@ class OpportunityResponse(BaseModel):
     current_ask: Decimal | None
     current_bid: Decimal | None
     reference_sell_price: Decimal | None
+    reference_sell_method: str | None
+    reference_sell_version: str | None
     net_profit: Decimal | None
     net_roi: Decimal | None
+    historical_bucket_count: int
+    historical_effective_day_count: int
+    historical_hourly_bucket_count: int
+    historical_daily_bucket_count: int
+    historical_start_at: datetime | None
+    historical_end_at: datetime | None
+    historical_latest_age_seconds: int | None
+    historical_observed_span_ratio: Decimal
+    historical_price_median: Decimal | None = None
+    context_weighted_historical_price_median: Decimal | None = None
+    historical_mad_ratio: Decimal | None
+    context_weighted_historical_mad_ratio: Decimal | None = None
+    historical_max_drawdown: Decimal | None
+    median_reported_trade_volume: Decimal | None
+    manual_strength_index: Decimal = Decimal("1")
+    manual_attention_index: Decimal = Decimal("1")
+    manual_context_defaulted: bool = True
+    historical_context_comparability: Decimal = Decimal("1")
+    historical_context_effective_day_count: Decimal = Decimal("0")
+    historical_context_effective_sample_size: Decimal = Decimal("0")
+    historical_context_high_quality_day_count: Decimal = Decimal("0")
+    historical_profitable_context_weight_share: Decimal | None = None
+    supply_cycle_state: str
+    supply_pool_family: str
+    supply_coupon_mode: str
+    supply_confirmed_current_membership: bool
+    supply_observed_return_count: int
+    supply_observed_tradeable_return_count: int
+    supply_eligible_family_event_count: int
+    supply_recurrence_rate: Decimal | None
+    supply_current_event_key: str | None
+    supply_current_event_opens_at: datetime | None
+    supply_current_event_closes_at: datetime | None
+    reissue_known_return_count: int
+    reissue_completed_tradeable_supply_count: int
+    reissue_completed_account_only_return_count: int
+    reissue_distinct_family_count: int
+    reissue_trailing_1095d_tradeable_supply_count: int
+    reissue_days_since_last_tradeable_supply_close: Decimal | None
     explanation_codes: list[str]
     analysis_reason_codes: list[str]
 
@@ -137,6 +180,7 @@ class OpportunityResponse(BaseModel):
         "profitability_score",
         "liquidity_score",
         "stability_score",
+        "activity_score",
         "data_confidence_score",
         "freshness_score",
         "risk_penalty",
@@ -145,6 +189,22 @@ class OpportunityResponse(BaseModel):
         "reference_sell_price",
         "net_profit",
         "net_roi",
+        "historical_observed_span_ratio",
+        "historical_price_median",
+        "context_weighted_historical_price_median",
+        "historical_mad_ratio",
+        "context_weighted_historical_mad_ratio",
+        "historical_max_drawdown",
+        "median_reported_trade_volume",
+        "manual_strength_index",
+        "manual_attention_index",
+        "historical_context_comparability",
+        "historical_context_effective_day_count",
+        "historical_context_effective_sample_size",
+        "historical_context_high_quality_day_count",
+        "historical_profitable_context_weight_share",
+        "supply_recurrence_rate",
+        "reissue_days_since_last_tradeable_supply_close",
     )
     def serialize_opportunity_decimal(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
@@ -176,14 +236,16 @@ class OpportunityRankingItem(BaseModel):
     first_observation_at: datetime | None
     last_observation_at: datetime | None
     eligible: bool
-    score: Decimal
-    raw_score: Decimal
-    profitability_score: Decimal
-    liquidity_score: Decimal
-    stability_score: Decimal
-    data_confidence_score: Decimal
-    freshness_score: Decimal
-    risk_penalty: Decimal
+    score_published: bool
+    score: Decimal | None
+    raw_score: Decimal | None
+    profitability_score: Decimal | None
+    liquidity_score: Decimal | None
+    stability_score: Decimal | None
+    activity_score: Decimal | None
+    data_confidence_score: Decimal | None
+    freshness_score: Decimal | None
+    risk_penalty: Decimal | None
     liquidity_source: Literal[
         "reviewed_screenshot_quantity",
         "snapshot_counts",
@@ -195,8 +257,49 @@ class OpportunityRankingItem(BaseModel):
     current_ask: Decimal | None
     current_bid: Decimal | None
     reference_sell_price: Decimal | None
+    reference_sell_method: str | None
+    reference_sell_version: str | None
     net_profit: Decimal | None
     net_roi: Decimal | None
+    historical_bucket_count: int
+    historical_effective_day_count: int
+    historical_hourly_bucket_count: int
+    historical_daily_bucket_count: int
+    historical_start_at: datetime | None
+    historical_end_at: datetime | None
+    historical_latest_age_seconds: int | None
+    historical_observed_span_ratio: Decimal
+    historical_price_median: Decimal | None = None
+    context_weighted_historical_price_median: Decimal | None = None
+    historical_mad_ratio: Decimal | None
+    context_weighted_historical_mad_ratio: Decimal | None = None
+    historical_max_drawdown: Decimal | None
+    median_reported_trade_volume: Decimal | None
+    manual_strength_index: Decimal = Decimal("1")
+    manual_attention_index: Decimal = Decimal("1")
+    manual_context_defaulted: bool = True
+    historical_context_comparability: Decimal = Decimal("1")
+    historical_context_effective_day_count: Decimal = Decimal("0")
+    historical_context_effective_sample_size: Decimal = Decimal("0")
+    historical_context_high_quality_day_count: Decimal = Decimal("0")
+    historical_profitable_context_weight_share: Decimal | None = None
+    supply_cycle_state: str
+    supply_pool_family: str
+    supply_coupon_mode: str
+    supply_confirmed_current_membership: bool
+    supply_observed_return_count: int
+    supply_observed_tradeable_return_count: int
+    supply_eligible_family_event_count: int
+    supply_recurrence_rate: Decimal | None
+    supply_current_event_key: str | None
+    supply_current_event_opens_at: datetime | None
+    supply_current_event_closes_at: datetime | None
+    reissue_known_return_count: int
+    reissue_completed_tradeable_supply_count: int
+    reissue_completed_account_only_return_count: int
+    reissue_distinct_family_count: int
+    reissue_trailing_1095d_tradeable_supply_count: int
+    reissue_days_since_last_tradeable_supply_close: Decimal | None
     explanation_codes: list[str]
     analysis_reason_codes: list[str]
 
@@ -206,6 +309,7 @@ class OpportunityRankingItem(BaseModel):
         "profitability_score",
         "liquidity_score",
         "stability_score",
+        "activity_score",
         "data_confidence_score",
         "freshness_score",
         "risk_penalty",
@@ -214,6 +318,22 @@ class OpportunityRankingItem(BaseModel):
         "reference_sell_price",
         "net_profit",
         "net_roi",
+        "historical_observed_span_ratio",
+        "historical_price_median",
+        "context_weighted_historical_price_median",
+        "historical_mad_ratio",
+        "context_weighted_historical_mad_ratio",
+        "historical_max_drawdown",
+        "median_reported_trade_volume",
+        "manual_strength_index",
+        "manual_attention_index",
+        "historical_context_comparability",
+        "historical_context_effective_day_count",
+        "historical_context_effective_sample_size",
+        "historical_context_high_quality_day_count",
+        "historical_profitable_context_weight_share",
+        "supply_recurrence_rate",
+        "reissue_days_since_last_tradeable_supply_close",
     )
     def serialize_ranking_decimal(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
