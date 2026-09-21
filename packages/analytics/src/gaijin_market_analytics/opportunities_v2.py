@@ -23,6 +23,11 @@ from .manual_context import (
     weighted_decimal_median,
 )
 from .reissue_exposure import ReissueExposureFeatures
+from .supply_channels import (
+    ChannelCoveragePolicy,
+    SupplyChannelCoverage,
+    resolve_channel_coverage_withholding,
+)
 from .supply_cycles import SupplyCycleFeatures
 
 LiquiditySource = Literal["reviewed_screenshot_quantity", "snapshot_counts", "unavailable"]
@@ -86,6 +91,7 @@ class OpportunityV2Config:
     fee_rate: Decimal = Decimal("0.15")
     currency_quantum: Decimal = Decimal("0.01")
     absorption_withhold_policy: AbsorptionWithholdPolicy = "LEGACY_ONLY"
+    channel_coverage_policy: ChannelCoveragePolicy = "IGNORE"
 
     def __post_init__(self) -> None:
         if self.maximum_current_market_age <= timedelta(0):
@@ -139,6 +145,12 @@ class OpportunityV2Config:
             "EVIDENCE_REPLACES_LEGACY",
         }:
             raise OpportunityV2ContractError("unsupported absorption_withhold_policy.")
+        if self.channel_coverage_policy not in {
+            "IGNORE",
+            "WITHHOLD_UNCATALOGUED",
+            "WITHHOLD_UNREVIEWED",
+        }:
+            raise OpportunityV2ContractError("unsupported channel_coverage_policy.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +267,7 @@ class OpportunityScoreV2:
         reissue_exposure: ReissueExposureFeatures | None = None,
         manual_context_observations: Iterable[ManualMarketContextObservation] = (),
         absorption_exit: SupplyAbsorptionExitSnapshot | None = None,
+        supply_channel_coverage: SupplyChannelCoverage | None = None,
     ) -> OpportunityScoreV2Result:
         as_of = _utc(as_of, "as_of")
         window_start = _utc(window_start, "window_start")
@@ -376,11 +389,24 @@ class OpportunityScoreV2:
         ):
             codes.append("strategy_withheld_for_supply_cycle_regime")
 
+        channel_decision = resolve_channel_coverage_withholding(
+            coverage=supply_channel_coverage,
+            policy=self.config.channel_coverage_policy,
+        )
+        if (
+            supply_channel_coverage is not None
+            or self.config.channel_coverage_policy != "IGNORE"
+        ):
+            codes.extend(channel_decision.explanation_codes)
+        if channel_decision.withhold:
+            codes.append("strategy_withheld_for_unmodelled_supply_channel")
+
         publishable = not any(
             code.startswith("missing_")
             or code.startswith("stale_")
             or code.startswith("insufficient_")
             or code == "strategy_withheld_for_supply_cycle_regime"
+            or code == "strategy_withheld_for_unmodelled_supply_channel"
             for code in codes
         )
         if not publishable:

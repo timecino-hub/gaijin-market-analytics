@@ -15,6 +15,7 @@ from gaijin_market_analytics.cohort_coverage import (
     assess_history_coverage,
     suggest_catalog_vehicle_names,
 )
+from gaijin_market_analytics.supply_channels import assess_supply_channel_coverage
 from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_CATALOG
 
 
@@ -68,6 +69,9 @@ class CaptureReview:
     covers_required_start: bool | None
     tradeable_event_count: int | None
     fully_usable_event_count: int | None
+    supply_channel_coverage: str | None
+    supply_channels_reviewed: bool | None
+    unmodelled_supply_channels: tuple[str, ...]
     explanation_codes: tuple[str, ...]
 
 
@@ -235,6 +239,9 @@ def _review_capture(
             covers_required_start=None,
             tradeable_event_count=None,
             fully_usable_event_count=None,
+            supply_channel_coverage=None,
+            supply_channels_reviewed=None,
+            unmodelled_supply_channels=(),
             explanation_codes=(str(exc),),
         )
     except (OSError, json.JSONDecodeError) as exc:
@@ -259,6 +266,9 @@ def _review_capture(
             covers_required_start=None,
             tradeable_event_count=None,
             fully_usable_event_count=None,
+            supply_channel_coverage=None,
+            supply_channels_reviewed=None,
+            unmodelled_supply_channels=(),
             explanation_codes=(f"unreadable_capture: {type(exc).__name__}",),
         )
 
@@ -300,6 +310,9 @@ def _review_capture(
             covers_required_start=None,
             tradeable_event_count=None,
             fully_usable_event_count=None,
+            supply_channel_coverage=None,
+            supply_channels_reviewed=None,
+            unmodelled_supply_channels=(),
             explanation_codes=tuple(
                 [*codes, "operator_binding_to_catalogued_vehicle_required"]
             ),
@@ -317,6 +330,8 @@ def _review_capture(
         item_id=record["item_id"] if record else 1,
     )
     codes.extend(coverage.explanation_codes)
+    channels = assess_supply_channel_coverage(vehicle_name=vehicle_name)
+    codes.extend(channels.explanation_codes)
     if role == "negative_control":
         # A negative control exists to show that an unlisted vehicle binds to no
         # supply event, so failing to match the catalog is the expected result
@@ -354,6 +369,9 @@ def _review_capture(
         covers_required_start=coverage.covers_required_start,
         tradeable_event_count=coverage.tradeable_event_count,
         fully_usable_event_count=coverage.fully_usable_event_count,
+        supply_channel_coverage=channels.coverage,
+        supply_channels_reviewed=channels.reviewed,
+        unmodelled_supply_channels=channels.unmodelled_channels,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
 

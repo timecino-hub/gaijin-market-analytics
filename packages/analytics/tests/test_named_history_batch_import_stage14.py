@@ -118,7 +118,11 @@ def test_bound_capture_with_an_existing_item_is_ready(tmp_path: Path):
     assert capture["existing_item_name_binds"] is True
     assert capture["fully_usable_event_count"] == 1
     assert capture["covers_required_start"] is True
-    assert not capture["explanation_codes"]
+    # Nobody has reviewed which supply channels this vehicle receives, so the
+    # capture is usable but its coverage is not claimed to be complete.
+    assert capture["supply_channel_coverage"] == "PARTIALLY_CATALOGUED"
+    assert capture["supply_channels_reviewed"] is False
+    assert capture["explanation_codes"] == ("supply_channels_not_reviewed",)
 
 
 def test_capture_without_a_binding_is_never_bound_automatically(tmp_path: Path):
