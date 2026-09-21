@@ -14,6 +14,7 @@ from api.routers.imports import router as imports_router
 from api.routers.items import router as items_router
 from api.routers.local_recognition import router as local_recognition_router
 from api.routers.opportunities import router as opportunities_router
+from api.routers.postevent_entry import router as postevent_entry_router
 
 app = FastAPI(title="Gaijin Market Analytics API")
 settings = get_settings()
@@ -28,6 +29,7 @@ app.include_router(imports_router)
 app.include_router(items_router)
 app.include_router(analysis_router)
 app.include_router(opportunities_router)
+app.include_router(postevent_entry_router)
 app.include_router(local_recognition_router)
 
 
