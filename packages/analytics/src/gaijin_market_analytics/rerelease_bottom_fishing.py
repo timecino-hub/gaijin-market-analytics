@@ -49,13 +49,17 @@ from .post_rerelease import PRICE_PROXY_SEMANTICS, sale_proceeds
 from .supply_cycles import SupplyPoolEvent
 
 
-RERELEASE_BOTTOM_FISHING_VERSION = "1.0.0"
+RERELEASE_BOTTOM_FISHING_VERSION = "1.1.0"
+
+_ONE = Decimal("1")
 
 EntryRule = Literal[
     "IMMEDIATE",
     "DRAWDOWN_TRIGGER",
     "STABILISED",
     "PATIENT_FLOOR",
+    "WINDOWED_BID_ABSTAIN",
+    "WINDOWED_BID_FORCED",
     "TROUGH_ORACLE",
 ]
 ENTRY_RULES: tuple[EntryRule, ...] = (
@@ -63,6 +67,8 @@ ENTRY_RULES: tuple[EntryRule, ...] = (
     "DRAWDOWN_TRIGGER",
     "STABILISED",
     "PATIENT_FLOOR",
+    "WINDOWED_BID_ABSTAIN",
+    "WINDOWED_BID_FORCED",
     "TROUGH_ORACLE",
 )
 CAUSAL_ENTRY_RULES: tuple[EntryRule, ...] = (
@@ -70,7 +76,15 @@ CAUSAL_ENTRY_RULES: tuple[EntryRule, ...] = (
     "DRAWDOWN_TRIGGER",
     "STABILISED",
     "PATIENT_FLOOR",
+    "WINDOWED_BID_ABSTAIN",
+    "WINDOWED_BID_FORCED",
 )
+BID_ENTRY_RULES: tuple[EntryRule, ...] = (
+    "WINDOWED_BID_ABSTAIN",
+    "WINDOWED_BID_FORCED",
+)
+BidFillProxy = Literal["DAY_VWAP", "HOURLY_LOW"]
+BID_FILL_PROXIES: tuple[BidFillProxy, ...] = ("DAY_VWAP", "HOURLY_LOW")
 BENCHMARK_ENTRY_RULE: EntryRule = "IMMEDIATE"
 
 EntryStatus = Literal[
@@ -96,6 +110,14 @@ class BottomFishingError(ValueError):
 class BottomFishingConfig:
     maximum_wait_days: int = 30
     drawdown_trigger_ratio: Decimal = Decimal("0.75")
+    # The windowed bid: an anchor a stated distance below the pre-event
+    # baseline, raised by a tolerance because a bid that is never reached buys
+    # nothing. Only an upward tolerance exists. A resting bid fills at its own
+    # price, so there is no benefit to be had below it and nothing for a
+    # downward tolerance to express.
+    bid_target_drop: Decimal = Decimal("0.30")
+    bid_tolerance: Decimal = Decimal("0.05")
+    bid_fill_proxy: BidFillProxy = "DAY_VWAP"
     stabilised_days: int = 3
     holding_days: int = 30
     minimum_pre_event_days: int = 3
@@ -125,6 +147,22 @@ class BottomFishingConfig:
             raise BottomFishingError(
                 "drawdown_trigger_ratio must be a finite Decimal in (0, 1]."
             )
+        if (
+            not isinstance(self.bid_target_drop, Decimal)
+            or not self.bid_target_drop.is_finite()
+            or not Decimal("0") < self.bid_target_drop < Decimal("1")
+        ):
+            raise BottomFishingError(
+                "bid_target_drop must be a finite Decimal in (0, 1)."
+            )
+        if (
+            not isinstance(self.bid_tolerance, Decimal)
+            or not self.bid_tolerance.is_finite()
+            or not Decimal("0") <= self.bid_tolerance < Decimal("1")
+        ):
+            raise BottomFishingError("bid_tolerance must be a finite Decimal in [0, 1).")
+        if self.bid_fill_proxy not in BID_FILL_PROXIES:
+            raise BottomFishingError("unsupported bid fill proxy.")
         if (
             not isinstance(self.fee_rate, Decimal)
             or not self.fee_rate.is_finite()
@@ -159,6 +197,8 @@ class BottomFishingEntry:
     pre_event_median: Decimal | None
     immediate_price: Decimal | None
     window_low: Decimal | None
+    bid_price: Decimal | None
+    filled_at_bid: bool
     explanation_codes: tuple[str, ...]
     research_only: bool = True
     fill_claim: bool = False
@@ -301,6 +341,8 @@ def resolve_bottom_fishing_entry(
             pre_event_median=None,
             immediate_price=None,
             window_low=None,
+            bid_price=None,
+            filled_at_bid=False,
             explanation_codes=tuple(dict.fromkeys([*codes, code])),
         )
 
@@ -334,6 +376,8 @@ def resolve_bottom_fishing_entry(
     pre_median = _pre_event_median(buckets, event=event, config=cfg)
 
     chosen: DailyHistoricalTradeEvidence | None
+    bid_price: Decimal | None = None
+    filled_at_bid = False
     if rule == "IMMEDIATE":
         chosen = candidates[0]
     elif rule == "TROUGH_ORACLE":
@@ -350,6 +394,37 @@ def resolve_bottom_fishing_entry(
         chosen = next(
             (point for point in candidates if point.vwap_price <= threshold), None
         )
+    elif rule in BID_ENTRY_RULES:
+        if pre_median is None:
+            return empty(
+                "NO_PRE_EVENT_BASELINE",
+                "rerelease_bottom_fishing_no_pre_event_baseline",
+            )
+        anchor = pre_median * (_ONE - cfg.bid_target_drop)
+        bid_price = anchor * (_ONE + cfg.bid_tolerance)
+        lows = _day_low_proxies(
+            buckets,
+            window_start=event.closes_at,
+            as_of=cutoff,
+            proxy=cfg.bid_fill_proxy,
+        )
+        chosen = next(
+            (
+                point
+                for point in candidates
+                if lows.get(point.day_start_utc, point.vwap_price) <= bid_price
+            ),
+            None,
+        )
+        if chosen is not None:
+            filled_at_bid = True
+            codes.append(f"rerelease_bottom_fishing_bid_filled_on_{cfg.bid_fill_proxy.lower()}")
+        elif rule == "WINDOWED_BID_FORCED":
+            # The window expired unfilled. Mode B crosses the spread on the
+            # last day it can rather than give up the position, and pays the
+            # market for it: the entry is that day's traded price, not the bid.
+            chosen = candidates[-1]
+            codes.append("rerelease_bottom_fishing_bid_expired_bought_at_market")
     else:
         chosen = _stabilised_entry(
             candidates,
@@ -376,6 +451,8 @@ def resolve_bottom_fishing_entry(
             pre_event_median=pre_median,
             immediate_price=immediate,
             window_low=window_low,
+            bid_price=bid_price,
+            filled_at_bid=False,
             explanation_codes=tuple(dict.fromkeys(codes)),
         )
 
@@ -394,12 +471,14 @@ def resolve_bottom_fishing_entry(
         entered=True,
         entry_day_start_utc=chosen.day_start_utc,
         entry_available_at=chosen.day_start_utc + timedelta(days=1),
-        entry_price=chosen.vwap_price,
+        entry_price=bid_price if filled_at_bid else chosen.vwap_price,
         days_waited=waited,
         candidate_day_count=len(candidates),
         pre_event_median=pre_median,
         immediate_price=immediate,
         window_low=window_low,
+        bid_price=bid_price,
+        filled_at_bid=filled_at_bid,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
 
@@ -673,6 +752,47 @@ def _stabilised_entry(
         if not any(window):
             return point
     return None
+
+
+def _day_low_proxies(
+    buckets: Iterable[HistoricalTradeBucketEvidence],
+    *,
+    window_start: datetime,
+    as_of: datetime,
+    proxy: BidFillProxy,
+) -> dict[datetime, Decimal]:
+    """The lowest price each UTC day offers a resting bid, per proxy.
+
+    ``DAY_VWAP`` asks whether the day's average cleared the bid. It is the
+    conservative reading and understates fills: a day that traded through the
+    bid intraday but averaged above it is counted as a miss.
+
+    ``HOURLY_LOW`` asks whether any hour's average did, which is closer to what
+    a resting order experiences and overstates fills in the other direction,
+    because it ignores how little size may have been available at that hour.
+    Days with no hourly evidence fall back to the daily figure either way.
+
+    Neither is a fill. Both are proxies from trade history, and the direction
+    each errs in is stated so a result can be read with the right sign.
+    """
+
+    if as_of <= window_start:
+        return {}
+    evidence = select_historical_trade_evidence(
+        tuple(buckets), as_of=as_of, window_start=window_start
+    )
+    lows: dict[datetime, Decimal] = {}
+    if proxy == "HOURLY_LOW":
+        for bucket in evidence.buckets:
+            if bucket.granularity != "1h":
+                continue
+            day = bucket.bucket_start_utc.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            current = lows.get(day)
+            if current is None or bucket.vwap_price < current:
+                lows[day] = bucket.vwap_price
+    return lows
 
 
 def _completed_days(

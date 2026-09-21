@@ -79,10 +79,22 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v13"
-# A short hold and a long one: entry timing and holding length are
-# different levers and reporting only one would hide their interaction.
-BOTTOM_FISHING_HOLDS = (30, 90)
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v14"
+# A short hold and two long ones: entry timing and holding length are
+# different levers and reporting only one would hide their interaction. 180 is
+# here because it is the horizon the cohort actually rewards.
+BOTTOM_FISHING_HOLDS = (30, 90, 180)
+# The windowed bid is run at two window lengths and both fill proxies, because
+# the window is the strategy's main knob and the proxy sets which way the fill
+# rate is wrong.
+BOTTOM_FISHING_WINDOWS = (7, 14)
+BOTTOM_FISHING_FILL_PROXIES = ("DAY_VWAP", "HOURLY_LOW")
+BOTTOM_FISHING_VARIANTS = tuple(
+    (hold, window, proxy)
+    for hold in BOTTOM_FISHING_HOLDS
+    for window in BOTTOM_FISHING_WINDOWS
+    for proxy in BOTTOM_FISHING_FILL_PROXIES
+)
 PRICE_SCALE = Decimal("10000")
 Role = Literal["calibration", "diagnostic", "negative_control"]
 
@@ -143,8 +155,8 @@ def run_manifest(path: Path) -> dict[str, Any]:
         raise CohortReplayError("item_id values must be unique")
 
     built: list[BuiltExample] = []
-    bottom_fishing: dict[int, list[BottomFishingTrial]] = {
-        value: [] for value in BOTTOM_FISHING_HOLDS
+    bottom_fishing: dict[tuple[int, int, str], list[BottomFishingTrial]] = {
+        key: [] for key in BOTTOM_FISHING_VARIANTS
     }
     scarcity_examples: list[dict[str, Any]] = []
     item_reports: list[dict[str, Any]] = []
@@ -250,8 +262,12 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 ),
                 default=None,
             )
-            for holding_days in BOTTOM_FISHING_HOLDS:
-                config = BottomFishingConfig(holding_days=holding_days)
+            for holding_days, window, proxy in BOTTOM_FISHING_VARIANTS:
+                config = BottomFishingConfig(
+                    holding_days=holding_days,
+                    maximum_wait_days=window,
+                    bid_fill_proxy=proxy,
+                )
                 for rule in ENTRY_RULES:
                     bottom_entry = resolve_bottom_fishing_entry(
                         rule=rule,
@@ -269,7 +285,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
                         config=config,
                         next_same_family_event_opens_at=next_open,
                     )
-                    bottom_fishing[holding_days].append(
+                    bottom_fishing[(holding_days, window, proxy)].append(
                         BottomFishingTrial(
                             entry=bottom_entry, outcome=bottom_outcome
                         )
@@ -920,7 +936,7 @@ def _parse_utc(value: str) -> datetime:
 
 
 def _bottom_fishing_metrics(
-    trials_by_hold: dict[int, list[BottomFishingTrial]]
+    trials_by_hold: dict[tuple[int, int, str], list[BottomFishingTrial]]
 ) -> dict[str, Any]:
     """Compare entry timing rules against the fixed entry the stack uses today.
 
@@ -939,10 +955,19 @@ def _bottom_fishing_metrics(
             "unattainable bound, not a strategy."
         ),
         "causal_rules": list(CAUSAL_ENTRY_RULES),
+        "bid_note": (
+            "WINDOWED_BID_* rest a buy order at the pre-event baseline less "
+            "bid_target_drop, raised by bid_tolerance. A resting bid fills at "
+            "its own price, which is why there is no downward tolerance: "
+            "nothing below the bid is available to a buyer who set it. "
+            "ABSTAIN gives up when the window expires; FORCED crosses the "
+            "spread on the last day and pays the market. DAY_VWAP understates "
+            "fills, HOURLY_LOW overstates them, and neither is a fill."
+        ),
     }
-    for holding_days, trials in sorted(trials_by_hold.items()):
+    for (holding_days, window, proxy), trials in sorted(trials_by_hold.items()):
         comparison = compare_bottom_fishing_rules(trials=trials)
-        result[f"hold_{holding_days}d"] = {
+        result[f"hold_{holding_days}d_window_{window}d_{proxy.lower()}"] = {
             "event_count": comparison.event_count,
             "summaries": [
                 {

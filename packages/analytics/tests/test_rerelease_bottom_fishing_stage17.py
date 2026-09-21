@@ -485,3 +485,171 @@ def test_a_naive_as_of_is_rejected() -> None:
             historical_buckets=path(["90"]),
             as_of=datetime(2026, 6, 1),
         )
+
+
+# --- the windowed bid -------------------------------------------------------
+
+
+def hour(offset_days: int, hour_of_day: int, price: str, *, item_id: int = 1):
+    return HistoricalTradeBucketEvidence(
+        item_id=item_id,
+        granularity="1h",
+        bucket_start_utc=day(offset_days) + timedelta(hours=hour_of_day),
+        bucket_duration=timedelta(hours=1),
+        vwap_price=Decimal(price),
+        reported_trade_volume=4,
+    )
+
+
+BID_CONFIG = BottomFishingConfig(
+    maximum_wait_days=7,
+    bid_target_drop=Decimal("0.30"),
+    bid_tolerance=Decimal("0.05"),
+    holding_days=30,
+)
+
+
+def test_a_filled_bid_is_bought_at_the_bid_not_at_the_days_price() -> None:
+    """The whole point of resting a bid: you pay your own price.
+
+    Baseline is 100, so the anchor is 70 and the bid 73.50. The day that
+    reaches it traded at 72 on average, and a market buyer would have paid 72;
+    the resting bid is filled at 73.50 because that is the price it rested at.
+    """
+
+    buckets = path(["90", "85", "72", "80"])
+    result = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+
+    assert result.status == "ENTERED"
+    assert result.pre_event_median == Decimal("100")
+    assert result.bid_price == Decimal("73.500")
+    assert result.filled_at_bid is True
+    assert result.entry_price == Decimal("73.500")
+    assert result.days_waited == 2
+
+
+def test_a_bid_that_is_never_reached_abstains_in_mode_a() -> None:
+    buckets = path(["90", "88", "85", "84", "86", "85", "87"])
+    result = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+
+    assert result.status == "NOT_TRIGGERED"
+    assert result.entered is False
+    assert result.entry_price is None
+    # The bid it rested at is still reported, so an abstention says what was
+    # asked for and missed rather than only that nothing happened.
+    assert result.bid_price == Decimal("73.500")
+    assert result.filled_at_bid is False
+
+
+def test_the_same_path_crosses_the_spread_in_mode_b() -> None:
+    """Mode B refuses to miss the position and pays the market to get it."""
+
+    buckets = path(["90", "88", "85", "84", "86", "85", "87"])
+    strict = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+    forced = entry("WINDOWED_BID_FORCED", buckets, config=BID_CONFIG)
+
+    assert strict.status == "NOT_TRIGGERED"
+    assert forced.status == "ENTERED"
+    assert forced.filled_at_bid is False
+    assert forced.entry_price == Decimal("87")
+    assert forced.days_waited == 6
+    assert (
+        "rerelease_bottom_fishing_bid_expired_bought_at_market"
+        in forced.explanation_codes
+    )
+
+
+def test_mode_b_still_fills_at_the_bid_when_the_bid_is_reached() -> None:
+    buckets = path(["90", "72", "80", "85"])
+    forced = entry("WINDOWED_BID_FORCED", buckets, config=BID_CONFIG)
+
+    assert forced.filled_at_bid is True
+    assert forced.entry_price == Decimal("73.500")
+
+
+def test_the_window_bounds_how_long_the_bid_rests() -> None:
+    # The bid is only reached on day 8, past a seven day window.
+    buckets = path(["90", "88", "87", "86", "85", "84", "83", "60"])
+    result = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+
+    assert result.status == "NOT_TRIGGERED"
+    assert result.candidate_day_count == 7
+
+
+def test_the_hourly_proxy_fills_where_the_daily_average_does_not() -> None:
+    """A day can trade through a bid and still average above it.
+
+    The daily proxy calls that a miss, the hourly one calls it a fill, and the
+    difference is exactly the measurement error the choice introduces.
+    """
+
+    pre = [bucket(offset, "100") for offset in range(16, 30)]
+    post = [bucket(44, "90"), bucket(46, "88")]
+    # Day 45 trades between 70 and 96: its average clears the bid, one hour of
+    # it does not.
+    hours = [hour(45, index, price) for index, price in enumerate(["96", "70", "95", "94"])]
+    buckets = tuple(pre + post + hours)
+
+    daily = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+    hourly = entry(
+        "WINDOWED_BID_ABSTAIN",
+        buckets,
+        config=BottomFishingConfig(
+            maximum_wait_days=7,
+            bid_target_drop=Decimal("0.30"),
+            bid_tolerance=Decimal("0.05"),
+            bid_fill_proxy="HOURLY_LOW",
+            holding_days=30,
+        ),
+    )
+
+    assert daily.status == "NOT_TRIGGERED"
+    assert hourly.status == "ENTERED"
+    assert hourly.entry_price == Decimal("73.500")
+    assert (
+        "rerelease_bottom_fishing_bid_filled_on_hourly_low"
+        in hourly.explanation_codes
+    )
+
+
+def test_a_bid_without_a_pre_event_baseline_is_refused() -> None:
+    buckets = tuple(bucket(44 + i, p) for i, p in enumerate(["70", "60"]))
+    result = entry("WINDOWED_BID_ABSTAIN", buckets, config=BID_CONFIG)
+
+    assert result.status == "NO_PRE_EVENT_BASELINE"
+    assert result.bid_price is None
+
+
+def test_a_wider_tolerance_fills_more_often_and_pays_more() -> None:
+    """The trade the tolerance makes, asserted rather than assumed."""
+
+    buckets = path(["90", "85", "76", "80"])
+    tight = entry(
+        "WINDOWED_BID_ABSTAIN",
+        buckets,
+        config=BottomFishingConfig(
+            maximum_wait_days=7, bid_tolerance=Decimal("0"), holding_days=30
+        ),
+    )
+    loose = entry(
+        "WINDOWED_BID_ABSTAIN",
+        buckets,
+        config=BottomFishingConfig(
+            maximum_wait_days=7, bid_tolerance=Decimal("0.10"), holding_days=30
+        ),
+    )
+
+    assert tight.status == "NOT_TRIGGERED"
+    assert loose.status == "ENTERED"
+    assert loose.entry_price == Decimal("77.000")
+    assert loose.entry_price > Decimal("70")
+
+
+def test_an_unsupported_fill_proxy_is_rejected() -> None:
+    with pytest.raises(BottomFishingError, match="unsupported bid fill proxy"):
+        BottomFishingConfig(bid_fill_proxy="TOUCH_THE_LOW")
+
+
+def test_a_negative_tolerance_is_rejected() -> None:
+    with pytest.raises(BottomFishingError, match="bid_tolerance"):
+        BottomFishingConfig(bid_tolerance=Decimal("-0.01"))

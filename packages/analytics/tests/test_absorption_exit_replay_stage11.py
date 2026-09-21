@@ -89,7 +89,7 @@ def _run(tmp_path: Path) -> dict:
 
 def test_replay_reports_absorption_exit_for_a_matched_named_item(tmp_path: Path):
     report = _run(tmp_path)
-    assert report["schema_version"] == "named_recovery_cohort_report_v13"
+    assert report["schema_version"] == "named_recovery_cohort_report_v14"
     item = report["items"][0]
     assert item["catalog_match_status"] == "MATCHED"
     current = item["current_absorption_exit"]
