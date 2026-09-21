@@ -29,6 +29,9 @@ from gaijin_market_analytics.walk_forward import (
 
 
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
+LOOSE_FIT = WalkForwardCalibrationConfig(
+    minimum_resolved_forecasts=3, minimum_distinct_items=2
+)
 NARROW = ((Decimal("0.80"), Decimal("1")), (Decimal("1.00"), Decimal("1")), (Decimal("1.25"), Decimal("1")))
 
 
@@ -794,3 +797,61 @@ def test_location_bias_is_reported_but_never_corrected() -> None:
 
     assert calibration.factor is not None
     assert applied[1].ratio == samples[1].ratio == Decimal("1.0")
+
+
+# --- the transform memo -----------------------------------------------------
+
+
+def test_a_shared_memo_cannot_change_an_answer() -> None:
+    """The contract that makes the replay's speed-up safe.
+
+    A resolution's transform under a factor depends only on that resolution and
+    that factor, so sharing one memo across every decision instant must give
+    exactly what computing each in isolation gives.
+    """
+
+    pool = narrow_pool()
+    shared: dict = {}
+    moments = [BASE + timedelta(days=offset) for offset in (60, 100, 140, 200)]
+
+    for moment in moments:
+        fresh = calibrate_dispersion(resolutions=pool, as_of=moment, config=LOOSE_FIT)
+        memoized = calibrate_dispersion(
+            resolutions=pool, as_of=moment, config=LOOSE_FIT, transform_cache=shared
+        )
+        assert memoized == fresh
+
+    assert shared, "the memo should have been populated"
+
+
+def test_the_memo_is_reused_rather_than_regrown() -> None:
+    pool = narrow_pool()
+    shared: dict = {}
+    calibrate_dispersion(
+        resolutions=pool,
+        as_of=BASE + timedelta(days=200),
+        config=LOOSE_FIT,
+        transform_cache=shared,
+    )
+    size = len(shared)
+    calibrate_dispersion(
+        resolutions=pool,
+        as_of=BASE + timedelta(days=200),
+        config=LOOSE_FIT,
+        transform_cache=shared,
+    )
+
+    assert len(shared) == size
+
+
+def test_the_replay_matches_an_uncached_fit_at_every_instant() -> None:
+    pool = narrow_pool()
+    report = evaluate_walk_forward_calibration(resolutions=pool, config=LOOSE_FIT)
+
+    for row in report.trials:
+        standalone = calibrate_dispersion(
+            resolutions=pool, as_of=row.prediction_as_of, config=LOOSE_FIT
+        )
+        expected = standalone.factor if standalone.applicable else None
+        assert row.factor == expected
+        assert row.calibration_status == standalone.status

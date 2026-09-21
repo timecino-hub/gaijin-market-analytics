@@ -452,6 +452,7 @@ def calibrate_dispersion(
     resolutions: Iterable[ResolvedRatioForecast],
     as_of: datetime,
     config: WalkForwardCalibrationConfig | None = None,
+    transform_cache: dict[tuple[ResolvedRatioForecast, Decimal], Decimal] | None = None,
 ) -> DispersionCalibration:
     """Fit the median-preserving dispersion factor usable at ``as_of``.
 
@@ -465,6 +466,14 @@ def calibrate_dispersion(
     Eight resolutions drawn from one vehicle describe that vehicle's idiosyncratic
     path, and a factor fitted on them would be presented as a property of the
     model.
+
+    ``transform_cache`` is an optional memo a caller may share across calls. A
+    resolution's transform under a given factor depends only on that resolution
+    and that factor, never on the instant being fitted, so a replay that fits
+    at every decision point would otherwise recompute the same value once per
+    point. Passing one dictionary through turns that quadratic term linear. The
+    memo is keyed on exactly the inputs that determine the value, so sharing it
+    cannot change an answer; callers must not mutate it themselves.
     """
 
     cfg = config or WalkForwardCalibrationConfig()
@@ -518,12 +527,10 @@ def calibrate_dispersion(
     best_transforms: tuple[Decimal, ...] = ()
     unit_criterion: Decimal | None = None
     unit_transforms: tuple[Decimal, ...] = ()
+    cache = {} if transform_cache is None else transform_cache
     for factor in grid:
         transforms = tuple(
-            _mid_transform(
-                scale_support(value.support, factor, ratio_quantum=cfg.ratio_quantum),
-                value.realized_ratio,
-            )
+            _transform_of(value, factor, cfg.ratio_quantum, cache)
             for value in informative
         )
         criterion = uniformity_criterion(transforms)
@@ -564,6 +571,25 @@ def calibrate_dispersion(
         grid=grid,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
+
+
+def _transform_of(
+    value: ResolvedRatioForecast,
+    factor: Decimal,
+    quantum: Decimal,
+    cache: dict[tuple[ResolvedRatioForecast, Decimal], Decimal],
+) -> Decimal:
+    """Memoized mid-transform of one resolution under one candidate factor."""
+
+    key = (value, factor)
+    hit = cache.get(key)
+    if hit is None:
+        hit = _mid_transform(
+            scale_support(value.support, factor, ratio_quantum=quantum),
+            value.realized_ratio,
+        )
+        cache[key] = hit
+    return hit
 
 
 def scale_support(
@@ -699,10 +725,17 @@ def evaluate_walk_forward_calibration(
     ordered = sorted(
         pool, key=lambda value: (value.prediction_as_of, value.item_id, value.event_key)
     )
+    # One memo for the whole replay. Every decision instant fits over an
+    # expanding prefix of the same resolutions, so without it each resolution's
+    # transform is recomputed once per later instant.
+    cache: dict[tuple[ResolvedRatioForecast, Decimal], Decimal] = {}
     trials: list[WalkForwardTrialOutcome] = []
     for trial in ordered:
         calibration = calibrate_dispersion(
-            resolutions=pool, as_of=trial.prediction_as_of, config=cfg
+            resolutions=pool,
+            as_of=trial.prediction_as_of,
+            config=cfg,
+            transform_cache=cache,
         )
         factor = calibration.factor if calibration.applicable else None
         calibrated_support = (
