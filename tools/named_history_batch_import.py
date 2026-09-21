@@ -207,7 +207,19 @@ def build_plan(
                 "bound, but every catalogued supply event is still open; re-run "
                 "after it closes rather than recapturing"
             ),
-            "NO_USABLE_EVENT": "bound, but no completed event has its baseline covered",
+            "NO_USABLE_EVENT": (
+                "bound, but no completed event has its baseline covered; "
+                "recapture reaching further back"
+            ),
+            "FIRST_ISSUE_NO_PRE_EVENT_MARKET": (
+                "bound, but the market history begins inside the earliest "
+                "completed event's own window and no later event opened "
+                "before it, which is the shape of a vehicle first issued by "
+                "that event rather than re-released into a market that "
+                "already priced it. An inference, not a certainty: if the "
+                "capture was simply truncated, recapture further back and it "
+                "will report NO_USABLE_EVENT instead"
+            ),
             "INVALID_DOCUMENT": "rejected by the import contract before any upload",
         },
         "network_access": False,
@@ -353,12 +365,20 @@ def _review_capture(
     elif coverage.fully_usable_event_count == 0:
         # A vehicle whose only supply events are still open has nothing to
         # measure yet, which is a reason to come back rather than to recapture.
-        verdict = (
-            "EVENT_NOT_COMPLETED"
-            if coverage.completed_tradeable_event_count == 0
+        if (
+            coverage.completed_tradeable_event_count == 0
             and coverage.tradeable_event_count > 0
-            else "NO_USABLE_EVENT"
-        )
+        ):
+            verdict = "EVENT_NOT_COMPLETED"
+        elif _first_issue_without_pre_event_market(coverage):
+            # Telling an operator to recapture further back is wrong advice
+            # when there is nothing further back: the vehicle was created by
+            # the event rather than re-released into a market that already
+            # priced it.
+            verdict = "FIRST_ISSUE_NO_PRE_EVENT_MARKET"
+            codes.append("history_begins_after_every_completed_event_opened")
+        else:
+            verdict = "NO_USABLE_EVENT"
     else:
         verdict = "READY"
     if record is None:
@@ -389,6 +409,36 @@ def _review_capture(
         unmodelled_supply_channels=channels.unmodelled_supply_channels,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
+
+
+def _first_issue_without_pre_event_market(coverage: Any) -> bool:
+    """True when the market itself appears to have begun with the event.
+
+    Distinguishes a capture that starts too late from a vehicle that never
+    traded before the event that issued it. "Starts after every completed
+    event" is not enough on its own, because a badly truncated capture of an
+    old vehicle satisfies it too. The discriminating shape is that trading
+    began *inside* the earliest completed event's own window, which is what
+    happens when that event created the coupons being sold.
+
+    It stays an inference. A truncated capture that happens to begin inside an
+    event window will be mislabelled, and recapturing further back moves it
+    back to ``NO_USABLE_EVENT``.
+    """
+
+    start = coverage.history_start_utc
+    if start is None:
+        return False
+    completed = sorted(
+        (value for value in coverage.events if value.event_completed),
+        key=lambda value: value.opens_at,
+    )
+    if not completed:
+        return False
+    if any(value.opens_at > start for value in completed):
+        return False
+    earliest = completed[0]
+    return earliest.opens_at <= start <= earliest.closes_at
 
 
 def _validate_capture(

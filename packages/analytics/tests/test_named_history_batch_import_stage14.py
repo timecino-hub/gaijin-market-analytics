@@ -513,3 +513,48 @@ def test_a_still_open_event_is_distinguished_from_a_short_history(tmp_path: Path
     assert capture["tradeable_event_count"] == 1
     assert capture["fully_usable_event_count"] == 0
     assert capture["covers_required_start"] is True
+
+
+def test_a_market_that_began_inside_its_own_event_is_not_a_recapture_problem(
+    tmp_path: Path,
+):
+    """F-6C-10-NA's shape: the coupons the event created were its first listing.
+
+    Telling an operator to recapture further back is wrong advice when there
+    is nothing further back, so this is its own verdict rather than the
+    ``NO_USABLE_EVENT`` that means the capture is merely short.
+    """
+
+    _capture(
+        tmp_path,
+        name="f-6c.json",
+        item_key="id50361_f_6c_china",
+        start=datetime(2026, 5, 3, tzinfo=UTC),
+        days=140,
+    )
+    binding = _binding(
+        tmp_path,
+        [{"item_key": "id50361_f_6c_china", "vehicle_name": "F-6C-10-NA"}],
+    )
+    capture = _plan(tmp_path, binding=binding)["captures"][0]
+
+    assert capture["verdict"] == "FIRST_ISSUE_NO_PRE_EVENT_MARKET"
+    assert capture["covers_required_start"] is False
+    assert (
+        "history_begins_after_every_completed_event_opened"
+        in capture["explanation_codes"]
+    )
+
+
+def test_a_truncated_capture_of_an_older_vehicle_still_asks_for_a_recapture(
+    tmp_path: Path,
+):
+    """The discriminating case: late start, but not inside the first window."""
+
+    _capture(tmp_path, start=datetime(2026, 6, 1, tzinfo=UTC), days=100)
+    binding = _binding(
+        tmp_path, [{"item_key": KUNGSTIGER_KEY, "vehicle_name": "Kungstiger"}]
+    )
+    capture = _plan(tmp_path, binding=binding)["captures"][0]
+
+    assert capture["verdict"] == "NO_USABLE_EVENT"

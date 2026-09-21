@@ -658,8 +658,9 @@ def _close_entry_allocation(decisions: list[dict[str, Any]]) -> dict[str, Any]:
         "distribution_sources": {
             "item_local": "the item's own prior recovery ratios; best scored",
             "family": (
-                "same-family cross-item ratios; available on more events and "
-                "scored worse (Brier 0.291 against 0.214)"
+                "same-family cross-item ratios; available on far more events, "
+                "and with enough cross-item evidence its support gains real "
+                "interior where the item-local one stays at two to four atoms"
             ),
             "item_local_then_family": (
                 "the production rule: prefer the item's own evidence and fall "
