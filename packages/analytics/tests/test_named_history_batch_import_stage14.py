@@ -487,3 +487,29 @@ def test_a_negative_control_that_does_bind_is_flagged(tmp_path: Path):
         "negative_control_unexpectedly_binds_to_catalog"
         in capture["explanation_codes"]
     )
+
+
+def test_a_still_open_event_is_distinguished_from_a_short_history(tmp_path: Path):
+    # The Summer 2026 event opens 2026-08-27 and closes 2026-09-25, so on
+    # 2026-09-21 a vehicle whose only event is that one has nothing to measure.
+    _capture(
+        tmp_path,
+        name="ebr.json",
+        item_key="id50145_e_b_r__1963_france",
+        start=datetime(2021, 11, 24, tzinfo=UTC),
+        days=1700,
+    )
+    binding = _binding(
+        tmp_path,
+        [
+            {
+                "item_key": "id50145_e_b_r__1963_france",
+                "vehicle_name": "E.B.R. (1963)",
+            }
+        ],
+    )
+    capture = _plan(tmp_path, binding=binding)["captures"][0]
+    assert capture["verdict"] == "EVENT_NOT_COMPLETED"
+    assert capture["tradeable_event_count"] == 1
+    assert capture["fully_usable_event_count"] == 0
+    assert capture["covers_required_start"] is True

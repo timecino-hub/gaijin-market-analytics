@@ -199,6 +199,10 @@ def build_plan(
             ),
             "BINDING_REQUIRED": "valid, but no operator binding to a catalogued vehicle",
             "UNBOUND_VEHICLE": "bound name does not match the supply-pool catalog",
+            "EVENT_NOT_COMPLETED": (
+                "bound, but every catalogued supply event is still open; re-run "
+                "after it closes rather than recapturing"
+            ),
             "NO_USABLE_EVENT": "bound, but no completed event has its baseline covered",
             "INVALID_DOCUMENT": "rejected by the import contract before any upload",
         },
@@ -343,7 +347,14 @@ def _review_capture(
     elif coverage.match_status != "MATCHED":
         verdict = "UNBOUND_VEHICLE"
     elif coverage.fully_usable_event_count == 0:
-        verdict = "NO_USABLE_EVENT"
+        # A vehicle whose only supply events are still open has nothing to
+        # measure yet, which is a reason to come back rather than to recapture.
+        verdict = (
+            "EVENT_NOT_COMPLETED"
+            if coverage.completed_tradeable_event_count == 0
+            and coverage.tradeable_event_count > 0
+            else "NO_USABLE_EVENT"
+        )
     else:
         verdict = "READY"
     if record is None:
