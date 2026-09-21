@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from gaijin_market_analytics.cohort_coverage import assess_history_coverage
 from gaijin_market_analytics.supply_cycles import SupplyPoolEvent
 from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_CATALOG
 
@@ -229,20 +230,6 @@ AUDIT_SCHEMA_VERSION = "named_cohort_coverage_audit_v1"
 
 
 @dataclass(frozen=True, slots=True)
-class EventCoverage:
-    event_key: str
-    family: str
-    coupon_mode: str
-    opens_at: datetime
-    closes_at: datetime
-    pre_window_start: datetime
-    pre_window_covered: bool
-    active_window_covered: bool
-    post_window_observed_days: int
-    fully_usable: bool
-
-
-@dataclass(frozen=True, slots=True)
 class ItemCoverage:
     item_id: int
     item_name: str
@@ -256,7 +243,7 @@ class ItemCoverage:
     covers_required_start: bool
     tradeable_event_count: int
     fully_usable_event_count: int
-    events: tuple[EventCoverage, ...]
+    events: tuple[Any, ...]
     explanation_codes: tuple[str, ...]
 
 
@@ -326,91 +313,55 @@ def _audit_item(
     history_path: Path,
     as_of: datetime,
 ) -> ItemCoverage:
-    payload = json.loads(history_path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != "gaijin_trade_history_v1":
-        raise CandidateReportError(
-            f"history for {item_name} must use gaijin_trade_history_v1"
-        )
-    series = payload.get("series")
-    if not isinstance(series, dict):
-        raise CandidateReportError(f"history series invalid for {item_name}")
-    daily = series.get("1d") or []
-    hourly = series.get("1h") or []
-    stamps = [
-        datetime.fromtimestamp(point[0], UTC)
-        for point in list(daily) + list(hourly)
-        if isinstance(point, list) and point
-    ]
-    start = min(stamps) if stamps else None
-    end = max(stamps) if stamps else None
-
-    facts = DEFAULT_SUPPLY_POOL_CATALOG.bind_item(item_id=item_id, item_name=item_name)
-    event_by_key = {event.event_key: event for event in facts.events}
-    observed_days = {stamp.date() for stamp in stamps}
-    codes: list[str] = []
-    if facts.match_status != "MATCHED":
-        codes.append("named_history_not_bound_to_supply_catalog")
-
-    events: list[EventCoverage] = []
-    required_start: datetime | None = None
-    for member in sorted(facts.memberships, key=lambda value: value.event_key):
-        event = event_by_key.get(member.event_key)
-        if event is None or member.coupon_mode != "DIRECT_OR_COUPON":
-            continue
-        duration = event.closes_at - event.opens_at
-        pre_start = event.opens_at - duration
-        if required_start is None or pre_start < required_start:
-            required_start = pre_start
-        pre_covered = start is not None and start <= pre_start
-        active_covered = start is not None and start <= event.opens_at
-        post_days = sum(
-            1
-            for day in observed_days
-            if event.closes_at.date() <= day < min(as_of, end or as_of).date()
-        )
-        events.append(
-            EventCoverage(
-                event_key=event.event_key,
-                family=event.family,
-                coupon_mode=member.coupon_mode,
-                opens_at=event.opens_at,
-                closes_at=event.closes_at,
-                pre_window_start=pre_start,
-                pre_window_covered=pre_covered,
-                active_window_covered=active_covered,
-                post_window_observed_days=post_days,
-                fully_usable=(
-                    pre_covered
-                    and active_covered
-                    and post_days > 0
-                    and event.closes_at <= as_of
-                ),
-            )
-        )
-    events.sort(key=lambda value: (value.opens_at, value.event_key))
-    covers_required = (
-        required_start is not None and start is not None and start <= required_start
+    daily, hourly, starts = read_history_points(history_path, item_name=item_name)
+    coverage = assess_history_coverage(
+        vehicle_name=item_name,
+        bucket_start_times=starts,
+        as_of=as_of,
+        item_id=item_id,
     )
-    if required_start is not None and not covers_required:
-        codes.append("named_history_starts_after_first_pre_event_baseline")
-    if not events:
-        codes.append("no_tradeable_supply_event_bound")
     return ItemCoverage(
         item_id=item_id,
         item_name=item_name,
         history_file=history_path.name,
-        match_status=facts.match_status,
+        match_status=coverage.match_status,
         daily_point_count=len(daily),
         hourly_point_count=len(hourly),
-        history_start_utc=start,
-        history_end_utc=end,
-        required_history_start_utc=required_start,
-        covers_required_start=covers_required,
-        tradeable_event_count=len(events),
-        fully_usable_event_count=sum(value.fully_usable for value in events),
-        events=tuple(events),
-        explanation_codes=tuple(dict.fromkeys(codes)),
+        history_start_utc=coverage.history_start_utc,
+        history_end_utc=coverage.history_end_utc,
+        required_history_start_utc=coverage.required_history_start_utc,
+        covers_required_start=coverage.covers_required_start,
+        tradeable_event_count=coverage.tradeable_event_count,
+        fully_usable_event_count=coverage.fully_usable_event_count,
+        events=coverage.events,
+        explanation_codes=coverage.explanation_codes,
     )
+
+
+def read_history_points(
+    history_path: Path,
+    *,
+    item_name: str = "",
+) -> tuple[list[Any], list[Any], list[datetime]]:
+    """Read a gaijin_trade_history_v1 export into its two series and bucket starts."""
+
+    payload = json.loads(history_path.read_text(encoding="utf-8"))
+    label = item_name or history_path.name
+    if payload.get("schema_version") != "gaijin_trade_history_v1":
+        raise CandidateReportError(
+            f"history for {label} must use gaijin_trade_history_v1"
+        )
+    series = payload.get("series")
+    if not isinstance(series, dict):
+        raise CandidateReportError(f"history series invalid for {label}")
+    daily = list(series.get("1d") or [])
+    hourly = list(series.get("1h") or [])
+    starts = [
+        datetime.fromtimestamp(point[0], UTC)
+        for point in daily + hourly
+        if isinstance(point, list) and point
+    ]
+    return daily, hourly, starts
 
 
 def catalog_vehicle_names() -> tuple[str, ...]:
