@@ -67,7 +67,7 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 
 
 MANIFEST_SCHEMA_VERSION = "named_recovery_cohort_manifest_v1"
-REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v9"
+REPORT_SCHEMA_VERSION = "named_recovery_cohort_report_v10"
 # A short hold and a long one: entry timing and holding length are
 # different levers and reporting only one would hide their interaction.
 BOTTOM_FISHING_HOLDS = (30, 90)
@@ -348,6 +348,10 @@ def run_manifest(path: Path) -> dict[str, Any]:
                 ),
                 default=None,
             )
+            close_entry = first_post_event_trade_proxy(
+                event=event, historical_buckets=buckets, as_of=spec.as_of
+            )
+            close_entry_price = close_entry[1] if close_entry is not None else None
             for checkpoint in recovery.checkpoints:
                 if not checkpoint.available or checkpoint.observed_at is None:
                     continue
@@ -378,6 +382,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
                     forward_horizon_days=60,
                     next_same_family_event_opens_at=next_open,
                 )
+                from_close = _rebase_forward_outcome(forward, close_entry_price)
                 scarcity_examples.append(
                     {
                         "item_id": spec.item_id,
@@ -389,6 +394,7 @@ def run_manifest(path: Path) -> dict[str, Any]:
                         "snapshot": asdict(snapshot),
                         "absorption_exit": asdict(absorption),
                         "forward_60d_outcome": asdict(forward),
+                        "forward_60d_outcome_from_close": from_close,
                     }
                 )
 
@@ -992,14 +998,88 @@ def _policy_withhold(policy: str, snapshot: dict[str, Any]) -> bool:
     return evidence_active
 
 
+def _rebase_forward_outcome(
+    forward: Any, entry_price: Decimal | None
+) -> dict[str, Any]:
+    """Re-price one forward outcome from the post-close entry instead.
+
+    Only the entry changes. The exit day, its price, the fee and the proceeds
+    are the ones the outcome already computed, so this is arithmetic on a
+    finished result rather than a second implementation of exit selection that
+    could drift away from the first.
+    """
+
+    proceeds = forward.sale_proceeds
+    available = (
+        forward.outcome_available
+        and proceeds is not None
+        and entry_price is not None
+        and entry_price > Decimal("0")
+    )
+    if not available:
+        return {
+            "outcome_available": False,
+            "entry_proxy_price": entry_price,
+            "exit_proxy_price": forward.exit_proxy_price,
+            "sale_proceeds": proceeds,
+            "net_profit": None,
+            "net_roi": None,
+            "explanation_codes": [
+                "forward_outcome_from_close_entry_unavailable",
+            ],
+        }
+    assert proceeds is not None and entry_price is not None
+    profit = proceeds - entry_price
+    return {
+        "outcome_available": True,
+        "entry_proxy_price": entry_price,
+        "exit_proxy_price": forward.exit_proxy_price,
+        "sale_proceeds": proceeds,
+        "net_profit": profit,
+        "net_roi": profit / entry_price,
+        "explanation_codes": [
+            "forward_outcome_repriced_from_first_post_close_day",
+            "same_exit_day_and_proceeds_as_the_checkpoint_entry_outcome",
+        ],
+    }
+
+
+def _progress_pairs(
+    examples: list[dict[str, Any]], outcome_key: str
+) -> tuple[tuple[Decimal, Decimal], ...]:
+    return tuple(
+        (value["snapshot"]["rebuild_progress_floor"], value[outcome_key]["net_roi"])
+        for value in examples
+        if value["snapshot"]["rebuild_progress_floor"] is not None
+        and value[outcome_key]["net_roi"] is not None
+    )
+
+
 def _forward_outcome_summary(values: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score each state under both entry conventions on the same exits.
+
+    ``forward_*`` buys at the checkpoint, which is what every state table has
+    always measured. ``close_entry_*`` buys the first completed day after the
+    event closed and sells on exactly the same day for exactly the same
+    proceeds. Reporting both is the only way to see whether a state label
+    discriminates under the entry that makes money, or only under the one that
+    does not.
+    """
+
     rois = tuple(
         value["forward_60d_outcome"]["net_roi"]
         for value in values
         if value["forward_60d_outcome"]["outcome_available"]
         and value["forward_60d_outcome"]["net_roi"] is not None
     )
+    close_rois = tuple(
+        value["forward_60d_outcome_from_close"]["net_roi"]
+        for value in values
+        if value["forward_60d_outcome_from_close"]["outcome_available"]
+        and value["forward_60d_outcome_from_close"]["net_roi"] is not None
+    )
     profitable = sum(value > Decimal("0") for value in rois)
+    close_profitable = sum(value > Decimal("0") for value in close_rois)
     return {
         "forward_outcome_count": len(rois),
         "forward_profitable_after_fee_count": profitable,
@@ -1007,6 +1087,14 @@ def _forward_outcome_summary(values: list[dict[str, Any]]) -> dict[str, Any]:
             Decimal(profitable) / Decimal(len(rois)) if rois else None
         ),
         "median_forward_net_roi": _decimal_median(rois),
+        "close_entry_outcome_count": len(close_rois),
+        "close_entry_profitable_after_fee_count": close_profitable,
+        "close_entry_support_share": (
+            Decimal(close_profitable) / Decimal(len(close_rois))
+            if close_rois
+            else None
+        ),
+        "close_entry_median_net_roi": _decimal_median(close_rois),
     }
 
 
@@ -1024,37 +1112,20 @@ def _scarcity_rebuild_metrics(examples: list[dict[str, Any]]) -> dict[str, Any]:
     state_rows: list[dict[str, Any]] = []
     for state in sorted(by_state):
         values = by_state[state]
-        outcomes = [
-            value["forward_60d_outcome"]
-            for value in values
-            if value["forward_60d_outcome"]["outcome_available"]
-            and value["forward_60d_outcome"]["net_roi"] is not None
-        ]
-        rois = tuple(value["net_roi"] for value in outcomes)
         state_rows.append(
             {
                 "state": state,
                 "example_count": len(values),
-                "forward_outcome_count": len(rois),
-                "forward_profitable_after_fee_count": sum(
-                    value > Decimal("0") for value in rois
-                ),
-                "forward_profitability_support_share": (
-                    Decimal(sum(value > Decimal("0") for value in rois)) / Decimal(len(rois))
-                    if rois
-                    else None
-                ),
-                "median_forward_net_roi": _decimal_median(rois),
+                **_forward_outcome_summary(values),
             }
         )
-    association_pairs = tuple(
-        (
-            value["snapshot"]["rebuild_progress_floor"],
-            value["forward_60d_outcome"]["net_roi"],
-        )
-        for value in examples
-        if value["snapshot"]["rebuild_progress_floor"] is not None
-        and value["forward_60d_outcome"]["net_roi"] is not None
+    association_pairs = _progress_pairs(examples, "forward_60d_outcome")
+    # Stage 10 read this correlation off the checkpoint entry alone. It is the
+    # claim stage 11 was designed around, so it is also measured under the
+    # entry that actually makes money rather than only under the one that does
+    # not.
+    close_association_pairs = _progress_pairs(
+        examples, "forward_60d_outcome_from_close"
     )
     return {
         "example_count": len(examples),
@@ -1063,6 +1134,10 @@ def _scarcity_rebuild_metrics(examples: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "progress_forward_roi_pair_count": len(association_pairs),
         "progress_forward_roi_spearman": _spearman_decimal(association_pairs),
+        "close_entry_progress_forward_roi_pair_count": len(close_association_pairs),
+        "close_entry_progress_forward_roi_spearman": _spearman_decimal(
+            close_association_pairs
+        ),
         "state_metrics": state_rows,
         "interpretation": (
             "descriptive only; repeated item/event/horizon rows are not independent and "
