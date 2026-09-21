@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -46,12 +47,16 @@ def _seed(database_url: str, *, post_price: str) -> tuple[int, datetime]:
                 connection.execute(
                     text(
                         "INSERT INTO historical_trade_imports "
-                        "(item_id, source_schema_version, source_series_sha256, "
-                        " captured_at, point_count_1d, point_count_1h) "
-                        "VALUES (:i, 'gaijin_trade_history_v1', :s, :c, 0, 0) RETURNING id"
+                        "(item_id, pairing_id, source_url_safe, source_schema_version, "
+                        " source_captured_at, source_series_sha256, "
+                        " point_count_1h, point_count_1d) "
+                        "VALUES (:i, :pair, :url, 'gaijin_trade_history_v1', :c, :s, "
+                        " 0, 0) RETURNING id"
                     ),
                     {
                         "i": item_id,
+                        "pair": "postevent-entry-test",
+                        "url": "https://example.invalid/postevent-entry-test",
                         "s": "0" * 64,
                         "c": datetime.now(UTC),
                     },
@@ -101,7 +106,7 @@ def test_a_deep_drawdown_is_published_as_an_entry_candidate(client: TestClient, 
     row = next(value for value in body["items"] if value["item_id"] == item_id)
     assert row["state"] == "ENTRY_CANDIDATE"
     assert row["is_entry_candidate"] is True
-    assert row["drawdown_ratio"] == "0.6000"
+    assert Decimal(row["drawdown_ratio"]) == Decimal("0.60")
     assert row["take_profit_price"] is not None
     assert row["hold_until"] is not None
 

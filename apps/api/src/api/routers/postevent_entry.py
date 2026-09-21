@@ -115,7 +115,8 @@ def _item(value: PostEventEntryItemSignal) -> PostEventEntrySignalResponse:
 
 def _parse_as_of(value: str | None, clock: UtcClock) -> datetime:
     if value is None:
-        return clock.now()
+        # UtcClock is a callable returning the instant, not an object.
+        return _normalize(clock())
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as error:
@@ -123,6 +124,10 @@ def _parse_as_of(value: str | None, clock: UtcClock) -> datetime:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_as_of", "message": "as_of must be ISO-8601."},
         ) from error
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return _normalize(parsed)
+
+
+def _normalize(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
