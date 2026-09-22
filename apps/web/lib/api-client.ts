@@ -9,6 +9,8 @@ import type {
   ItemListQuery,
   OpportunityRankingQuery,
   OpportunityRankingResponse,
+  PostEventEntryQuery,
+  PostEventEntryResponse,
   LocalExtensionPairingCode,
   LocalExtensionStatus,
   LocalRecognitionCapabilities,
@@ -39,6 +41,12 @@ export async function getOpportunities(
   query: OpportunityRankingQuery
 ): Promise<OpportunityRankingResponse> {
   return fetchJson<OpportunityRankingResponse>("/api/v1/opportunities", query);
+}
+
+export async function getPostEventEntry(
+  query: PostEventEntryQuery
+): Promise<PostEventEntryResponse> {
+  return fetchJson<PostEventEntryResponse>("/api/v1/postevent-entry", query);
 }
 
 export async function getItem(itemId: string): Promise<ItemDetail> {
@@ -455,6 +463,14 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
 
   if (code === "invalid_boolean" || code === "invalid_filter") {
     return "排行榜筛选条件无效，请检查后重试。";
+  }
+
+  if (code === "postevent_entry_item_not_found") {
+    return "请求的商品不存在。";
+  }
+
+  if (code === "postevent_entry_as_of_not_timezone_aware") {
+    return "分析基准时间必须带时区。";
   }
 
   if (code === "opportunity_ranking_unavailable") {

@@ -550,3 +550,52 @@ export type LocalRecognitionDraftPayload = {
   reviewer_note?: string | null;
   acknowledge_incomplete_quantities?: boolean;
 };
+
+export type PostEventEntryState =
+  | "ENTRY_CANDIDATE"
+  | "SHALLOW_DRAWDOWN"
+  | "ENTRY_WINDOW_CLOSED"
+  | "SUPERSEDED_BY_NEXT_SUPPLY_EVENT"
+  | "NO_COMPLETED_EVENT"
+  | "NO_PRE_EVENT_BASELINE"
+  | "NO_POST_EVENT_PRICE";
+
+export type CatalogMatchStatus = "MATCHED" | "UNMATCHED" | "AMBIGUOUS";
+
+export type PostEventEntryQuery = {
+  as_of?: string;
+  candidates_only?: string;
+  include_inactive?: string;
+};
+
+export type PostEventEntrySignal = {
+  item_id: number;
+  external_key: string;
+  item_name: string;
+  catalog_match_status: CatalogMatchStatus | string;
+  matched_catalog_name: string | null;
+  state: PostEventEntryState | string | null;
+  is_entry_candidate: boolean;
+  event_key: string | null;
+  event_closed_at: string | null;
+  days_since_close: number | null;
+  pre_event_baseline: string | null;
+  latest_price: string | null;
+  drawdown_ratio: string | null;
+  drawdown_threshold: string | null;
+  take_profit_price: string | null;
+  take_profit_net_roi: string | null;
+  hold_until: string | null;
+  research_only: boolean;
+  fill_claim: boolean;
+  explanation_codes: string[];
+  version: string | null;
+};
+
+export type PostEventEntryResponse = {
+  as_of: string;
+  policy: string;
+  item_count: number;
+  entry_candidate_count: number;
+  items: PostEventEntrySignal[];
+};

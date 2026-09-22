@@ -43,6 +43,32 @@ test("opportunity analysis is public, read-only, and honest about its evidence g
   assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*opportunities/);
 });
 
+test("post-event entry is published as an annotation, with its weak evidence stated", async () => {
+  const [page, header, caddy] = await Promise.all([
+    readFile(new URL("./postevent-entry/page.tsx", import.meta.url), "utf8"),
+    readFile(headerUrl, "utf8"),
+    readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8")
+  ]);
+  assert.match(page, /export const dynamic = "force-dynamic"/);
+  assert.match(page, /<MarketHeader active="postevent-entry"/);
+  // The page must publish the honest gap between the descriptive number and the
+  // walk-forward one, not just the flattering one.
+  assert.match(page, /\+25\.2%/);
+  assert.match(page, /67\.0% 提升到 69\.6%/);
+  assert.match(page, /\+2\.6 个百分点/);
+  assert.match(page, /描述性统计/);
+  // Zero candidates is an answer, not an outage.
+  assert.match(page, /这是规则给出的答案，不是数据缺失/);
+  assert.match(page, /不代表成交保证或交易建议/);
+  assert.match(page, /只标注，不隐藏任何载具/);
+  // Unmatched vehicles are shown, never silently dropped.
+  assert.match(page, /不会被悄悄省略/);
+  assert.doesNotMatch(page, /Math\.random/);
+  assert.match(header, /href="\/postevent-entry"/);
+  assert.match(caddy, /path \/api\/v1\/postevent-entry/);
+  assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*postevent/);
+});
+
 test("catalog prices only use the approved current order book", async () => {
   const source = await readFile(listUrl, "utf8");
   assert.match(source, /item\.current_order_book/);

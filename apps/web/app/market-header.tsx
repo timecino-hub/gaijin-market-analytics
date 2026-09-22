@@ -1,6 +1,10 @@
 import Link from "next/link";
 
-export function MarketHeader({ active }: { active?: "home" | "catalog" | "opportunities" }) {
+export function MarketHeader({
+  active
+}: {
+  active?: "home" | "catalog" | "opportunities" | "postevent-entry";
+}) {
   return (
     <header className="deco-header">
       <Link className="deco-brand" href="/" aria-label="Gaijin Market Analytics 首页">
@@ -18,6 +22,12 @@ export function MarketHeader({ active }: { active?: "home" | "catalog" | "opport
         </Link>
         <Link className={active === "opportunities" ? "active" : undefined} href="/opportunities">
           潜力分析
+        </Link>
+        <Link
+          className={active === "postevent-entry" ? "active" : undefined}
+          href="/postevent-entry"
+        >
+          活动后入场
         </Link>
       </nav>
       <span className="deco-readonly">只读预览</span>
