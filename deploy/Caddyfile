@@ -31,18 +31,6 @@ bvvd-analysis.duckdns.org {
     }
     reverse_proxy @opportunities api:8000
 
-    @postevent_entry {
-      method GET HEAD
-      path /api/v1/postevent-entry
-    }
-    reverse_proxy @postevent_entry api:8000
-
-    @postevent_entry_item {
-      method GET HEAD
-      path_regexp public_postevent ^/api/v1/postevent-entry/[0-9]+$
-    }
-    reverse_proxy @postevent_entry_item api:8000
-
     @vehicle_potential {
       method GET HEAD
       path /api/v1/vehicle-potential

@@ -62,16 +62,19 @@ test("the two analyses stay separate and link to each other", async () => {
   assert.doesNotMatch(strategy, /price_percentile|getVehiclePotential/);
 });
 
-test("the post-event entry page is gone and nothing still points at it", async () => {
-  // The page was removed; a stale nav entry or link would 404 a reader.
-  const [header, potential, strategy, client] = await Promise.all([
+test("the post-event entry page and endpoint are gone, with nothing left pointing at them", async () => {
+  // Both were removed. A stale nav entry would 404 a reader, and a gateway
+  // rule left behind would keep a route public that no longer exists.
+  const [header, potential, strategy, client, caddy, main] = await Promise.all([
     readFile(headerUrl, "utf8"),
     readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../lib/api-client.ts", import.meta.url), "utf8")
+    readFile(new URL("../lib/api-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8"),
+    readFile(new URL("../../api/src/api/main.py", import.meta.url), "utf8")
   ]);
-  for (const source of [header, potential, strategy, client]) {
-    assert.doesNotMatch(source, /postevent-entry/);
+  for (const source of [header, potential, strategy, client, caddy, main]) {
+    assert.doesNotMatch(source, /postevent[-_]entry/);
   }
   assert.doesNotMatch(header, /活动后入场/);
 });
