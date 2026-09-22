@@ -1,18 +1,23 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from gaijin_market_analytics.strategy_evidence import (
+    BudgetEvidence,
     EventOutcome,
     HorizonEvidence,
     ReturnSummary,
     StrategyEvidenceConfig,
+    StrategyEvidenceError,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.clock import UtcClock, get_utc_clock
 from api.db.session import get_session
 from api.schemas.strategy_evidence import (
+    BudgetEvidenceResponse,
+    BudgetRungResponse,
     EventLedgerRowResponse,
     ExitRuleResponse,
     HorizonEvidenceResponse,
@@ -33,11 +38,13 @@ async def get_strategy_evidence(
     session: Annotated[AsyncSession, Depends(get_session)],
     clock: Annotated[UtcClock, Depends(get_utc_clock)],
     as_of: str | None = None,
+    budget: str | None = None,
 ) -> StrategyEvidenceResponse:
     moment = _parse_as_of(as_of, clock)
+    config = _config_for(budget)
     try:
         ledger = await build_strategy_evidence(
-            session=session, as_of=moment, config=StrategyEvidenceConfig()
+            session=session, as_of=moment, config=config
         )
     except StrategyEvidenceServiceError as error:
         raise HTTPException(
@@ -63,6 +70,7 @@ def _response(ledger: StrategyEvidenceLedger) -> StrategyEvidenceResponse:
         no_entry_price_count=evidence.no_entry_price_count,
         unmatched_item_count=ledger.unmatched_item_count,
         horizons=[_horizon(value) for value in evidence.horizons],
+        budget=_budget(evidence.budget),
         exit_frontier=[
             ExitRuleResponse(
                 kind=rule.kind,
@@ -89,6 +97,46 @@ def _response(ledger: StrategyEvidenceLedger) -> StrategyEvidenceResponse:
         research_only=evidence.research_only,
         version=evidence.version,
     )
+
+
+def _budget(value: BudgetEvidence) -> BudgetEvidenceResponse:
+    return BudgetEvidenceResponse(
+        budget=value.budget,
+        ladder=[
+            BudgetRungResponse(
+                budget=rung.budget,
+                affordable_count=rung.affordable_count,
+                total_count=rung.total_count,
+                median_units=rung.median_units,
+                summary=_summary(rung.summary),
+            )
+            for rung in value.ladder
+        ],
+        choice_cycle_count=value.choice_cycle_count,
+        deepest_drawdown=_summary(value.deepest_drawdown),
+        choice_cycle_events=_summary(value.choice_cycle_events),
+    )
+
+
+def _config_for(budget: str | None) -> StrategyEvidenceConfig:
+    """Build the config, refusing a budget that is not a usable amount.
+
+    A bad budget is a bad request, not a reason to quietly fall back to the
+    default and answer a question nobody asked.
+    """
+
+    if budget is None:
+        return StrategyEvidenceConfig()
+    try:
+        return StrategyEvidenceConfig(budget=Decimal(budget))
+    except (ArithmeticError, ValueError, StrategyEvidenceError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_budget",
+                "message": "budget must be a positive decimal amount.",
+            },
+        ) from error
 
 
 def _horizon(value: HorizonEvidence) -> HorizonEvidenceResponse:

@@ -50,6 +50,30 @@ class ExitRuleResponse(BaseModel):
     summary: ReturnSummaryResponse
 
 
+class BudgetRungResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget: Decimal
+    affordable_count: int
+    total_count: int
+    # Whole units: a coupon cannot be bought in halves, so the leftover coins
+    # buy nothing and are not reported as a fraction of a position.
+    median_units: int | None
+    summary: ReturnSummaryResponse
+
+
+class BudgetEvidenceResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget: Decimal
+    ladder: list[BudgetRungResponse]
+    # Cycles where more than one affordable vehicle qualified at once — the
+    # only ones in which a pick rule could have done anything.
+    choice_cycle_count: int
+    deepest_drawdown: ReturnSummaryResponse
+    choice_cycle_events: ReturnSummaryResponse
+
+
 class EventLedgerRowResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -87,6 +111,7 @@ class StrategyEvidenceResponse(BaseModel):
 
     horizons: list[HorizonEvidenceResponse]
     exit_frontier: list[ExitRuleResponse]
+    budget: BudgetEvidenceResponse
     events: list[EventLedgerRowResponse]
 
     explanation_codes: list[str]

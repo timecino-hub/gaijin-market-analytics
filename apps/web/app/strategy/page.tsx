@@ -4,19 +4,25 @@ import { formatDecimalPercent } from "../../lib/analysis-display";
 import { getStrategyEvidence, toDisplayError } from "../../lib/api-client";
 import { formatDecimal } from "../../lib/formatters";
 import {
+  coinLabel,
   daysToHitLabel,
   eventStateLabel,
   exitRuleLabel,
   findHorizon,
+  holdsOnePositionOnly,
   horizonLabel,
   horizonStateLabel,
   medianRisesWithHolding,
+  reachLabel,
   sampleLabel,
   sharePercent,
-  signedPercent
+  signedPercent,
+  unitsLabel
 } from "../../lib/strategy-evidence-display";
+import { budgetFromParams } from "../../lib/strategy-budget-state";
 import type {
   ApiError,
+  BudgetRung,
   EventLedgerRow,
   ExitRule,
   HorizonEvidence,
@@ -28,8 +34,13 @@ import { MarketHeader } from "../market-header";
 
 export const dynamic = "force-dynamic";
 
-export default async function StrategyPage() {
-  const result = await loadEvidence();
+type StrategyPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function StrategyPage({ searchParams }: StrategyPageProps) {
+  const { budget, query } = budgetFromParams(await searchParams);
+  const result = await loadEvidence(query);
 
   return (
     <main className="art-shell deco-strategy-page">
@@ -45,6 +56,8 @@ export default async function StrategyPage() {
           <strong>历史台账</strong>
         </div>
       </header>
+
+      <BudgetForm budget={budget} />
 
       {"error" in result ? (
         <ErrorPanel error={result.error} />
@@ -62,6 +75,7 @@ function StrategyResults({ data }: { data: StrategyEvidenceResponse }) {
       <StrategySteps data={data} />
       <HoldingSection data={data} />
       <ExitSection data={data} />
+      <BudgetSection data={data} />
       <LedgerSection data={data} />
     </>
   );
@@ -106,6 +120,7 @@ function StrategySteps({ data }: { data: StrategyEvidenceResponse }) {
   const published = data.exit_frontier.find(
     (rule) => rule.kind === "SPLIT_HALF" && rule.target_net_roi === "0.25"
   );
+  const rung = currentRung(data);
 
   return (
     <section className="deco-strategy-steps-block" aria-labelledby="strategy-steps-heading">
@@ -113,7 +128,7 @@ function StrategySteps({ data }: { data: StrategyEvidenceResponse }) {
         <div>
           <h2 id="strategy-steps-heading">四个步骤</h2>
         </div>
-        <span>01–03 本页现算 · 04 离线回放 2026-09-21</span>
+        <span>01–04 按 {coinLabel(data.budget.budget)} 预算现算 · 02 引用离线回放</span>
       </div>
 
       <ol className="deco-strategy-steps">
@@ -148,9 +163,26 @@ function StrategySteps({ data }: { data: StrategyEvidenceResponse }) {
         <Step
           index="04"
           title="仓位"
-          rule="每次等额 5%，同时持有不超过 20 个仓位。"
-          basis="离线回放 2026-09-21：上限 10 → 20，年化 7.06% → 9.22%。本页不重算。"
-          dated
+          rule={
+            rung === null
+              ? `预算 ${coinLabel(data.budget.budget)}。`
+              : holdsOnePositionOnly(rung)
+                ? `预算 ${coinLabel(
+                    data.budget.budget
+                  )}：一次只持有一台，在买得起的候选里任选。`
+                : `预算 ${coinLabel(data.budget.budget)}：一次可持有 ${unitsLabel(
+                    rung.median_units
+                  )}。`
+          }
+          basis={
+            rung === null
+              ? "本预算下没有已结算的入选活动。"
+              : `${reachLabel(rung)} · 中位 ${signedPercent(
+                  rung.summary.median
+                )} · ${sharePercent(rung.summary.support_ratio)} 为正 · ${sampleLabel(
+                  rung.summary
+                )}`
+          }
         />
       </ol>
     </section>
@@ -314,6 +346,113 @@ function ExitRow({ rule }: { rule: ExitRule }) {
   );
 }
 
+function BudgetSection({ data }: { data: StrategyEvidenceResponse }) {
+  const budget = data.budget;
+  const rung = currentRung(data);
+  const deepest = budget.deepest_drawdown;
+  const field = budget.choice_cycle_events;
+
+  return (
+    <section aria-labelledby="strategy-budget-heading">
+      <div className="deco-section-heading">
+        <div>
+          <h2 id="strategy-budget-heading">买得起哪些</h2>
+        </div>
+        <span>
+          按入场价，只看已结算的入选活动 ·{" "}
+          {rung === null ? "无样本" : sampleLabel(rung.summary)}
+        </span>
+      </div>
+
+      <div className="deco-strategy-table" role="table" aria-label="不同预算能买到的机会">
+        <div className="deco-strategy-head deco-strategy-row-6" role="row">
+          <span role="columnheader">预算</span>
+          <span role="columnheader">买得起</span>
+          <span role="columnheader">一次可持有</span>
+          <span role="columnheader">中位</span>
+          <span role="columnheader">为正</span>
+          <span role="columnheader">最差十分之一</span>
+        </div>
+        {budget.ladder.map((value) => (
+          <BudgetRow
+            key={value.budget}
+            rung={value}
+            current={value.budget === budget.budget}
+          />
+        ))}
+      </div>
+
+      <FootnoteRow
+        items={[
+          rung !== null && holdsOnePositionOnly(rung)
+            ? "一次只有一个仓位，读最差十分之一，不要读均值"
+            : null,
+          budget.choice_cycle_count === 0
+            ? "历史上没有一轮同时有两台以上买得起，无法比较挑选规则"
+            : `同一轮多台可买的只有 ${budget.choice_cycle_count} 轮：按回撤最深挑 ${signedPercent(
+                deepest.median
+              )}（n=${deepest.sample_size}），候选全体 ${signedPercent(
+                field.median
+              )}（n=${field.sample_size}）`,
+          "买不起的机会不计入本表，但仍在下面的逐次活动里"
+        ]}
+      />
+    </section>
+  );
+}
+
+function BudgetRow({ rung, current }: { rung: BudgetRung; current: boolean }) {
+  return (
+    <div
+      className={`deco-strategy-row deco-strategy-row-6${current ? " published" : ""}`}
+      role="row"
+    >
+      <span role="cell">
+        {coinLabel(rung.budget)}
+        {current ? <b className="deco-strategy-tag">当前</b> : null}
+      </span>
+      <span role="cell" className="muted">
+        {reachLabel(rung)}
+      </span>
+      <span role="cell">{unitsLabel(rung.median_units)}</span>
+      <span role="cell">{signedPercent(rung.summary.median)}</span>
+      <span role="cell">{sharePercent(rung.summary.support_ratio)}</span>
+      <span role="cell">{signedPercent(rung.summary.tenth_percentile)}</span>
+    </div>
+  );
+}
+
+/**
+ * A budget input that works without JavaScript.
+ *
+ * A plain GET form keeps the budget in the URL, so a reader can share the page
+ * at their own number and the server renders it directly.
+ */
+function BudgetForm({ budget }: { budget: string }) {
+  return (
+    <form className="deco-budget-form" action="/strategy" method="get">
+      <label htmlFor="budget">可用资金（GJN）</label>
+      <input
+        id="budget"
+        name="budget"
+        type="number"
+        min="1"
+        step="1"
+        defaultValue={budget}
+        inputMode="decimal"
+      />
+      <button type="submit">重算</button>
+    </form>
+  );
+}
+
+/** The ladder rung matching the budget being asked about. */
+function currentRung(data: StrategyEvidenceResponse): BudgetRung | null {
+  return (
+    data.budget.ladder.find((value) => value.budget === data.budget.budget) ?? null
+  );
+}
+
 function LedgerSection({ data }: { data: StrategyEvidenceResponse }) {
   return (
     <section aria-labelledby="strategy-ledger-heading">
@@ -452,11 +591,11 @@ function ErrorPanel({ error }: { error: ApiError }) {
   );
 }
 
-async function loadEvidence(): Promise<
-  { data: StrategyEvidenceResponse } | { error: ApiError }
-> {
+async function loadEvidence(
+  query: Parameters<typeof getStrategyEvidence>[0]
+): Promise<{ data: StrategyEvidenceResponse } | { error: ApiError }> {
   try {
-    return { data: await getStrategyEvidence({}) };
+    return { data: await getStrategyEvidence(query) };
   } catch (error) {
     return { error: toDisplayError(error) };
   }

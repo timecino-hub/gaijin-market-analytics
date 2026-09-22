@@ -9,11 +9,9 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 const STATE_DESCRIPTIONS: Record<string, string> = {
-  RANKED: "这台载具的成交历史足够长，现价可以放回它自己的分布里定位。",
-  INSUFFICIENT_HISTORY:
-    "这台载具的完整成交日太少，不足以构成一个分布，分位数不会被强行算出来。",
-  NO_CURRENT_PRICE:
-    "这台载具最近已经没有成交，最后一个价格太旧，不能当作现价使用。"
+  RANKED: "已定位",
+  INSUFFICIENT_HISTORY: "完整成交日不足 120 天，不计算分位",
+  NO_CURRENT_PRICE: "最后成交价超过 14 天，不作为现价"
 };
 
 const EXPLANATION_LABELS: Record<string, string> = {
@@ -35,10 +33,7 @@ export function vehicleStateLabel(state: string): string {
 }
 
 export function vehicleStateDescription(state: string): string {
-  return (
-    STATE_DESCRIPTIONS[state] ??
-    "该状态由后端给出，前端不对其含义做推测。"
-  );
+  return STATE_DESCRIPTIONS[state] ?? safeFallback(state);
 }
 
 export function vehicleExplanationLabel(code: string): string {
@@ -65,25 +60,18 @@ export function pricePercentileBar(percentile: string | null): number | null {
 }
 
 /**
- * How much of this vehicle's own history traded at or below today's price.
+ * The percentile restated as the count it came from.
  *
- * Deliberately worded as a count of days rather than a probability: it is a
- * description of the past, and the page must not let it read as a forecast.
+ * A share is easy to read as a probability; the count of days is the thing
+ * that was actually measured, so the card carries both.
  */
-export function pricePositionSentence(item: VehiclePotentialItem): string {
+export function pricePositionLabel(item: VehiclePotentialItem): string {
   if (item.price_percentile === null) {
     return vehicleStateDescription(item.state);
   }
-  const share = Number(item.price_percentile);
   const days = item.history_day_count;
-  const atOrBelow = Math.round(share * days);
-  if (atOrBelow <= 1) {
-    return `在自己最近 ${days} 个成交日里，几乎没有比现在更低的价格。`;
-  }
-  if (share >= 0.99) {
-    return `在自己最近 ${days} 个成交日里，几乎没有比现在更高的价格。`;
-  }
-  return `自己最近 ${days} 个成交日里，有 ${atOrBelow} 天的价格不高于现价。`;
+  const atOrBelow = Math.round(Number(item.price_percentile) * days);
+  return `${days} 个成交日中 ${atOrBelow} 天不高于现价`;
 }
 
 /**
@@ -97,24 +85,22 @@ export function isThinEvidence(item: VehiclePotentialItem): boolean {
   return item.closed_outcome_count < THIN_EVIDENCE_THRESHOLD;
 }
 
-export function eventEvidenceSentence(item: VehiclePotentialItem): string {
+export function eventEvidenceLabel(item: VehiclePotentialItem): string {
   if (item.completed_event_count === 0) {
-    return "活动目录里还没有这台载具已结束的活动，这一栏没有任何依据。";
+    return "无已结束的活动";
   }
   if (item.closed_outcome_count === 0) {
-    return `有 ${item.completed_event_count} 次已结束的活动，但没有一次的持有期已经走完，所以还没有收益可以报。`;
+    return `${item.completed_event_count} 次已结束 · 持有期均未走完`;
   }
   const positive = item.positive_outcome_count ?? 0;
-  const base = `${item.closed_outcome_count} 次已结算，其中 ${positive} 次为正。`;
-  return isThinEvidence(item)
-    ? `${base}样本太少，这里的中位数只是这几次的记录，不能当成这台载具的规律。`
-    : `${base}样本仍然很小，读的时候请带上这个数。`;
+  const base = `${item.closed_outcome_count} 次已结算 · ${positive} 次为正`;
+  return isThinEvidence(item) ? `${base} · 样本过少，不成规律` : base;
 }
 
 export function catalogNoteFor(item: VehiclePotentialItem): string | null {
   return item.catalog_match_status === "MATCHED"
     ? null
-    : "未绑定活动目录，因此没有活动记录；价格定位不受影响。";
+    : "未绑定活动目录，无活动记录；价格定位不受影响";
 }
 
 export function volumeLabel(median: number | null, recent: number | null): string {

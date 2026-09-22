@@ -1,4 +1,4 @@
-import type { ExitRule, HorizonEvidence, ReturnSummary } from "./types";
+import type { BudgetRung, ExitRule, HorizonEvidence, ReturnSummary } from "./types";
 
 const MISSING_VALUE = "—";
 
@@ -113,6 +113,45 @@ export function medianRisesWithHolding(horizons: HorizonEvidence[]): boolean {
   return medians.every(
     (value, index) => index === 0 || (value as number) > (medians[index - 1] as number)
   );
+}
+
+/** A budget as a round coin amount — nobody holds 100.0000 GJN. */
+export function coinLabel(value: string | null): string {
+  const parsed = toNumber(value);
+  if (parsed === null) {
+    return MISSING_VALUE;
+  }
+  return `${Number.isInteger(parsed) ? parsed : parsed.toFixed(2)} GJN`;
+}
+
+/**
+ * How many whole units a budget bought, and what it could not reach.
+ *
+ * The unreachable count is the point of the row: an opportunity priced above
+ * the budget was never available, however well it went afterwards.
+ */
+export function reachLabel(rung: BudgetRung): string {
+  const missed = rung.total_count - rung.affordable_count;
+  if (rung.total_count === 0) {
+    return "无已结算机会";
+  }
+  return missed === 0
+    ? `${rung.affordable_count}/${rung.total_count} 全部买得起`
+    : `${rung.affordable_count}/${rung.total_count}，${missed} 次买不起`;
+}
+
+export function unitsLabel(units: number | null): string {
+  return units === null ? MISSING_VALUE : `${units} 份`;
+}
+
+/**
+ * Whether a budget can hold more than one position at a time.
+ *
+ * Below that, portfolio construction has nothing to construct, and what the
+ * reader faces is the single-trade distribution rather than an average.
+ */
+export function holdsOnePositionOnly(rung: BudgetRung | null): boolean {
+  return rung !== null && rung.median_units !== null && rung.median_units <= 1;
 }
 
 function toNumber(value: string | null): number | null {

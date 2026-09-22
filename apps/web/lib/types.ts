@@ -625,6 +625,7 @@ export type VehiclePotentialResponse = {
 
 export type StrategyEvidenceQuery = {
   as_of?: string;
+  budget?: string;
 };
 
 export type ReturnSummary = {
@@ -656,6 +657,24 @@ export type ExitRule = {
   hit_ratio: string | null;
   median_days_to_hit: number | null;
   summary: ReturnSummary;
+};
+
+export type BudgetRung = {
+  budget: string;
+  affordable_count: number;
+  total_count: number;
+  // Whole units only: a coupon cannot be bought in halves.
+  median_units: number | null;
+  summary: ReturnSummary;
+};
+
+export type BudgetEvidence = {
+  budget: string;
+  ladder: BudgetRung[];
+  // Cycles where more than one affordable vehicle qualified at once.
+  choice_cycle_count: number;
+  deepest_drawdown: ReturnSummary;
+  choice_cycle_events: ReturnSummary;
 };
 
 export type EventLedgerRow = {
@@ -691,6 +710,7 @@ export type StrategyEvidenceResponse = {
 
   horizons: HorizonEvidence[];
   exit_frontier: ExitRule[];
+  budget: BudgetEvidence;
   events: EventLedgerRow[];
 
   explanation_codes: string[];

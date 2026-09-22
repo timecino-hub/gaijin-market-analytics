@@ -34,14 +34,14 @@ test("vehicle potential ranks on the price position only, and says why", async (
   assert.match(page, /getVehiclePotential/);
   // The ranking basis, and the reason the other half is not it.
   assert.match(page, /排序只用价格分位/);
-  assert.match(page, /按它排名等于按抽样噪声排名/);
-  assert.match(page, /每一个汇总数字都带着它的样本量/);
+  assert.match(page, /不参与排序/);
+  assert.match(page, /汇总数字都带样本量/);
   // The trap a percentile invites.
   assert.match(page, /低分位不等于会涨/);
-  assert.match(page, /也可能是因为它还在跌/);
+  assert.match(page, /也可能还在跌/);
   assert.match(page, /位置描述，不是预测/);
   // Unreadable vehicles must not lead the list by scoring zero.
-  assert.match(page, /不会因为算不出分数而排到前面/);
+  assert.match(page, /历史不足或现价过旧的排在最后/);
   // Every event aggregate is shown with the count behind it.
   assert.match(page, /n=\$\{count\}/);
   assert.doesNotMatch(page, /Math\.random/);

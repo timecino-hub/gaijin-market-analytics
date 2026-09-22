@@ -316,13 +316,6 @@ body:has(.art-shell) {
 
 /* --- post-event entry ---------------------------------------------------- */
 .deco-compact-filter { grid-template-columns: minmax(200px, 1.2fr) minmax(150px, 0.8fr) minmax(220px, 1.3fr) auto; }
-.deco-evidence-panel { border-bottom: 1px solid var(--art-line); display: grid; gap: 32px; grid-template-columns: 240px minmax(0, 1fr); padding: 34px 0; }
-.deco-evidence-panel h2 { font-family: var(--font-art-display), var(--font-art-interface), sans-serif; font-size: 27px; font-weight: 900; margin: 0; text-transform: uppercase; }
-.deco-evidence-body p { color: var(--art-muted); line-height: 1.7; margin: 0 0 14px; }
-.deco-evidence-aside { color: var(--art-muted); font-size: 0.72rem; line-height: 1.6; margin: 10px 0 0; }
-.deco-evidence-body p:last-child { margin-bottom: 0; }
-.deco-evidence-caveat { border-left: 5px solid var(--art-copper); padding-left: 16px; }
-.deco-evidence-caveat strong { color: var(--art-ink); }
 
 /* --- vehicle potential --------------------------------------------------- */
 .deco-potential-card.ranked { border-top-color: var(--art-copper); }
@@ -393,7 +386,6 @@ body:has(.art-shell) {
   .deco-provenance dl { grid-template-columns: repeat(3, 1fr); row-gap: 20px; }
   .deco-opportunity-filter { grid-template-columns: repeat(3, 1fr); }
   .deco-compact-filter { grid-template-columns: repeat(2, 1fr); }
-  .deco-evidence-panel { grid-template-columns: 180px minmax(0, 1fr); }
   .deco-potential-events-head,
   .deco-potential-event-row { grid-template-columns: minmax(120px, 1.4fr) repeat(4, minmax(80px, 0.8fr)); }
   .deco-potential-events-head > :nth-child(2),
@@ -445,7 +437,6 @@ body:has(.art-shell) {
   .deco-opportunity-title { align-items: start; display: grid; }
   .deco-opportunity-filter { grid-template-columns: 1fr 1fr; }
   .deco-compact-filter { grid-template-columns: 1fr; }
-  .deco-evidence-panel { gap: 18px; grid-template-columns: 1fr; }
   .deco-potential-events-head { display: none; }
   .deco-potential-event-row { grid-template-columns: 1fr 1fr; }
   .deco-opportunity-facts { grid-template-columns: 1fr 1fr; }
@@ -525,3 +516,7 @@ body:has(.art-shell) {
 @media (prefers-reduced-motion: reduce) {
   .deco-loader { animation: none; }
 }
+.deco-budget-form { align-items: center; border-bottom: 1px solid var(--art-line); display: flex; flex-wrap: wrap; gap: 12px; padding: 0 0 18px; }
+.deco-budget-form label { color: var(--art-muted); font-size: 0.7rem; text-transform: uppercase; }
+.deco-budget-form input { background: var(--art-paper); border: 1px solid var(--art-line); color: inherit; font: inherit; padding: 7px 10px; width: 130px; }
+.deco-budget-form button { background: var(--art-ink); border: 0; color: var(--art-paper); cursor: pointer; font: inherit; font-size: 0.76rem; padding: 8px 18px; }

@@ -5,10 +5,10 @@ import { getVehiclePotential, toDisplayError } from "../../lib/api-client";
 import { formatDecimal } from "../../lib/formatters";
 import {
   catalogNoteFor,
-  eventEvidenceSentence,
+  eventEvidenceLabel,
   isThinEvidence,
   pricePercentileBar,
-  pricePositionSentence,
+  pricePositionLabel,
   vehicleExplanationLabel,
   vehicleStateDescription,
   vehicleStateLabel,
@@ -43,10 +43,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
         <div>
           <p className="deco-kicker">VEHICLE POTENTIAL V1.0.0</p>
           <h1>载具潜力</h1>
-          <p>
-            每台载具只用它自己的成交历史来衡量：现价落在它自己过去两年分布的第几分位。
-            这里不比较不同载具的好坏，也不预测涨跌——只回答「这台现在相对它自己便宜还是贵」。
-          </p>
+          <p>现价落在这台载具自己过去两年分布的第几分位。</p>
         </div>
         <div className="deco-opportunity-policy" aria-label="口径">
           <span>只读研究</span>
@@ -74,10 +71,7 @@ function PotentialResults({ data }: { data: VehiclePotentialResponse }) {
         <div className="deco-section-heading">
           <div>
             <h2 id="potential-summary-heading">本次定位范围</h2>
-            <p>
-              读取 {data.item_count} 台载具，其中 {data.ranked_count} 台的成交历史足够长，
-              可以把现价放回自己的分布里。
-            </p>
+
           </div>
           <span>按现价分位由低到高</span>
         </div>
@@ -94,17 +88,15 @@ function PotentialResults({ data }: { data: VehiclePotentialResponse }) {
         </div>
       </section>
 
-      <MethodNotice />
-
       <section aria-labelledby="potential-list-heading">
         <div className="deco-section-heading deco-opportunity-list-heading">
           <div>
             <h2 id="potential-list-heading">逐台定位</h2>
-            <p>
-              排序只用价格分位。历史不足或现价过旧的载具排在最后，不会因为算不出分数而排到前面。
-            </p>
           </div>
+          <span>排序只用价格分位</span>
         </div>
+
+        <MethodNotes />
 
         {data.items.length === 0 ? (
           <EmptyPanel />
@@ -157,7 +149,7 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
       </div>
 
       <p className="deco-potential-note">
-        {ranked ? pricePositionSentence(item) : vehicleStateDescription(item.state)}
+        {ranked ? pricePositionLabel(item) : vehicleStateDescription(item.state)}
       </p>
 
       {bar === null ? null : (
@@ -200,7 +192,7 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
           {isThinEvidence(item) ? " · 样本过少" : ""}
         </em>
       </div>
-      <p className="deco-potential-note">{eventEvidenceSentence(item)}</p>
+      <p className="deco-potential-note">{eventEvidenceLabel(item)}</p>
 
       {item.events.length === 0 ? null : (
         <div className="deco-potential-events">
@@ -284,31 +276,23 @@ function EventRow({ record }: { record: VehicleEventRecord }) {
   );
 }
 
-function MethodNotice() {
+/**
+ * The qualifications a reading cannot be used without, as short labels.
+ *
+ * Not explanation: each one changes what the number on the card means. The
+ * percentile invites a forecast reading it does not support, and the event
+ * record is a handful of observations rather than a rate.
+ */
+function MethodNotes() {
   return (
-    <section className="deco-evidence-panel" aria-labelledby="potential-method-heading">
-      <div>
-        <p className="deco-kicker">METHOD</p>
-        <h2 id="potential-method-heading">这页能说明什么</h2>
-        <p className="deco-evidence-aside">
-          两块证据的强度差得很远，所以只有其中一块参与排序。
-        </p>
-      </div>
-      <div className="deco-evidence-body">
-        <p>
-          <strong>价格位置</strong>：每台载具自己的几百到上千个完整成交日，排序只用价格分位。
-        </p>
-        <p>
-          <strong>活动记录</strong>：每台 1–5 次活动，按它排名等于按抽样噪声排名，
-          因此不参与排序，每一个汇总数字都带着它的样本量。
-        </p>
-        <p className="deco-evidence-caveat">
-          <strong>低分位不等于会涨</strong>——可能是便宜，也可能是因为它还在跌，
-          这条价格序列区分不了。通用策略在
-          <Link href="/strategy">通用策略</Link>。
-        </p>
-      </div>
-    </section>
+    <ul className="deco-strategy-footnotes">
+      <li>排序只用价格分位；历史不足或现价过旧的排在最后</li>
+      <li>活动记录每台 1–5 次，不参与排序，汇总数字都带样本量</li>
+      <li>低分位不等于会涨——可能是便宜，也可能还在跌</li>
+      <li>
+        通用策略见 <Link href="/strategy">通用策略</Link>
+      </li>
+    </ul>
   );
 }
 

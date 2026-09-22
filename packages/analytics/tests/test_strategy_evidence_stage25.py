@@ -472,3 +472,154 @@ def test_an_empty_cohort_summarises_to_zero_rather_than_failing() -> None:
     assert all(value.all_events.sample_size == 0 for value in evidence.horizons)
     assert all(value.all_events.median is None for value in evidence.horizons)
     assert all(rule.summary.sample_size == 0 for rule in evidence.exit_frontier)
+
+
+# --- what a fixed budget can actually reach ---------------------------------
+
+
+def priced_cohort(prices: dict[int, str], *, closes: int = 30, as_of_offset: int = 400):
+    """One event per vehicle, all closing on the same day, at given entry prices.
+
+    The baseline is pinned high enough that every one of them passes the
+    drawdown filter, so the budget is the only thing separating them.
+    """
+
+    outcomes: list = []
+    for item_id, entry in prices.items():
+        history = series(
+            baseline_days(str(Decimal(entry) * 4)) | {closes: entry},
+            item_id=item_id,
+            fill=str(Decimal(entry) * 2),
+        )
+        outcomes.extend(
+            outcomes_for(
+                history,
+                (event(f"e{item_id}", opens=closes - 10, closes=closes),),
+                as_of_offset=as_of_offset,
+                item_id=item_id,
+            )
+        )
+    return tuple(outcomes)
+
+
+def test_a_budget_reports_what_it_could_not_reach() -> None:
+    outcomes = priced_cohort({1: "40", 2: "80", 3: "300"})
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=outcomes,
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+    rung = next(value for value in evidence.budget.ladder if value.budget == Decimal("100"))
+
+    assert evidence.budget.budget == Decimal("100")
+    assert rung.total_count == 3
+    assert rung.affordable_count == 2
+    assert rung.summary.sample_size == 2
+    assert (
+        "strategy_evidence_some_opportunities_were_out_of_budget"
+        in evidence.explanation_codes
+    )
+
+
+def test_units_are_whole_because_a_coupon_cannot_be_bought_in_halves() -> None:
+    # 100 against 40 is two units and 20 coins left over, not 2.5.
+    outcomes = priced_cohort({1: "40"})
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=outcomes,
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+    rung = next(value for value in evidence.budget.ladder if value.budget == Decimal("100"))
+
+    assert rung.median_units == 2
+
+
+def test_the_ladder_always_contains_the_budget_being_asked_about() -> None:
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=priced_cohort({1: "40"}),
+        config=StrategyEvidenceConfig(budget=Decimal("77")),
+    )
+    budgets = [rung.budget for rung in evidence.budget.ladder]
+
+    assert Decimal("77") in budgets
+    assert budgets == sorted(budgets)
+
+
+def test_a_cycle_with_one_affordable_vehicle_is_not_a_choice() -> None:
+    # Two vehicles, one of them out of budget: nothing was chosen, so the
+    # cycle must not count toward a pick rule's record.
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=priced_cohort({1: "40", 2: "900"}),
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+
+    assert evidence.budget.choice_cycle_count == 0
+    assert evidence.budget.deepest_drawdown.sample_size == 0
+    assert evidence.budget.choice_cycle_events.sample_size == 0
+
+
+def test_a_contested_cycle_scores_the_deepest_pick_against_the_whole_field() -> None:
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=priced_cohort({1: "40", 2: "60", 3: "80"}),
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+
+    assert evidence.budget.choice_cycle_count == 1
+    # One pick from the cycle, against all three candidates it chose among.
+    assert evidence.budget.deepest_drawdown.sample_size == 1
+    assert evidence.budget.choice_cycle_events.sample_size == 3
+    assert (
+        "strategy_evidence_too_few_cycles_to_rank_candidates"
+        in evidence.explanation_codes
+    )
+
+
+def test_the_deepest_pick_is_the_lowest_drawdown_ratio_in_its_cycle() -> None:
+    # Same price for all three so the budget cannot decide it; baselines differ
+    # so the drawdown ratios do.
+    outcomes: list = []
+    for item_id, baseline in ((1, "200"), (2, "400"), (3, "800")):
+        history = series(
+            baseline_days(baseline) | {30: "50"}, item_id=item_id, fill="100"
+        )
+        outcomes.extend(
+            outcomes_for(
+                history,
+                (event(f"e{item_id}", opens=20, closes=30),),
+                as_of_offset=400,
+                item_id=item_id,
+            )
+        )
+    evidence = summarise_strategy_evidence(
+        as_of=day(400),
+        outcomes=tuple(outcomes),
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+
+    assert evidence.budget.choice_cycle_count == 1
+    assert evidence.budget.deepest_drawdown.sample_size == 1
+    # Item 3 fell furthest: 50 against a baseline of 800.
+    assert evidence.budget.deepest_drawdown.vehicle_count == 1
+
+
+def test_an_unsettled_event_never_reaches_the_budget_view() -> None:
+    evidence = summarise_strategy_evidence(
+        as_of=day(120),
+        outcomes=priced_cohort({1: "40", 2: "60"}, as_of_offset=120),
+        config=StrategyEvidenceConfig(budget=Decimal("100")),
+    )
+    rung = next(value for value in evidence.budget.ladder if value.budget == Decimal("100"))
+
+    assert rung.total_count == 0
+    assert rung.affordable_count == 0
+    assert evidence.budget.choice_cycle_count == 0
+
+
+def test_a_non_positive_budget_is_refused() -> None:
+    with pytest.raises(StrategyEvidenceError):
+        StrategyEvidenceConfig(budget=Decimal("0"))
+    with pytest.raises(StrategyEvidenceError):
+        StrategyEvidenceConfig(budget_ladder=(Decimal("-5"),))

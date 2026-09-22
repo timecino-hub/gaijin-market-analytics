@@ -97,10 +97,15 @@ def _seed(
     return item_id
 
 
-def _get(client: TestClient, as_of: datetime = SETTLED_AS_OF) -> dict:
-    response = client.get(
-        "/api/v1/strategy-evidence", params={"as_of": as_of.isoformat()}
-    )
+def _get(
+    client: TestClient,
+    as_of: datetime = SETTLED_AS_OF,
+    budget: str | None = None,
+) -> dict:
+    params = {"as_of": as_of.isoformat()}
+    if budget is not None:
+        params["budget"] = budget
+    response = client.get("/api/v1/strategy-evidence", params=params)
     assert response.status_code == 200
     return response.json()
 
@@ -269,3 +274,80 @@ def test_a_malformed_as_of_is_refused(client: TestClient, migrated_database: str
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "invalid_as_of"
+
+
+def test_a_budget_reports_what_it_could_not_reach(
+    client: TestClient, migrated_database: str
+):
+    _seed(migrated_database, entry_price="40")
+    # Its baseline has to be high enough that it passes the drawdown filter,
+    # or it never reaches the budget view and the test proves nothing.
+    _seed(
+        migrated_database,
+        external_key="strategy-dear",
+        entry_price="300",
+        baseline_price="600",
+        after_price="600",
+    )
+
+    body = _get(client, budget="100")
+    rung = next(
+        value for value in body["budget"]["ladder"] if Decimal(value["budget"]) == 100
+    )
+
+    assert Decimal(body["budget"]["budget"]) == Decimal("100")
+    assert rung["total_count"] == 2
+    assert rung["affordable_count"] == 1
+    # 100 against 40 is two whole units, with 20 coins left buying nothing.
+    assert rung["median_units"] == 2
+    assert (
+        "strategy_evidence_some_opportunities_were_out_of_budget"
+        in body["explanation_codes"]
+    )
+
+
+def test_the_budget_ladder_always_includes_the_budget_asked_for(
+    client: TestClient, migrated_database: str
+):
+    _seed(migrated_database, entry_price="40")
+
+    ladder = _get(client, budget="77")["budget"]["ladder"]
+    budgets = [Decimal(value["budget"]) for value in ladder]
+
+    assert Decimal("77") in budgets
+    assert budgets == sorted(budgets)
+
+
+def test_a_cycle_with_one_affordable_vehicle_is_not_counted_as_a_choice(
+    client: TestClient, migrated_database: str
+):
+    _seed(migrated_database, entry_price="40")
+    # Selected by the drawdown filter, but out of budget — so the cycle offers
+    # exactly one buyable vehicle and no choice was ever made.
+    _seed(
+        migrated_database,
+        external_key="strategy-dear2",
+        entry_price="900",
+        baseline_price="2000",
+        after_price="2000",
+    )
+
+    budget = _get(client, budget="100")["budget"]
+    rung = next(
+        value for value in budget["ladder"] if Decimal(value["budget"]) == 100
+    )
+
+    assert rung["total_count"] == 2
+    assert rung["affordable_count"] == 1
+    assert budget["choice_cycle_count"] == 0
+    assert budget["deepest_drawdown"]["sample_size"] == 0
+    assert budget["choice_cycle_events"]["sample_size"] == 0
+
+
+def test_a_budget_that_is_not_a_usable_amount_is_refused(
+    client: TestClient, migrated_database: str
+):
+    for value in ("0", "-5", "lots"):
+        response = client.get("/api/v1/strategy-evidence", params={"budget": value})
+        assert response.status_code == 400, value
+        assert response.json()["detail"]["code"] == "invalid_budget"

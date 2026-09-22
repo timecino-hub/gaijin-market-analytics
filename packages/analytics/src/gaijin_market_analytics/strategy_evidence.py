@@ -91,6 +91,20 @@ class StrategyEvidenceConfig:
     )
     fee_rate: Decimal = Decimal("0.15")
     minimum_pre_event_days: int = 3
+    # What a reader actually has to spend. This is the constraint that decides
+    # the strategy for most people: at a hundred coins the choice is one
+    # vehicle or none, so a portfolio rule with twenty slots describes a
+    # situation they are not in.
+    budget: Decimal = Decimal("100")
+    # Reported as a ladder so the question "what would more capital buy me"
+    # has an answer on the page rather than requiring another run.
+    budget_ladder: tuple[Decimal, ...] = (
+        Decimal("25"),
+        Decimal("50"),
+        Decimal("100"),
+        Decimal("200"),
+        Decimal("500"),
+    )
 
     def __post_init__(self) -> None:
         if not self.horizons or any(
@@ -135,6 +149,15 @@ class StrategyEvidenceConfig:
             or not _ZERO <= self.fee_rate < _ONE
         ):
             raise StrategyEvidenceError("fee_rate must be a finite Decimal in [0, 1).")
+        for value in (self.budget, *self.budget_ladder):
+            if (
+                not isinstance(value, Decimal)
+                or not value.is_finite()
+                or value <= _ZERO
+            ):
+                raise StrategyEvidenceError(
+                    "budget and every ladder rung must be positive Decimals."
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +259,45 @@ class ExitRuleEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class BudgetRung:
+    """What one budget could have bought, and what those buys returned.
+
+    ``median_units`` is whole units, because a coupon cannot be bought in
+    halves: at 100 coins against a 74-coin vehicle the answer is one, and the
+    remaining 26 buy nothing.
+    """
+
+    budget: Decimal
+    affordable_count: int
+    total_count: int
+    median_units: int | None
+    summary: ReturnSummary
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetEvidence:
+    """The strategy seen from a fixed amount of money.
+
+    The portfolio question — how to weight twenty positions — only exists above
+    a capital level most readers are not at. Below it the strategy is one
+    position at a time, so what matters is which opportunities were reachable
+    at all and how the single-trade distribution looked.
+
+    ``deepest_drawdown`` against ``choice_cycle_events`` is the one pick rule
+    worth testing: when an event closes, several vehicles qualify at once and
+    only one can be bought. Both are reported over the cycles where a choice
+    actually existed, because a cycle with a single affordable vehicle tells
+    you nothing about choosing.
+    """
+
+    budget: Decimal
+    ladder: tuple[BudgetRung, ...]
+    choice_cycle_count: int
+    deepest_drawdown: ReturnSummary
+    choice_cycle_events: ReturnSummary
+
+
+@dataclass(frozen=True, slots=True)
 class StrategyEvidence:
     """The whole ledger: what the rule did, on everything it has been run on."""
 
@@ -256,6 +318,7 @@ class StrategyEvidence:
 
     horizons: tuple[HorizonEvidence, ...]
     exit_frontier: tuple[ExitRuleEvidence, ...]
+    budget: BudgetEvidence
 
     explanation_codes: tuple[str, ...]
     research_only: bool = True
@@ -424,6 +487,7 @@ def summarise_strategy_evidence(
         for horizon in sorted(cfg.horizons)
     )
     frontier = _exit_frontier(selected, config=cfg)
+    budget = _budget_evidence(selected, config=cfg)
 
     codes = ["strategy_evidence_descriptive_ledger_not_walk_forward_validated"]
     if len({value.item_id for value in evaluated}) < len(evaluated):
@@ -437,6 +501,13 @@ def summarise_strategy_evidence(
         codes.append("strategy_evidence_some_windows_were_cut_by_the_next_supply_event")
     if primary.selected.sample_size < 30:
         codes.append("strategy_evidence_selected_sample_is_small")
+    reachable = next(
+        (rung for rung in budget.ladder if rung.budget == cfg.budget), None
+    )
+    if reachable is not None and reachable.affordable_count < reachable.total_count:
+        codes.append("strategy_evidence_some_opportunities_were_out_of_budget")
+    if budget.choice_cycle_count and budget.choice_cycle_count < 10:
+        codes.append("strategy_evidence_too_few_cycles_to_rank_candidates")
 
     return StrategyEvidence(
         as_of=moment,
@@ -456,6 +527,7 @@ def summarise_strategy_evidence(
         ),
         horizons=horizons,
         exit_frontier=frontier,
+        budget=budget,
         explanation_codes=tuple(dict.fromkeys(codes)),
     )
 
@@ -550,6 +622,88 @@ def _exit_frontier(
                 )
             )
     return tuple(rules)
+
+
+def _budget_evidence(
+    selected: tuple[EventOutcome, ...], *, config: StrategyEvidenceConfig
+) -> BudgetEvidence:
+    """What the strategy looks like to someone with a fixed amount to spend.
+
+    Only settled events are used, so every rung is scored on outcomes that
+    finished rather than on a mix of finished and running positions.
+    """
+
+    settled: list[tuple[EventOutcome, Decimal]] = []
+    for outcome in selected:
+        reading = outcome.horizon(config.primary_horizon_days)
+        if reading is None or reading.state != "SETTLED" or reading.net_roi is None:
+            continue
+        if outcome.entry_price is None or outcome.entry_price <= _ZERO:
+            continue
+        settled.append((outcome, reading.net_roi))
+
+    rungs = tuple(
+        _budget_rung(settled, budget=rung) for rung in sorted(config.budget_ladder)
+    )
+    if not any(rung.budget == config.budget for rung in rungs):
+        rungs = tuple(
+            sorted(
+                (*rungs, _budget_rung(settled, budget=config.budget)),
+                key=lambda rung: rung.budget,
+            )
+        )
+
+    affordable = tuple(
+        pair for pair in settled if pair[0].entry_price <= config.budget  # type: ignore[operator]
+    )
+    cycles: dict[datetime, list[tuple[EventOutcome, Decimal]]] = {}
+    for pair in affordable:
+        cycles.setdefault(pair[0].closes_at, []).append(pair)
+    # A cycle offering one affordable vehicle is not a choice, and including it
+    # would credit a pick rule for a decision it never made.
+    contested = [group for group in cycles.values() if len(group) > 1]
+    deepest = tuple(
+        min(
+            group,
+            key=lambda pair: (
+                pair[0].drawdown_ratio
+                if pair[0].drawdown_ratio is not None
+                else _ONE,
+                pair[0].item_id,
+            ),
+        )
+        for group in contested
+    )
+    every = tuple(pair for group in contested for pair in group)
+
+    return BudgetEvidence(
+        budget=config.budget,
+        ladder=rungs,
+        choice_cycle_count=len(contested),
+        deepest_drawdown=_summarise(deepest),
+        choice_cycle_events=_summarise(every),
+    )
+
+
+def _budget_rung(
+    settled: tuple[tuple[EventOutcome, Decimal], ...] | list, *, budget: Decimal
+) -> BudgetRung:
+    affordable = tuple(
+        pair
+        for pair in settled
+        if pair[0].entry_price is not None and pair[0].entry_price <= budget
+    )
+    units = tuple(
+        int(budget // pair[0].entry_price)  # type: ignore[operator]
+        for pair in affordable
+    )
+    return BudgetRung(
+        budget=budget,
+        affordable_count=len(affordable),
+        total_count=len(settled),
+        median_units=_median_int(units) if units else None,
+        summary=_summarise(affordable),
+    )
 
 
 def _take_profit_for(

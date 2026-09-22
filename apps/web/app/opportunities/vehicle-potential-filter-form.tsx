@@ -37,7 +37,7 @@ export function VehiclePotentialFilterForm({
           inputMode="text"
         />
         <span className="deco-field-hint">
-          带时区的 ISO-8601 时间；留空使用当前 UTC。填过去的日期可回放当时的定位。
+          ISO-8601 带时区；留空为当前 UTC
         </span>
       </label>
 
