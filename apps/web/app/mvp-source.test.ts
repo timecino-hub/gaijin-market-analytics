@@ -53,39 +53,55 @@ test("vehicle potential ranks on the price position only, and says why", async (
 test("the two analyses stay separate and link to each other", async () => {
   const [potential, strategy] = await Promise.all([
     readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./postevent-entry/page.tsx", import.meta.url), "utf8")
+    readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8")
   ]);
-  // Vehicle potential is per-vehicle character; post-event entry is one rule
-  // applied to every vehicle alike. Neither page should absorb the other.
-  assert.match(potential, /href="\/postevent-entry"/);
+  // Vehicle potential is one vehicle's own character; the strategy page is one
+  // rule pooled across every vehicle. Neither should absorb the other.
+  assert.match(potential, /href="\/strategy"/);
   assert.doesNotMatch(potential, /drawdown_threshold|take_profit/);
   assert.doesNotMatch(strategy, /price_percentile|getVehiclePotential/);
 });
 
-test("post-event entry is published as an annotation, with its weak evidence stated", async () => {
+test("the post-event entry page is gone and nothing still points at it", async () => {
+  // The page was removed; a stale nav entry or link would 404 a reader.
+  const [header, potential, strategy, client] = await Promise.all([
+    readFile(headerUrl, "utf8"),
+    readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/api-client.ts", import.meta.url), "utf8")
+  ]);
+  for (const source of [header, potential, strategy, client]) {
+    assert.doesNotMatch(source, /postevent-entry/);
+  }
+  assert.doesNotMatch(header, /活动后入场/);
+});
+
+test("the strategy page states the rule and keeps what qualifies its numbers", async () => {
   const [page, header, caddy] = await Promise.all([
-    readFile(new URL("./postevent-entry/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8"),
     readFile(headerUrl, "utf8"),
     readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8")
   ]);
   assert.match(page, /export const dynamic = "force-dynamic"/);
-  assert.match(page, /<MarketHeader active="postevent-entry"/);
-  // The page must publish the honest gap between the descriptive number and the
-  // walk-forward one, not just the flattering one.
-  assert.match(page, /\+25\.2%/);
-  assert.match(page, /67\.0% 提升到 69\.6%/);
-  assert.match(page, /\+2\.6 个百分点/);
-  assert.match(page, /描述性统计/);
-  // Zero candidates is an answer, not an outage.
-  assert.match(page, /这是规则给出的答案，不是数据缺失/);
-  assert.match(page, /不代表成交保证或交易建议/);
-  assert.match(page, /只标注，不隐藏任何载具/);
-  // Unmatched vehicles are shown, never silently dropped.
-  assert.match(page, /不会被悄悄省略/);
+  assert.match(page, /<MarketHeader active="strategy"/);
+  assert.match(page, /getStrategyEvidence/);
+  // All four steps, and the two that come from an offline replay say so.
+  for (const step of ["筛选", "入场", "卖出", "仓位"]) {
+    assert.match(page, new RegExp(`title="${step}"`));
+  }
+  assert.match(page, /2026-09-21/);
+  // The monotone claim is recomputed from the data, never written as prose.
+  assert.match(page, /medianRisesWithHolding/);
+  assert.match(page, /未随持有期单调上升/);
+  // Every aggregate carries its counts, and what was excluded is still counted.
+  assert.match(page, /sampleLabel/);
+  assert.match(page, /样本不独立/);
+  assert.match(page, /pending_count/);
+  assert.match(page, /superseded_count/);
+  assert.match(page, /非可成交报价/);
   assert.doesNotMatch(page, /Math\.random/);
-  assert.match(header, /href="\/postevent-entry"/);
-  assert.match(caddy, /path \/api\/v1\/postevent-entry/);
-  assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*postevent/);
+  assert.match(header, /通用策略/);
+  assert.match(caddy, /path \/api\/v1\/strategy-evidence/);
 });
 
 test("server-rendered pages show timestamps in the reader's zone, not the container's", async () => {
@@ -97,7 +113,7 @@ test("server-rendered pages show timestamps in the reader's zone, not the contai
     "./items/page.tsx",
     "./items/[itemId]/page.tsx",
     "./opportunities/page.tsx",
-    "./postevent-entry/page.tsx"
+    "./strategy/page.tsx"
   ];
 
   for (const page of serverPages) {

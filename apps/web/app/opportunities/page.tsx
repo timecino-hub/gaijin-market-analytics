@@ -286,29 +286,26 @@ function EventRow({ record }: { record: VehicleEventRecord }) {
 
 function MethodNotice() {
   return (
-    <section className="deco-postevent-evidence" aria-labelledby="potential-method-heading">
+    <section className="deco-evidence-panel" aria-labelledby="potential-method-heading">
       <div>
         <p className="deco-kicker">METHOD</p>
         <h2 id="potential-method-heading">这页能说明什么</h2>
-        <p className="deco-postevent-evidence-aside">
+        <p className="deco-evidence-aside">
           两块证据的强度差得很远，所以只有其中一块参与排序。
         </p>
       </div>
-      <div className="deco-postevent-evidence-body">
+      <div className="deco-evidence-body">
         <p>
-          <strong>价格位置</strong>用的是每台载具自己的几百到上千个完整成交日，
-          现价的分位是一次实打实的测量，排序只用它。
+          <strong>价格位置</strong>：每台载具自己的几百到上千个完整成交日，排序只用价格分位。
         </p>
         <p>
-          <strong>活动记录</strong>是这台载具在自己历次活动中的表现。它有参考价值，
-          但每台只有 1 到 5 次活动，按它排名等于按抽样噪声排名，所以它只作为证据展开，
-          每一个汇总数字都带着它的样本量。
+          <strong>活动记录</strong>：每台 1–5 次活动，按它排名等于按抽样噪声排名，
+          因此不参与排序，每一个汇总数字都带着它的样本量。
         </p>
-        <p className="deco-postevent-caveat">
-          <strong>低分位不等于会涨。</strong>一台载具处在自己历史的底部，可能是因为便宜，
-          也可能是因为它还在跌——只看这条价格序列区分不了这两种情况。
-          想看「活动结束后买入」那套通用策略，在
-          <Link href="/postevent-entry">活动后入场</Link>。
+        <p className="deco-evidence-caveat">
+          <strong>低分位不等于会涨</strong>——可能是便宜，也可能是因为它还在跌，
+          这条价格序列区分不了。通用策略在
+          <Link href="/strategy">通用策略</Link>。
         </p>
       </div>
     </section>

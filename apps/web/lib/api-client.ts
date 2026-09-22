@@ -9,8 +9,8 @@ import type {
   ItemListQuery,
   OpportunityRankingQuery,
   OpportunityRankingResponse,
-  PostEventEntryQuery,
-  PostEventEntryResponse,
+  StrategyEvidenceQuery,
+  StrategyEvidenceResponse,
   VehiclePotentialQuery,
   VehiclePotentialResponse,
   LocalExtensionPairingCode,
@@ -45,10 +45,10 @@ export async function getOpportunities(
   return fetchJson<OpportunityRankingResponse>("/api/v1/opportunities", query);
 }
 
-export async function getPostEventEntry(
-  query: PostEventEntryQuery
-): Promise<PostEventEntryResponse> {
-  return fetchJson<PostEventEntryResponse>("/api/v1/postevent-entry", query);
+export async function getStrategyEvidence(
+  query: StrategyEvidenceQuery
+): Promise<StrategyEvidenceResponse> {
+  return fetchJson<StrategyEvidenceResponse>("/api/v1/strategy-evidence", query);
 }
 
 export async function getVehiclePotential(
@@ -475,14 +475,6 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
 
   if (code === "vehicle_potential_item_not_found") {
     return "请求的载具不存在。";
-  }
-
-  if (code === "postevent_entry_item_not_found") {
-    return "请求的商品不存在。";
-  }
-
-  if (code === "postevent_entry_as_of_not_timezone_aware") {
-    return "分析基准时间必须带时区。";
   }
 
   if (code === "opportunity_ranking_unavailable") {

@@ -3,7 +3,7 @@ import Link from "next/link";
 export function MarketHeader({
   active
 }: {
-  active?: "home" | "catalog" | "opportunities" | "postevent-entry";
+  active?: "home" | "catalog" | "opportunities" | "strategy";
 }) {
   return (
     <header className="deco-header">
@@ -23,11 +23,8 @@ export function MarketHeader({
         <Link className={active === "opportunities" ? "active" : undefined} href="/opportunities">
           载具潜力
         </Link>
-        <Link
-          className={active === "postevent-entry" ? "active" : undefined}
-          href="/postevent-entry"
-        >
-          活动后入场
+        <Link className={active === "strategy" ? "active" : undefined} href="/strategy">
+          通用策略
         </Link>
       </nav>
       <span className="deco-readonly">只读预览</span>

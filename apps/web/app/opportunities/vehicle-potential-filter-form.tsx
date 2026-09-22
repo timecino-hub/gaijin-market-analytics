@@ -8,7 +8,7 @@ export function VehiclePotentialFilterForm({
 }) {
   return (
     <form
-      className="deco-opportunity-filter deco-postevent-filter"
+      className="deco-opportunity-filter deco-compact-filter"
       action="/opportunities"
       method="get"
     >

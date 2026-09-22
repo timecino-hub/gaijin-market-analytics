@@ -168,12 +168,15 @@ def evaluate_vehicle_potential(
         raise VehiclePotentialError("item_id must be positive.")
     moment = _utc(as_of, "as_of")
 
-    buckets = tuple(historical_buckets)
+    # One aggregation of the whole series, then every window is a slice of it.
+    # The price window and each event's two windows would otherwise each
+    # re-aggregate a decade of buckets.
+    series = _daily_series(tuple(historical_buckets), as_of=moment)
     window_start = moment - timedelta(days=cfg.history_days)
-    days = _completed_days(buckets, window_start=window_start, as_of=moment)
+    days = _window(series, window_start=window_start, as_of=moment)
     codes: list[str] = ["vehicle_potential_descriptive_not_a_forecast"]
 
-    event_side = _event_record(buckets, events=events, as_of=moment, config=cfg)
+    event_side = _event_record(series, events=events, as_of=moment, config=cfg)
 
     def refused(state: VehiclePotentialState, code: str, **extra) -> VehiclePotential:
         base = dict(
@@ -276,7 +279,7 @@ def rank_vehicle_potential(
 
 
 def _event_record(
-    buckets: tuple[HistoricalTradeBucketEvidence, ...],
+    series,
     *,
     events: Iterable[SupplyPoolEvent],
     as_of: datetime,
@@ -288,8 +291,8 @@ def _event_record(
     )
     records: list[VehicleEventRecord] = []
     for event in completed:
-        baseline = _pre_event_baseline(buckets, event=event, config=config)
-        post = _completed_days(buckets, window_start=event.closes_at, as_of=as_of)
+        baseline = _pre_event_baseline(series, event=event, config=config)
+        post = _window(series, window_start=event.closes_at, as_of=as_of)
         entry = post[0].vwap_price if post else None
         entry_day = post[0].day_start_utc if post else None
 
@@ -347,34 +350,54 @@ def _event_record(
 
 
 def _pre_event_baseline(
-    buckets: tuple[HistoricalTradeBucketEvidence, ...],
+    series,
     *,
     event: SupplyPoolEvent,
     config: VehiclePotentialConfig,
 ) -> Decimal | None:
     duration = event.closes_at - event.opens_at
-    days = _completed_days(
-        buckets, window_start=event.opens_at - duration, as_of=event.opens_at
+    days = _window(
+        series, window_start=event.opens_at - duration, as_of=event.opens_at
     )
     if len(days) < config.minimum_pre_event_days:
         return None
     return _median(tuple(point.vwap_price for point in days))
 
 
-def _completed_days(
-    buckets: Iterable[HistoricalTradeBucketEvidence],
-    *,
-    window_start: datetime,
-    as_of: datetime,
+def _daily_series(
+    buckets: tuple[HistoricalTradeBucketEvidence, ...], *, as_of: datetime
 ):
+    """Every completed UTC day this vehicle traded on, aggregated once.
+
+    Selecting over the widest window is what each narrower call would have done
+    for the days it kept: the 1h-over-1d precedence is decided per day, and a
+    day a narrower window would have cut in half is dropped by the
+    ``>= window_start`` test in ``_window`` either way.
+    """
+
+    if not buckets:
+        return ()
+    window_start = min(value.bucket_start_utc for value in buckets)
     if as_of <= window_start:
         return ()
     evidence = select_historical_trade_evidence(
-        tuple(buckets), as_of=as_of, window_start=window_start
+        buckets, as_of=as_of, window_start=window_start
     )
     return tuple(
         point
         for point in aggregate_trade_evidence_by_utc_day(evidence.buckets)
+        if point.day_start_utc + timedelta(days=1) <= as_of
+    )
+
+
+def _window(series, *, window_start: datetime, as_of: datetime):
+    """The completed days of ``series`` inside one window."""
+
+    if as_of <= window_start:
+        return ()
+    return tuple(
+        point
+        for point in series
         if point.day_start_utc >= window_start
         and point.day_start_utc + timedelta(days=1) <= as_of
     )

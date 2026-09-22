@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -154,11 +155,7 @@ def select_historical_trade_evidence(
 
     hourly = tuple(bucket for bucket in completed if bucket.granularity == "1h")
     daily = tuple(bucket for bucket in completed if bucket.granularity == "1d")
-    kept_daily = tuple(
-        day
-        for day in daily
-        if not any(_overlaps(day, hour) for hour in hourly)
-    )
+    kept_daily = _daily_without_hourly_overlap(daily, hourly)
     overlap_dropped = len(daily) - len(kept_daily)
     selected = tuple(
         sorted(
@@ -229,6 +226,38 @@ def aggregate_trade_evidence_by_utc_day(
             )
         )
     return tuple(result)
+
+
+def _daily_without_hourly_overlap(
+    daily: tuple[HistoricalTradeBucketEvidence, ...],
+    hourly: tuple[HistoricalTradeBucketEvidence, ...],
+) -> tuple[HistoricalTradeBucketEvidence, ...]:
+    """The daily buckets that no hourly bucket overlaps.
+
+    Testing every daily bucket against every hourly one is quadratic, and a
+    decade of daily buckets against a month of hourly ones runs to millions of
+    comparisons. The hourly buckets are ordered once, and each day compares
+    only against the slice that could possibly reach it — the same
+    ``_overlaps`` test on a set narrowed by a necessary condition, so the
+    result is unchanged.
+    """
+
+    if not daily or not hourly:
+        return tuple(daily)
+    ordered = sorted(hourly, key=lambda bucket: bucket.bucket_start_utc)
+    starts = [bucket.bucket_start_utc for bucket in ordered]
+    # An hourly bucket can only reach back by its own duration, so anything
+    # starting earlier than this cannot touch the day however long the day is.
+    longest = max(bucket.bucket_duration for bucket in ordered)
+    kept: list[HistoricalTradeBucketEvidence] = []
+    for day in daily:
+        first = bisect_right(starts, day.bucket_start_utc - longest)
+        last = bisect_left(starts, day.bucket_end_utc)
+        if not any(
+            _overlaps(day, ordered[index]) for index in range(first, last)
+        ):
+            kept.append(day)
+    return tuple(kept)
 
 
 def _overlaps(

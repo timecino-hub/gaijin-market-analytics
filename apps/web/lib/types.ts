@@ -551,54 +551,8 @@ export type LocalRecognitionDraftPayload = {
   acknowledge_incomplete_quantities?: boolean;
 };
 
-export type PostEventEntryState =
-  | "ENTRY_CANDIDATE"
-  | "SHALLOW_DRAWDOWN"
-  | "ENTRY_WINDOW_CLOSED"
-  | "SUPERSEDED_BY_NEXT_SUPPLY_EVENT"
-  | "NO_COMPLETED_EVENT"
-  | "NO_PRE_EVENT_BASELINE"
-  | "NO_POST_EVENT_PRICE";
 
-export type CatalogMatchStatus = "MATCHED" | "UNMATCHED" | "AMBIGUOUS";
 
-export type PostEventEntryQuery = {
-  as_of?: string;
-  candidates_only?: string;
-  include_inactive?: string;
-};
-
-export type PostEventEntrySignal = {
-  item_id: number;
-  external_key: string;
-  item_name: string;
-  catalog_match_status: CatalogMatchStatus | string;
-  matched_catalog_name: string | null;
-  state: PostEventEntryState | string | null;
-  is_entry_candidate: boolean;
-  event_key: string | null;
-  event_closed_at: string | null;
-  days_since_close: number | null;
-  pre_event_baseline: string | null;
-  latest_price: string | null;
-  drawdown_ratio: string | null;
-  drawdown_threshold: string | null;
-  take_profit_price: string | null;
-  take_profit_net_roi: string | null;
-  hold_until: string | null;
-  research_only: boolean;
-  fill_claim: boolean;
-  explanation_codes: string[];
-  version: string | null;
-};
-
-export type PostEventEntryResponse = {
-  as_of: string;
-  policy: string;
-  item_count: number;
-  entry_candidate_count: number;
-  items: PostEventEntrySignal[];
-};
 
 export type VehiclePotentialState =
   | "RANKED"
@@ -610,6 +564,8 @@ export type VehiclePotentialQuery = {
   ranked_only?: string;
   include_inactive?: string;
 };
+
+export type CatalogMatchStatus = "MATCHED" | "UNMATCHED" | "AMBIGUOUS";
 
 export type VehicleEventRecord = {
   event_key: string;
@@ -665,4 +621,79 @@ export type VehiclePotentialResponse = {
   ranked_count: number;
   history_days: number;
   items: VehiclePotentialItem[];
+};
+
+export type StrategyEvidenceQuery = {
+  as_of?: string;
+};
+
+export type ReturnSummary = {
+  sample_size: number;
+  // Reported next to sample_size because these events repeat vehicles: forty
+  // events drawn from sixteen vehicles are not forty independent trials.
+  vehicle_count: number;
+  median: string | null;
+  mean: string | null;
+  support_ratio: string | null;
+  tenth_percentile: string | null;
+  ninetieth_percentile: string | null;
+};
+
+export type HorizonEvidence = {
+  horizon_days: number;
+  all_events: ReturnSummary;
+  selected: ReturnSummary;
+  rejected: ReturnSummary;
+  pending_count: number;
+  superseded_count: number;
+};
+
+export type ExitRuleKind = "FIXED_HOLD" | "TAKE_PROFIT" | "SPLIT_HALF";
+
+export type ExitRule = {
+  kind: ExitRuleKind | string;
+  target_net_roi: string | null;
+  hit_ratio: string | null;
+  median_days_to_hit: number | null;
+  summary: ReturnSummary;
+};
+
+export type EventLedgerRow = {
+  item_id: number;
+  item_name: string;
+  event_key: string;
+  closes_at: string;
+  state: string;
+  pre_event_baseline: string | null;
+  entry_day: string | null;
+  entry_price: string | null;
+  drawdown_ratio: string | null;
+  selected: boolean;
+  horizon_state: string | null;
+  exit_price: string | null;
+  net_roi: string | null;
+};
+
+export type StrategyEvidenceResponse = {
+  as_of: string;
+  drawdown_threshold: string;
+  primary_horizon_days: number;
+  fee_rate: string;
+
+  completed_event_count: number;
+  evaluated_event_count: number;
+  vehicle_count: number;
+  selected_event_count: number;
+  rejected_event_count: number;
+  no_baseline_count: number;
+  no_entry_price_count: number;
+  unmatched_item_count: number;
+
+  horizons: HorizonEvidence[];
+  exit_frontier: ExitRule[];
+  events: EventLedgerRow[];
+
+  explanation_codes: string[];
+  research_only: boolean;
+  version: string;
 };
