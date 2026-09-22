@@ -69,6 +69,33 @@ test("post-event entry is published as an annotation, with its weak evidence sta
   assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*postevent/);
 });
 
+test("server-rendered pages show timestamps in the reader's zone, not the container's", async () => {
+  // A server component calling formatDateTime prints whatever zone the
+  // container happens to be in, which is nobody's. Those pages must go through
+  // LocalDateTime, which renders UTC on the server and re-formats after mount.
+  const serverPages = [
+    "./page.tsx",
+    "./items/page.tsx",
+    "./items/[itemId]/page.tsx",
+    "./opportunities/page.tsx",
+    "./postevent-entry/page.tsx"
+  ];
+
+  for (const page of serverPages) {
+    const source = await readFile(new URL(page, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /\bformatDateTime\b/, page);
+    assert.match(source, /LocalDateTime/, page);
+  }
+
+  const component = await readFile(new URL("./local-date-time.tsx", import.meta.url), "utf8");
+  assert.match(component, /^"use client";/);
+  // The UTC rendering is the hydration-safe one; the swap happens once hydrated.
+  assert.match(component, /formatDateTimeUtc/);
+  assert.match(component, /useEffect/);
+  // The exact instant stays machine-readable even before the swap.
+  assert.match(component, /<time dateTime=\{value\}>/);
+});
+
 test("catalog prices only use the approved current order book", async () => {
   const source = await readFile(listUrl, "utf8");
   assert.match(source, /item\.current_order_book/);

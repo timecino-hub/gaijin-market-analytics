@@ -7,7 +7,7 @@ import {
   formatScore
 } from "../../lib/analysis-display";
 import { getItems, getOpportunities, toDisplayError } from "../../lib/api-client";
-import { formatBoolean, formatDateTime, formatOptionalText } from "../../lib/formatters";
+import { formatBoolean, formatOptionalText } from "../../lib/formatters";
 import {
   opportunityEligibilityLabel,
   opportunityExplanationLabel,
@@ -26,6 +26,7 @@ import type {
   OpportunityRankingResponse
 } from "../../lib/types";
 import { OpportunityFilterForm } from "./opportunity-filter-form";
+import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
 
 export const dynamic = "force-dynamic";
@@ -108,7 +109,7 @@ function OpportunityResults({
         </div>
 
         <div className="deco-opportunity-facts">
-          <Info label="实际 as_of" value={formatDateTime(data.effective_inputs.as_of)} />
+          <Info label="实际 as_of" value={<LocalDateTime value={data.effective_inputs.as_of} />} />
           <Info label="分析周期" value={`${data.effective_inputs.horizon} 天`} />
           <Info
             label="数据新鲜度上限"
@@ -236,7 +237,7 @@ function OpportunityCard({ item, horizon }: { item: OpportunityRankingItem; hori
         <Info label="流动性来源" value={opportunityLiquidityLabel(item.liquidity_source)} />
         <Info label="数量观察数" value={String(item.quantity_observation_count)} />
         <Info label="价格快照数" value={String(item.observation_count)} />
-        <Info label="最新快照" value={formatDateTime(item.last_observation_at)} />
+        <Info label="最新快照" value={<LocalDateTime value={item.last_observation_at} />} />
         <Info label="分析状态" value={item.analysis_status} />
         <Info label="详情分析" value={`${horizon} 天周期`} />
       </div>
@@ -304,7 +305,7 @@ function CurrentReferenceSection({ items }: { items: ItemSummary[] }) {
                 <b>{book.best_buy.canonical_display_text} GJN</b>
                 <b>{book.best_sell.canonical_display_text} GJN</b>
                 <span>{book.spread_display_text} GJN</span>
-                <span>{formatDateTime(book.captured_at)}</span>
+                <span><LocalDateTime value={book.captured_at} /></span>
                 <i aria-hidden="true">→</i>
               </Link>
             );
@@ -353,7 +354,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="deco-info-tile">
       <span>{label}</span>

@@ -1,7 +1,7 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { formatCurrencyDisplay, formatDecimalPercent } from "../../lib/analysis-display";
 import { getPostEventEntry, toDisplayError } from "../../lib/api-client";
-import { formatDateTime } from "../../lib/formatters";
 import {
   catalogMatchLabel,
   comparePostEventEntry,
@@ -16,6 +16,7 @@ import {
 } from "../../lib/postevent-entry-display";
 import { postEventEntryStateFromParams } from "../../lib/postevent-entry-state";
 import type { ApiError, PostEventEntryResponse, PostEventEntrySignal } from "../../lib/types";
+import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
 import { PostEventEntryFilterForm } from "./postevent-entry-filter-form";
 
@@ -91,7 +92,7 @@ function PostEventEntryResults({
         </div>
 
         <div className="deco-opportunity-facts">
-          <Info label="实际 as_of" value={formatDateTime(data.as_of)} />
+          <Info label="实际 as_of" value={<LocalDateTime value={data.as_of} />} />
           <Info label="策略档位" value={`${data.policy}（标注，不过滤）`} />
           <Info
             label={candidatesOnly ? "入场候选（已筛选）" : "入场候选"}
@@ -222,14 +223,16 @@ function PostEventEntryCard({ item }: { item: PostEventEntrySignal }) {
         />
         <Metric
           label="持有到期"
-          value={item.is_entry_candidate ? formatDateTime(item.hold_until) : "—"}
+          value={
+            item.is_entry_candidate ? <LocalDateTime value={item.hold_until} /> : "—"
+          }
         />
         <Metric label="成交保证" value={item.fill_claim ? "是" : "否，仅为读数"} />
       </div>
 
       <div className="opportunity-evidence-grid">
         <Info label="活动标识" value={item.event_key ?? "—"} />
-        <Info label="活动结束时间" value={formatDateTime(item.event_closed_at)} />
+        <Info label="活动结束时间" value={<LocalDateTime value={item.event_closed_at} />} />
         <Info label="距今" value={daysSinceCloseLabel(item.days_since_close)} />
         <Info label="目录匹配" value={catalogMatchLabel(item.catalog_match_status)} />
         <Info label="用途" value={item.research_only ? "仅研究参考" : "—"} />
@@ -286,9 +289,13 @@ function NoCandidateNotice({ latestWindow }: { latestWindow: PostEventEntrySigna
         <p>
           这是规则给出的答案，不是数据缺失。入场窗口只在活动结束后的 7 天内开启，
           而目前所有已绑定载具的窗口都已经关闭
-          {latestWindow?.event_closed_at
-            ? `——最近一次活动结束于 ${formatDateTime(latestWindow.event_closed_at)}，已过 ${daysSinceCloseLabel(latestWindow.days_since_close)}`
-            : ""}
+          {latestWindow?.event_closed_at ? (
+            <>
+              ——最近一次活动结束于{" "}
+              <LocalDateTime value={latestWindow.event_closed_at} />，已过{" "}
+              {daysSinceCloseLabel(latestWindow.days_since_close)}
+            </>
+          ) : null}
           。下一轮活动结束的第二天，这里才会重新出现候选。
         </p>
         <Link href="/opportunities">查看潜力分析</Link>
@@ -332,7 +339,7 @@ function currency(value: string | null): string {
   return value === null ? "—" : `${formatCurrencyDisplay(value)} GJN`;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="opportunity-metric">
       <span>{label}</span>
@@ -341,7 +348,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="deco-info-tile">
       <span>{label}</span>

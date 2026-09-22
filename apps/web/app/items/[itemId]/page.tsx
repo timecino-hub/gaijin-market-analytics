@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getCurrentOrderBook, getItem, toDisplayError } from "../../../lib/api-client";
-import { formatDateTime } from "../../../lib/formatters";
 import type { ApiError, CurrentOrderBook, CurrentOrderBookLevel, ItemDetail } from "../../../lib/types";
+import { LocalDateTime } from "../../local-date-time";
 import { MarketHeader } from "../../market-header";
 
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ function DetailPrices({ orderBook }: { orderBook: CurrentOrderBook }) {
       <PriceMetric label="当前买价" value={orderBook.best_buy.canonical_display_text} />
       <PriceMetric label="当前卖价" value={orderBook.best_sell.canonical_display_text} />
       <PriceMetric label="价差" value={orderBook.spread_display_text} />
-      <div className="deco-capture-time"><span>观测时间</span><strong>{formatDateTime(orderBook.captured_at)}</strong><small>{orderBook.contract.currency_code} · contract v{orderBook.contract.contract_version}</small></div>
+      <div className="deco-capture-time"><span>观测时间</span><strong><LocalDateTime value={orderBook.captured_at} /></strong><small>{orderBook.contract.currency_code} · contract v{orderBook.contract.contract_version}</small></div>
     </div>
   );
 }

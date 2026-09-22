@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getItems, toDisplayError } from "../../lib/api-client";
-import { formatDateTime } from "../../lib/formatters";
 import type { ApiError, ItemListQuery, ItemSummary, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
+import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
 import { ItemsFilterForm } from "./items-filter-form";
 
@@ -60,7 +60,7 @@ function CatalogRow({ item }: { item: ItemSummary }) {
       <div className="deco-item-identity"><span className="deco-item-mark" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span><div><strong>{item.name}</strong><small>{item.category}{item.rarity ? ` · ${item.rarity}` : ""}<br />{item.external_key}</small></div></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
-      <span className={`deco-data-state ${book?.freshness === "stale" ? "stale" : ""}`}><b>{book ? (book.freshness === "fresh" ? "当前" : "已过期") : statusLabel(item)}</b><small>{book ? formatDateTime(book.captured_at) : "无观测时间"}</small></span>
+      <span className={`deco-data-state ${book?.freshness === "stale" ? "stale" : ""}`}><b>{book ? (book.freshness === "fresh" ? "当前" : "已过期") : statusLabel(item)}</b><small>{book ? <LocalDateTime value={book.captured_at} /> : "无观测时间"}</small></span>
       <b className="deco-row-action">查看 →</b>
     </Link>
   );

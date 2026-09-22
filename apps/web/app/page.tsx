@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getItems, toDisplayError } from "../lib/api-client";
-import { formatDateTime } from "../lib/formatters";
 import type { ItemSummary } from "../lib/types";
+import { LocalDateTime } from "./local-date-time";
 import { MarketHeader } from "./market-header";
 
 export const dynamic = "force-dynamic";
@@ -97,7 +97,7 @@ function CatalogRow({ item }: { item: ItemSummary }) {
       <div><strong>{item.name}</strong><small>{item.category} · {item.external_key}</small></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
-      <span>{book ? `${book.freshness === "fresh" ? "当前" : "已过期"} · ${formatDateTime(book.captured_at)}` : statusLabel(item)}</span><b>→</b>
+      <span>{book ? <>{book.freshness === "fresh" ? "当前" : "已过期"} · <LocalDateTime value={book.captured_at} /></> : statusLabel(item)}</span><b>→</b>
     </Link>
   );
 }
