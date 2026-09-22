@@ -21,7 +21,7 @@ export function MarketHeader({
           载具目录
         </Link>
         <Link className={active === "opportunities" ? "active" : undefined} href="/opportunities">
-          潜力分析
+          载具潜力
         </Link>
         <Link
           className={active === "postevent-entry" ? "active" : undefined}

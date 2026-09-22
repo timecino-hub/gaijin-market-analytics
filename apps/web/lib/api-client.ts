@@ -11,6 +11,8 @@ import type {
   OpportunityRankingResponse,
   PostEventEntryQuery,
   PostEventEntryResponse,
+  VehiclePotentialQuery,
+  VehiclePotentialResponse,
   LocalExtensionPairingCode,
   LocalExtensionStatus,
   LocalRecognitionCapabilities,
@@ -47,6 +49,12 @@ export async function getPostEventEntry(
   query: PostEventEntryQuery
 ): Promise<PostEventEntryResponse> {
   return fetchJson<PostEventEntryResponse>("/api/v1/postevent-entry", query);
+}
+
+export async function getVehiclePotential(
+  query: VehiclePotentialQuery
+): Promise<VehiclePotentialResponse> {
+  return fetchJson<VehiclePotentialResponse>("/api/v1/vehicle-potential", query);
 }
 
 export async function getItem(itemId: string): Promise<ItemDetail> {
@@ -463,6 +471,10 @@ function friendlyBusinessMessage(status: number, code: string): string | undefin
 
   if (code === "invalid_boolean" || code === "invalid_filter") {
     return "排行榜筛选条件无效，请检查后重试。";
+  }
+
+  if (code === "vehicle_potential_item_not_found") {
+    return "请求的载具不存在。";
   }
 
   if (code === "postevent_entry_item_not_found") {

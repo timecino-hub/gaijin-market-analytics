@@ -43,6 +43,18 @@ bvvd-analysis.duckdns.org {
     }
     reverse_proxy @postevent_entry_item api:8000
 
+    @vehicle_potential {
+      method GET HEAD
+      path /api/v1/vehicle-potential
+    }
+    reverse_proxy @vehicle_potential api:8000
+
+    @vehicle_potential_item {
+      method GET HEAD
+      path_regexp public_vehicle_potential ^/api/v1/vehicle-potential/[0-9]+$
+    }
+    reverse_proxy @vehicle_potential_item api:8000
+
     @private_api path /api/*
     respond @private_api "Read-only preview" 405
 

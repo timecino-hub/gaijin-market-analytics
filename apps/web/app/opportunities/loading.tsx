@@ -1,9 +1,9 @@
-export default function OpportunitiesLoading() {
+export default function VehiclePotentialLoading() {
   return (
     <main className="page-shell">
       <section className="loading-state" aria-live="polite">
-        <h1>正在计算机会排行榜</h1>
-        <p>正在读取同一时间窗内的已导入快照并运行确定性评分。</p>
+        <h1>正在定位载具潜力</h1>
+        <p>正在按每台载具自己的成交历史计算现价所在的分位。</p>
       </section>
     </main>
   );

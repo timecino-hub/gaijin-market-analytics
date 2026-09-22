@@ -23,24 +23,43 @@ test("public homepage is a read-only, evidence-backed catalog", async () => {
   assert.doesNotMatch(source, /Math\.random/);
 });
 
-test("opportunity analysis is public, read-only, and honest about its evidence gate", async () => {
+test("vehicle potential ranks on the price position only, and says why", async () => {
   const [page, header, caddy] = await Promise.all([
     readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
     readFile(headerUrl, "utf8"),
     readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8")
   ]);
+  assert.match(page, /export const dynamic = "force-dynamic"/);
   assert.match(page, /<MarketHeader active="opportunities"/);
-  assert.match(page, /至少需要 3 个真实市场快照/);
-  assert.match(page, /最新观测不能早于 7 天前/);
-  assert.match(page, /formatFreshnessLimit/);
-  assert.match(page, /getItems/);
-  assert.match(page, /一周内当前盘口/);
-  assert.match(page, /它们不替代历史趋势或收益排名/);
-  assert.match(page, /历史不足，不发布评分/);
-  assert.match(page, /不会复制当前报价、补零或生成示例分数/);
-  assert.match(header, /潜力分析/);
-  assert.match(caddy, /path \/api\/v1\/opportunities/);
-  assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*opportunities/);
+  assert.match(page, /getVehiclePotential/);
+  // The ranking basis, and the reason the other half is not it.
+  assert.match(page, /排序只用价格分位/);
+  assert.match(page, /按它排名等于按抽样噪声排名/);
+  assert.match(page, /每一个汇总数字都带着它的样本量/);
+  // The trap a percentile invites.
+  assert.match(page, /低分位不等于会涨/);
+  assert.match(page, /也可能是因为它还在跌/);
+  assert.match(page, /位置描述，不是预测/);
+  // Unreadable vehicles must not lead the list by scoring zero.
+  assert.match(page, /不会因为算不出分数而排到前面/);
+  // Every event aggregate is shown with the count behind it.
+  assert.match(page, /n=\$\{count\}/);
+  assert.doesNotMatch(page, /Math\.random/);
+  assert.match(header, /载具潜力/);
+  assert.match(caddy, /path \/api\/v1\/vehicle-potential/);
+  assert.doesNotMatch(caddy, /@blocked_ui path[^\n]*vehicle-potential/);
+});
+
+test("the two analyses stay separate and link to each other", async () => {
+  const [potential, strategy] = await Promise.all([
+    readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./postevent-entry/page.tsx", import.meta.url), "utf8")
+  ]);
+  // Vehicle potential is per-vehicle character; post-event entry is one rule
+  // applied to every vehicle alike. Neither page should absorb the other.
+  assert.match(potential, /href="\/postevent-entry"/);
+  assert.doesNotMatch(potential, /drawdown_threshold|take_profit/);
+  assert.doesNotMatch(strategy, /price_percentile|getVehiclePotential/);
 });
 
 test("post-event entry is published as an annotation, with its weak evidence stated", async () => {

@@ -1,0 +1,26 @@
+# The API image runs `uv sync` to build its own environment, and the web image
+# runs `pnpm install`. Anything equivalent lying in the working tree must not be
+# copied in on top of it: a host-built `apps/api/.venv` shadows the image's own
+# and the container dies on startup with "Failed to spawn: alembic", which looks
+# nothing like the cause.
+.venv/
+**/.venv/
+node_modules/
+**/node_modules/
+__pycache__/
+**/__pycache__/
+*.pyc
+.next/
+**/.next/
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+**/.mypy_cache/
+
+.git/
+.env
+.env.*
+!.env.example
+!**/.env.local.example

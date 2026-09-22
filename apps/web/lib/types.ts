@@ -599,3 +599,70 @@ export type PostEventEntryResponse = {
   entry_candidate_count: number;
   items: PostEventEntrySignal[];
 };
+
+export type VehiclePotentialState =
+  | "RANKED"
+  | "INSUFFICIENT_HISTORY"
+  | "NO_CURRENT_PRICE";
+
+export type VehiclePotentialQuery = {
+  as_of?: string;
+  ranked_only?: string;
+  include_inactive?: string;
+};
+
+export type VehicleEventRecord = {
+  event_key: string;
+  closes_at: string;
+  pre_event_baseline: string | null;
+  entry_price: string | null;
+  drawdown_ratio: string | null;
+  holding_days: number;
+  exit_price: string | null;
+  net_roi: string | null;
+  outcome_closed: boolean;
+};
+
+export type VehiclePotentialItem = {
+  item_id: number;
+  external_key: string;
+  item_name: string;
+  category: string | null;
+  catalog_match_status: CatalogMatchStatus | string;
+  matched_catalog_name: string | null;
+  state: VehiclePotentialState | string;
+
+  current_price: string | null;
+  current_price_day: string | null;
+  price_age_days: number | null;
+  history_day_count: number;
+  window_start: string | null;
+  window_end: string | null;
+  price_percentile: string | null;
+  median_price: string | null;
+  low_price: string | null;
+  high_price: string | null;
+  ratio_to_median: string | null;
+  median_daily_volume: number | null;
+  recent_daily_volume: number | null;
+
+  events: VehicleEventRecord[];
+  completed_event_count: number;
+  closed_outcome_count: number;
+  median_drawdown_ratio: string | null;
+  median_net_roi: string | null;
+  positive_outcome_count: number | null;
+  days_since_last_event_close: number | null;
+
+  explanation_codes: string[];
+  research_only: boolean;
+  version: string;
+};
+
+export type VehiclePotentialResponse = {
+  as_of: string;
+  item_count: number;
+  ranked_count: number;
+  history_days: number;
+  items: VehiclePotentialItem[];
+};

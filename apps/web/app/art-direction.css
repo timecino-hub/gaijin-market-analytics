@@ -338,6 +338,27 @@ body:has(.art-shell) {
 .deco-postevent-scale { color: var(--art-muted); display: flex; font-size: 0.64rem; justify-content: space-between; margin-top: 6px; }
 .deco-postevent-empty { margin-bottom: 22px; }
 
+/* --- vehicle potential --------------------------------------------------- */
+.deco-potential-card.ranked { border-top-color: var(--art-copper); }
+.deco-potential-card.unranked { border-top-color: var(--art-line); }
+.deco-potential-card .score-block strong { font-size: 26px; }
+.deco-potential-note { color: var(--art-muted); font-size: 0.76rem; line-height: 1.65; margin: 14px 0 0; max-width: 880px; }
+.deco-potential-gauge { margin-top: 16px; max-width: 620px; padding-top: 16px; position: relative; }
+.deco-potential-marker { font-size: 0.62rem; font-weight: 800; position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.deco-potential-track { background: #d8d4ca; height: 9px; position: relative; }
+.deco-potential-fill { background: var(--art-copper); display: block; height: 100%; }
+.deco-potential-median { background: var(--art-ink); bottom: -4px; position: absolute; top: -4px; width: 2px; }
+.deco-potential-scale { color: var(--art-muted); display: flex; font-size: 0.64rem; justify-content: space-between; margin-top: 6px; }
+.deco-potential-block-label { align-items: baseline; border-bottom: 1px solid var(--art-line); display: flex; font-size: 0.72rem; font-weight: 800; gap: 12px; margin-top: 24px; padding-bottom: 7px; text-transform: uppercase; }
+.deco-potential-block-label em { color: var(--art-muted); font-size: 0.66rem; font-style: normal; font-weight: 400; text-transform: none; }
+.deco-potential-events { border-bottom: 1px solid var(--art-line); margin-top: 14px; }
+.deco-potential-events-head,
+.deco-potential-event-row { display: grid; gap: 12px; grid-template-columns: minmax(150px, 1.5fr) minmax(150px, 1.3fr) repeat(4, minmax(90px, 0.8fr)); }
+.deco-potential-events-head { border-bottom: 1px solid var(--art-line); color: var(--art-muted); font-size: 0.64rem; padding: 0 0 6px; text-transform: uppercase; }
+.deco-potential-event-row { border-top: 1px solid #e3ded4; font-size: 0.72rem; padding: 9px 0; }
+.deco-potential-event-row > span { min-width: 0; overflow-wrap: anywhere; }
+.deco-potential-event-row > span:first-child { color: var(--art-muted); }
+
 @keyframes deco-load { 50% { opacity: 0.35; transform: skewX(-18deg) translateX(20px); } }
 
 @media (max-width: 1024px) {
@@ -354,6 +375,10 @@ body:has(.art-shell) {
   .deco-opportunity-filter { grid-template-columns: repeat(3, 1fr); }
   .deco-postevent-filter { grid-template-columns: repeat(2, 1fr); }
   .deco-postevent-evidence { grid-template-columns: 180px minmax(0, 1fr); }
+  .deco-potential-events-head,
+  .deco-potential-event-row { grid-template-columns: minmax(120px, 1.4fr) repeat(4, minmax(80px, 0.8fr)); }
+  .deco-potential-events-head > :nth-child(2),
+  .deco-potential-event-row > :nth-child(2) { display: none; }
   .deco-opportunity-facts { grid-template-columns: repeat(3, 1fr); }
   .deco-info-tile:nth-child(4n) { border-right: 1px solid var(--art-line); }
   .deco-info-tile:nth-child(3n) { border-right: 0; }
@@ -390,6 +415,8 @@ body:has(.art-shell) {
   .deco-opportunity-filter { grid-template-columns: 1fr 1fr; }
   .deco-postevent-filter { grid-template-columns: 1fr; }
   .deco-postevent-evidence { gap: 18px; grid-template-columns: 1fr; }
+  .deco-potential-events-head { display: none; }
+  .deco-potential-event-row { grid-template-columns: 1fr 1fr; }
   .deco-opportunity-facts { grid-template-columns: 1fr 1fr; }
   .deco-info-tile:nth-child(3n) { border-right: 1px solid var(--art-line); }
   .deco-info-tile:nth-child(2n) { border-right: 0; }
