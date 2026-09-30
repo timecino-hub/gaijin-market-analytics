@@ -29,6 +29,7 @@ out/
 # Private local evaluation artifacts
 artifacts/private/
 /apps/api/.codex-tmp/
+/.codex-tmp/
 /gaijin-market-project-handoff.zip
 /order-quantity-*-evaluation.zip
 /order-quantity-*-source-bundle.zip

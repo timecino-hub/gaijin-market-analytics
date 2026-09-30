@@ -2,6 +2,8 @@ import type {
   ApiError,
   CsvUploadResult,
   CurrentOrderBook,
+  GeneralStrategyQuery,
+  GeneralStrategyResponse,
   ImportJobResponse,
   ItemAnalysisQuery,
   ItemAnalysisResponse,
@@ -49,6 +51,12 @@ export async function getStrategyEvidence(
   query: StrategyEvidenceQuery
 ): Promise<StrategyEvidenceResponse> {
   return fetchJson<StrategyEvidenceResponse>("/api/v1/strategy-evidence", query);
+}
+
+export async function getGeneralStrategy(
+  query: GeneralStrategyQuery = {}
+): Promise<GeneralStrategyResponse> {
+  return fetchJson<GeneralStrategyResponse>("/api/v1/general-strategy", query);
 }
 
 export async function getVehiclePotential(

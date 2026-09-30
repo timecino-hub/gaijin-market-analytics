@@ -1,8 +1,10 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatDecimalPercent } from "../../lib/analysis-display";
-import { getStrategyEvidence, toDisplayError } from "../../lib/api-client";
+import { getGeneralStrategy, getStrategyEvidence, toDisplayError } from "../../lib/api-client";
 import { formatDecimal } from "../../lib/formatters";
+import { isGeneralStrategyResponse } from "../../lib/general-strategy-display";
+import { generalStrategyFromParams, legacyAsOfFromParams } from "../../lib/general-strategy-state";
 import {
   coinLabel,
   daysToHitLabel,
@@ -25,12 +27,15 @@ import type {
   BudgetRung,
   EventLedgerRow,
   ExitRule,
+  GeneralStrategyQuery,
+  GeneralStrategyResponse,
   HorizonEvidence,
   ReturnSummary,
   StrategyEvidenceResponse
 } from "../../lib/types";
 import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
+import { GeneralRulePanel } from "./general-rule-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -39,40 +44,51 @@ type StrategyPageProps = {
 };
 
 export default async function StrategyPage({ searchParams }: StrategyPageProps) {
-  const { budget, query } = budgetFromParams(await searchParams);
-  const result = await loadEvidence(query);
+  const params = await searchParams;
+  const { budget, query } = budgetFromParams(params);
+  const asOf = legacyAsOfFromParams(params);
+  const generalQuery = generalStrategyFromParams(params);
+  const [generalResult, legacyResult] = await Promise.all([
+    loadGeneralRule(generalQuery),
+    loadEvidence({ ...query, as_of: asOf })
+  ]);
 
   return (
     <main className="art-shell deco-strategy-page">
       <MarketHeader active="strategy" />
       <header className="deco-page-title deco-opportunity-title">
         <div>
-          <p className="deco-kicker">GENERAL STRATEGY V1.0.0</p>
+          <p className="deco-kicker">GENERAL STRATEGY · CANDIDATE</p>
           <h1>通用策略</h1>
-          <p>一条规则用在每一台载具上，下面是它在目录里每一次已结束活动上的结果。</p>
+          <p>结束前3日观察 · 次日成本上限55% · 先净50%，第150天再降至净40%</p>
         </div>
         <div className="deco-opportunity-policy" aria-label="口径">
           <span>只读研究</span>
-          <strong>历史台账</strong>
+          <strong>当前候选 · 人工执行</strong>
         </div>
       </header>
 
-      <BudgetForm budget={budget} />
+      <GeneralRulePanel result={generalResult} query={generalQuery} budget={budget} asOf={asOf} />
 
-      {"error" in result ? (
-        <ErrorPanel error={result.error} />
-      ) : (
-        <StrategyResults data={result.data} />
-      )}
+      <details>
+        <summary className="deco-section-heading">Claude stage25旧规则历史台账</summary>
+        <p className="deco-strategy-note">活动后入场／净25%分批退出的旧规则回放。以下业绩与预算表不代表当前55%成本上限／50%至40%候选规则的业绩。</p>
+        <BudgetForm budget={budget} generalQuery={generalQuery} />
+        {"error" in legacyResult ? (
+          <ErrorPanel error={legacyResult.error} />
+        ) : (
+          <LegacyStrategyResults data={legacyResult.data} />
+        )}
+      </details>
     </main>
   );
 }
 
-function StrategyResults({ data }: { data: StrategyEvidenceResponse }) {
+function LegacyStrategyResults({ data }: { data: StrategyEvidenceResponse }) {
   return (
     <>
       <ScopeSection data={data} />
-      <StrategySteps data={data} />
+      <LegacyStrategySteps data={data} />
       <HoldingSection data={data} />
       <ExitSection data={data} />
       <BudgetSection data={data} />
@@ -116,7 +132,7 @@ function ScopeSection({ data }: { data: StrategyEvidenceResponse }) {
   );
 }
 
-function StrategySteps({ data }: { data: StrategyEvidenceResponse }) {
+function LegacyStrategySteps({ data }: { data: StrategyEvidenceResponse }) {
   const published = data.exit_frontier.find(
     (rule) => rule.kind === "SPLIT_HALF" && rule.target_net_roi === "0.25"
   );
@@ -126,7 +142,7 @@ function StrategySteps({ data }: { data: StrategyEvidenceResponse }) {
     <section className="deco-strategy-steps-block" aria-labelledby="strategy-steps-heading">
       <div className="deco-section-heading">
         <div>
-          <h2 id="strategy-steps-heading">四个步骤</h2>
+          <h2 id="strategy-steps-heading">旧规则的四个步骤</h2>
         </div>
         <span>01–04 按 {coinLabel(data.budget.budget)} 预算现算 · 02 引用离线回放</span>
       </div>
@@ -314,8 +330,8 @@ function ExitSection({ data }: { data: StrategyEvidenceResponse }) {
           <FootnoteRow
             items={[
               "净 +25% 的挂单价 = 成本 × 1.25 ÷ 0.85，即涨 47.1%",
-              "「成交」= 当日成交均价达到挂单价",
-              "未成交的仓位到期按市价卖出，结果计入同一行"
+              "旧模型「成交」= 当日成交均价达到挂单价，非真实订单成交记录",
+              "旧模型未成交仓位到期按市价卖出，当前候选不沿用这一强制退出规则"
             ]}
           />
         </>
@@ -334,7 +350,7 @@ function ExitRow({ rule }: { rule: ExitRule }) {
     >
       <span role="cell">
         {exitRuleLabel(rule)}
-        {published ? <b className="deco-strategy-tag">已发布</b> : null}
+        {published ? <b className="deco-strategy-tag">旧规则</b> : null}
       </span>
       <span role="cell">{sharePercent(rule.hit_ratio)}</span>
       <span role="cell">{daysToHitLabel(rule.median_days_to_hit)}</span>
@@ -428,10 +444,11 @@ function BudgetRow({ rung, current }: { rung: BudgetRung; current: boolean }) {
  * A plain GET form keeps the budget in the URL, so a reader can share the page
  * at their own number and the server renders it directly.
  */
-function BudgetForm({ budget }: { budget: string }) {
+function BudgetForm({ budget, generalQuery }: { budget: string; generalQuery: GeneralStrategyQuery }) {
   return (
     <form className="deco-budget-form" action="/strategy" method="get">
-      <label htmlFor="budget">可用资金（GJN）</label>
+      {Object.entries(generalQuery).map(([name, value]) => <input key={name} name={name} type="hidden" value={value} />)}
+      <label htmlFor="budget">旧台账预算（GJN）</label>
       <input
         id="budget"
         name="budget"
@@ -584,7 +601,7 @@ function ErrorPanel({ error }: { error: ApiError }) {
     <section className="deco-state deco-state-error" aria-live="polite">
       <span aria-hidden="true">!</span>
       <div>
-        <h2>{error.code === "api_unreachable" ? "API 不可访问" : "无法读取策略台账"}</h2>
+        <h2>无法读取旧规则历史台账</h2>
         <p>{error.message}</p>
       </div>
     </section>
@@ -596,6 +613,20 @@ async function loadEvidence(
 ): Promise<{ data: StrategyEvidenceResponse } | { error: ApiError }> {
   try {
     return { data: await getStrategyEvidence(query) };
+  } catch (error) {
+    return { error: toDisplayError(error) };
+  }
+}
+
+async function loadGeneralRule(
+  query: GeneralStrategyQuery
+): Promise<{ data: GeneralStrategyResponse } | { error: ApiError }> {
+  try {
+    const data = await getGeneralStrategy(query);
+    if (!isGeneralStrategyResponse(data)) {
+      return { error: { status: 0, code: "incompatible_general_strategy", message: "当前候选规则服务版本不兼容，请更新服务后重试。" } };
+    }
+    return { data };
   } catch (error) {
     return { error: toDisplayError(error) };
   }

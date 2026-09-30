@@ -49,6 +49,12 @@ bvvd-analysis.duckdns.org {
     }
     reverse_proxy @strategy_evidence api:8000
 
+    @general_strategy {
+      method GET HEAD
+      path /api/v1/general-strategy
+    }
+    reverse_proxy @general_strategy api:8000
+
     @private_api path /api/*
     respond @private_api "Read-only preview" 405
 

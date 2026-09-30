@@ -79,19 +79,33 @@ test("the post-event entry page and endpoint are gone, with nothing left pointin
   assert.doesNotMatch(header, /活动后入场/);
 });
 
-test("the strategy page states the rule and keeps what qualifies its numbers", async () => {
-  const [page, header, caddy] = await Promise.all([
+test("the strategy page publishes the candidate separately from legacy performance", async () => {
+  const [page, panel, header, caddy] = await Promise.all([
     readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./strategy/general-rule-panel.tsx", import.meta.url), "utf8"),
     readFile(headerUrl, "utf8"),
     readFile(new URL("../../../deploy/Caddyfile", import.meta.url), "utf8")
   ]);
   assert.match(page, /export const dynamic = "force-dynamic"/);
   assert.match(page, /<MarketHeader active="strategy"/);
   assert.match(page, /getStrategyEvidence/);
-  // All four steps, and the two that come from an offline replay say so.
-  for (const step of ["筛选", "入场", "卖出", "仓位"]) {
-    assert.match(page, new RegExp(`title="${step}"`));
+  assert.match(page, /getGeneralStrategy/);
+  assert.match(page, /Promise\.all/);
+  assert.match(page, /<GeneralRulePanel/);
+  assert.match(page, /<details>/);
+  assert.match(page, /Claude stage25旧规则历史台账/);
+  assert.match(page, /不代表当前55%成本上限/);
+  assert.match(panel, /当前候选规则暂不可用/);
+  // The current rule is displayed in its own panel, including the unforced review.
+  for (const step of ["观察", "买入", "卖出", "复核"]) {
+    assert.match(panel, new RegExp(`title="${step}"`));
   }
+  assert.match(panel, /不强制清仓/);
+  assert.match(panel, /价格触达不等于成交/);
+  assert.match(panel, /手续费默认15%为研究假设/);
+  assert.match(panel, /<form[^>]+action="\/strategy" method="get"/);
+  assert.match(panel, /含时区/);
+  assert.doesNotMatch(panel, /datetime-local|parseFloat|Math\.random/);
   assert.match(page, /2026-09-21/);
   // The monotone claim is recomputed from the data, never written as prose.
   assert.match(page, /medianRisesWithHolding/);

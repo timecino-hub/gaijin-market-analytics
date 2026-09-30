@@ -717,3 +717,76 @@ export type StrategyEvidenceResponse = {
   research_only: boolean;
   version: string;
 };
+
+export type GeneralStrategyQuery = {
+  as_of?: string;
+  baseline?: string;
+  observation_price?: string;
+  quoted_cost?: string;
+  event_closes_on?: string;
+  entry_cost?: string;
+  bought_at?: string;
+  fee_rate?: string;
+};
+
+export type GeneralStrategyResponse = {
+  version: string;
+  as_of: string;
+  research_only: true;
+  automated_trading: false;
+  fee_rate: string;
+  policy: {
+    observation_lead_days: number;
+    quote_check_lead_days: number;
+    observation_gate: string;
+    buy_cost_cap: string;
+    alternative_cost_cap: string;
+    preferred_net_target: string;
+    minimum_net_target: string;
+    lower_target_after_days: number;
+    review_after_days: number;
+    minimum_baseline_days: number;
+    baseline_method: string;
+    candidate: true;
+    default_fee_is_assumption: true;
+    force_liquidation: false;
+    cost_input_basis: string;
+  };
+  entry: {
+    baseline: string | null;
+    observation_price: string | null;
+    quoted_cost: string | null;
+    observation_threshold: string | null;
+    buy_cost_ceiling: string | null;
+    alternative_buy_cost_ceiling: string | null;
+    observation_on: string | null;
+    quote_check_on: string | null;
+    status: string;
+    reason_codes: string[];
+    fill_claim: false;
+  };
+  exit: {
+    entry_cost: string | null;
+    bought_at: string | null;
+    preferred_offer: string | null;
+    minimum_offer: string | null;
+    lower_target_at: string | null;
+    review_at: string | null;
+    status: "NOT_EVALUATED" | "TARGET50" | "TARGET40" | "REVIEW_REQUIRED";
+    current_target: string | null;
+    planned_offer: string | null;
+    force_liquidation: false;
+    fill_claim: false;
+  };
+  research: {
+    data_as_of: string;
+    opportunity_count: number;
+    cycle_count: number;
+    rule_count: number;
+    result_sha256: string;
+    execution_basis: string;
+    optimality_proven: false;
+    fill_claim: false;
+  };
+  examples: Array<Record<string, unknown>>;
+};

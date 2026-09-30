@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings, parse_cors_allowed_origins
 from api.db.session import get_session
 from api.routers.analysis import router as analysis_router
+from api.routers.general_strategy import router as general_strategy_router
 from api.routers.imports import router as imports_router
 from api.routers.items import router as items_router
 from api.routers.local_recognition import router as local_recognition_router
@@ -33,6 +34,7 @@ app.include_router(opportunities_router)
 app.include_router(strategy_evidence_router)
 app.include_router(vehicle_potential_router)
 app.include_router(local_recognition_router)
+app.include_router(general_strategy_router)
 
 
 @app.exception_handler(RequestValidationError)
