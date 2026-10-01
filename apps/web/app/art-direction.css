@@ -322,12 +322,17 @@ body:has(.art-shell) {
 .deco-potential-card.unranked { border-top-color: var(--art-line); }
 .deco-potential-card .score-block strong { font-size: 26px; }
 .deco-potential-note { color: var(--art-muted); font-size: 0.76rem; line-height: 1.65; margin: 14px 0 0; max-width: 880px; }
-.deco-potential-gauge { margin-top: 16px; max-width: 620px; padding-top: 16px; position: relative; }
-.deco-potential-marker { font-size: 0.62rem; font-weight: 800; position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
-.deco-potential-track { background: #d8d4ca; height: 9px; position: relative; }
-.deco-potential-fill { background: var(--art-copper); display: block; height: 100%; }
+.deco-potential-gauge { margin: 20px 0 0; }
+.deco-potential-gauge figcaption { align-items: baseline; display: flex; flex-wrap: wrap; font-size: 0.7rem; gap: 6px 14px; justify-content: space-between; margin-bottom: 12px; }
+.deco-potential-gauge figcaption > span { color: var(--art-muted); }
+.deco-potential-gauge figcaption > strong { font-weight: 600; }
+.deco-potential-marker { background: var(--art-copper); border: 2px solid var(--art-ink); border-radius: 50%; height: 14px; position: absolute; top: -3px; transform: translateX(-50%); width: 14px; }
+.deco-potential-track { background: #d8d4ca; height: 8px; margin-inline: 8px; position: relative; }
+.deco-potential-fill { background: var(--art-copper); display: block; height: 100%; opacity: 0.3; }
 .deco-potential-median { background: var(--art-ink); bottom: -4px; position: absolute; top: -4px; width: 2px; }
-.deco-potential-scale { color: var(--art-muted); display: flex; font-size: 0.64rem; justify-content: space-between; margin-top: 6px; }
+.deco-potential-scale { color: var(--art-muted); display: grid; font-size: 0.64rem; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 9px; }
+.deco-potential-scale > :nth-child(2) { text-align: center; }
+.deco-potential-scale > :last-child { text-align: right; }
 .deco-potential-block-label { align-items: baseline; border-bottom: 1px solid var(--art-line); display: flex; font-size: 0.72rem; font-weight: 800; gap: 12px; margin-top: 24px; padding-bottom: 7px; text-transform: uppercase; }
 .deco-potential-block-label em { color: var(--art-muted); font-size: 0.66rem; font-style: normal; font-weight: 400; text-transform: none; }
 .deco-potential-events { border-bottom: 1px solid var(--art-line); margin-top: 14px; }
@@ -535,7 +540,7 @@ body:has(.art-shell) {
 .deco-potential-basis { color: var(--art-muted); display: flex; flex-wrap: wrap; font-size: 0.68rem; gap: 6px 14px; list-style: none; margin: 12px 0 0; padding: 0; }
 .deco-potential-basis li { border-left: 2px solid var(--art-line); line-height: 1.6; padding-left: 7px; }
 .deco-potential-page .deco-opportunity-list-heading { margin-top: 28px; }
-.deco-potential-comparison-list { align-items: start; }
+.deco-potential-comparison-list { align-items: start; grid-template-columns: minmax(0, 1fr); }
 .deco-potential-page .deco-potential-card { min-width: 0; padding: 18px 0 0; }
 .deco-potential-page .deco-potential-card .opportunity-card-heading { gap: 12px; grid-template-columns: 46px minmax(0, 1fr) 90px; padding: 0; }
 .deco-potential-page .deco-potential-card .rank-block,
@@ -565,9 +570,6 @@ body:has(.art-shell) {
 .deco-potential-history dd { font-size: 0.76rem; line-height: 1.6; margin: 4px 0 0; overflow-wrap: anywhere; }
 .deco-potential-event-record { border-top: 1px solid var(--art-line); margin-top: 16px; padding-top: 14px; }
 .deco-potential-event-record h4 { font-size: 0.77rem; margin: 0 0 14px; overflow-wrap: anywhere; }
-@media (min-width: 1100px) {
-  .deco-potential-comparison-list { column-gap: 28px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 900px) {
   .deco-potential-page .deco-potential-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

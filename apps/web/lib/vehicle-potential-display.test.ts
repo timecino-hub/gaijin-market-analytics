@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { VehicleEventRecord, VehiclePotentialItem, VehicleTargetReference } from "./types.ts";
 import {
-  compareDecimalStrings, eventOutcomeLabel, hasObservedEventOutcome,
+  compareDecimalStrings, eventOutcomeLabel, hasObservedEventOutcome, pricePercentileBar,
   selectVehiclePotentialItems, targetReferenceFor
 } from "./vehicle-potential-display.ts";
 import { vehiclePotentialStateFromParams } from "./vehicle-potential-state.ts";
@@ -33,6 +33,16 @@ function item(id: number, changes: Partial<VehiclePotentialItem> = {}): VehicleP
 function select(items: VehiclePotentialItem[], params: Record<string, string> = {}) {
   return selectVehiclePotentialItems(items, vehiclePotentialStateFromParams(params).form).map((value) => value.item_id);
 }
+
+test("percentile visualization preserves positions and refuses missing or non-decimal values", () => {
+  assert.equal(pricePercentileBar("0"), 0);
+  assert.equal(pricePercentileBar("0.001"), 0.1);
+  assert.equal(pricePercentileBar("0.5"), 50);
+  assert.equal(pricePercentileBar("1"), 100);
+  for (const value of [null, "", " ", "NaN", "Infinity", "0x1", "-0.1", "1.001", "1.0000000000000000000001"]) {
+    assert.equal(pricePercentileBar(value), null);
+  }
+});
 
 test("price-position default sorts low first with stable item-ID ties and unreadable vehicles last", () => {
   const items = [item(3), item(2, { price_percentile: "0.02" }), item(1),

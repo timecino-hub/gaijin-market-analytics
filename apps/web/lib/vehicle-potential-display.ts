@@ -42,7 +42,7 @@ export function vehicleExplanationLabel(code: string): string {
 }
 
 /**
- * Bar position for the price gauge, as a percentage of the vehicle's own range.
+ * Visual coordinate on a percentile axis, not a linear monetary price range.
  *
  * The percentile is already 0..1 over this vehicle's own completed days, so it
  * maps straight onto the track. A missing or unparsable value yields null and
@@ -50,7 +50,11 @@ export function vehicleExplanationLabel(code: string): string {
  * "cheapest ever".
  */
 export function pricePercentileBar(percentile: string | null): number | null {
-  if (percentile === null) {
+  if (percentile === null || !/^\d+(?:\.\d+)?$/.test(percentile)) {
+    return null;
+  }
+  const upperBound = compareDecimalStrings(percentile, "1");
+  if (upperBound === null || upperBound > 0) {
     return null;
   }
   const parsed = Number(percentile);

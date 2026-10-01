@@ -8,6 +8,7 @@ import {
   eventEvidenceLabel,
   eventOutcomeLabel,
   hasObservedEventOutcome,
+  pricePercentileBar,
   potentialSortLabel,
   selectVehiclePotentialItems,
   targetReferenceFor,
@@ -121,6 +122,8 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
   const ranked = item.state === "RANKED";
   const target = targetReferenceFor(item);
   const catalogNote = catalogNoteFor(item);
+  const position = ranked && item.history_day_count >= 120 && item.current_price !== null
+    ? pricePercentileBar(item.price_percentile) : null;
 
   return (
     <article className={`deco-opportunity-card deco-potential-card ${ranked ? "ranked" : "unranked"}`}>
@@ -140,10 +143,33 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
         </div>
         <div className="score-block">
           <span>历史价格分位</span>
-          <strong>{formatDecimalPercent(item.price_percentile, 1)}</strong>
+          <strong>{formatDecimalPercent(position === null ? null : item.price_percentile, 1)}</strong>
           <small>{item.history_day_count} 个成交日</small>
         </div>
       </div>
+
+      {position === null ? null : (
+        <figure
+          className="deco-potential-gauge"
+          role="img"
+          aria-label={`${item.item_name}：最新成交均价处于历史${formatDecimalPercent(item.price_percentile, 1)}分位，依据${item.history_day_count}个成交日`}
+        >
+          <figcaption>
+            <span>历史价格位置</span>
+            <strong>最新均价 · {formatDecimalPercent(item.price_percentile, 1)}分位</strong>
+          </figcaption>
+          <div className="deco-potential-track" aria-hidden="true">
+            <span className="deco-potential-fill" style={{ width: `${position}%` }} />
+            <i className="deco-potential-median" style={{ left: "50%" }} />
+            <b className="deco-potential-marker" style={{ left: `${position}%` }} />
+          </div>
+          <div className="deco-potential-scale" aria-hidden="true">
+            <span>0% · 低位</span>
+            <span>50%分位</span>
+            <span>100% · 高位</span>
+          </div>
+        </figure>
+      )}
 
       <div className="opportunity-financial-grid">
         <Metric label="最新成交均价 · 成本参考" value={currency(item.current_price)} />
