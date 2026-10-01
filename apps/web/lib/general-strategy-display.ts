@@ -1,22 +1,22 @@
 import type { GeneralStrategyResponse } from "./types";
 
 const ENTRY_STATUS_LABELS: Record<string, string> = {
-  BASELINE_REQUIRED: "等待活动前基准",
+  BASELINE_REQUIRED: "等待活动前参考价",
   EVENT_DATE_REQUIRED: "等待活动结束日期",
   OBSERVATION_NOT_COMPLETE: "观察日尚未结束",
-  ENTRY_WINDOW_CLOSED: "次日报价核验日已过",
-  OBSERVATION_PRICE_REQUIRED: "等待完整日观察价",
-  OBSERVATION_GATE_FAILED: "观察价未达到75%门槛",
-  QUOTED_COST_REQUIRED: "观察价满足 · 等待实际总成本",
-  COST_CAP_EXCEEDED: "总成本超过55%上限",
-  PRICE_CONDITIONS_SATISFIED: "价格条件满足 · 待人工核验成交"
+  ENTRY_WINDOW_CLOSED: "买价检查日已过",
+  OBSERVATION_PRICE_REQUIRED: "等待观察日均成交价",
+  OBSERVATION_GATE_FAILED: "观察日均成交价超过75%上限",
+  QUOTED_COST_REQUIRED: "观察价达标 · 等待买入总价",
+  COST_CAP_EXCEEDED: "买入总价超过55%上限",
+  PRICE_CONDITIONS_SATISFIED: "买价符合条件 · 成交未确认"
 };
 
 const EXIT_STATUS_LABELS: Record<GeneralStrategyResponse["exit"]["status"], string> = {
-  NOT_EVALUATED: "等待实际成本与买入时间",
-  TARGET50: "争取净50%",
-  TARGET40: "第150天后 · 最低净40%",
-  REVIEW_REQUIRED: "第180天后 · 另评估退出时机"
+  NOT_EVALUATED: "等待实际买入花费与买入时间",
+  TARGET50: "扣费后赚50%",
+  TARGET40: "满150天 · 扣费后赚40%",
+  REVIEW_REQUIRED: "满180天 · 重新选择退出时机"
 };
 
 export function generalEntryStatusLabel(status: string): string {

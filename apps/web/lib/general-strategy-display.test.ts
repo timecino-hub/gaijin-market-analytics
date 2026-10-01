@@ -54,9 +54,9 @@ test("monetary numbers do not silently enter the string decimal contract", () =>
 });
 
 test("status labels distinguish price conditions from actual fills and 180 day review", () => {
-  assert.match(generalEntryStatusLabel("PRICE_CONDITIONS_SATISFIED"), /待人工核验成交/);
+  assert.match(generalEntryStatusLabel("PRICE_CONDITIONS_SATISFIED"), /成交未确认/);
   assert.match(generalEntryStatusLabel("ENTRY_WINDOW_CLOSED"), /已过/);
-  assert.match(generalExitStatusLabel("REVIEW_REQUIRED"), /另评估退出/);
+  assert.match(generalExitStatusLabel("REVIEW_REQUIRED"), /重新选择退出/);
   assert.equal(generalEntryStatusLabel("FUTURE_STATUS"), "待核验");
   assert.equal(generalEntryStatusLabel("constructor"), "待核验");
   assert.equal(isGeneralStrategyResponse({ ...response(), exit: { ...response().exit, status: "constructor" } }), false);

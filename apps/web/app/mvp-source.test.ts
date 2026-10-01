@@ -93,24 +93,30 @@ test("the strategy page publishes the current general strategy separately from l
   assert.match(page, /Promise\.all/);
   assert.match(page, /<GeneralRulePanel/);
   assert.match(page, /<details>/);
-  assert.match(page, /Claude stage25旧规则历史台账/);
-  assert.match(page, /不代表当前55%成本上限/);
+  assert.match(page, /旧策略回测/);
+  assert.match(page, /旧策略：活动后买入／扣费后赚25%分批卖出/);
+  assert.doesNotMatch(page, /Claude|stage25/);
   assert.match(page, /GENERAL STRATEGY · CURRENT/);
   assert.match(page, /当前通用策略 · 人工执行/);
   assert.doesNotMatch(page, /CANDIDATE|当前候选|候选规则/);
   assert.match(panel, /当前通用策略暂不可用/);
   assert.match(panel, /id="general-rule-heading">当前通用策略/);
   assert.doesNotMatch(panel, /当前候选|候选参数/);
-  assert.match(panel, /非默认研究候选 · B×60%/);
-  assert.match(panel, /尚未证明通用最优/);
-  assert.match(panel, /不保证达到止盈目标/);
+  assert.match(panel, /60%研究备选（非默认）/);
   // The current rule is displayed in its own panel, including the unforced review.
   for (const step of ["观察", "买入", "卖出", "复核"]) {
     assert.match(panel, new RegExp(`title="${step}"`));
   }
-  assert.match(panel, /不强制清仓/);
-  assert.match(panel, /价格触达不等于成交/);
-  assert.match(panel, /手续费默认15%为研究假设/);
+  assert.match(panel, /180天重新评估/);
+  assert.match(panel, /成交状态：未确认/);
+  assert.match(panel, /默认手续费：15%（假设）/);
+  assert.match(panel, /活动前参考价（GJN）/);
+  assert.match(panel, /当天结束后/);
+  assert.match(panel, /买入总价不超过活动前参考价/);
+  assert.match(panel, /先按扣费后赚/);
+  assert.match(panel, /重新选择退出时机/);
+  assert.match(panel, /历史数据截至：/);
+  assert.doesNotMatch(panel, /basis=|deco-strategy-basis|<p className="deco-strategy-note">|VWAP|基准 B|成本 C/);
   assert.match(panel, /<form[^>]+action="\/strategy" method="get"/);
   assert.match(panel, /含时区/);
   assert.doesNotMatch(panel, /datetime-local|parseFloat|Math\.random/);

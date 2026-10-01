@@ -60,10 +60,9 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
         <div>
           <p className="deco-kicker">GENERAL STRATEGY · CURRENT</p>
           <h1>通用策略</h1>
-          <p>结束前3日观察 · 次日成本上限55% · 先净50%，第150天再降至净40%</p>
         </div>
         <div className="deco-opportunity-policy" aria-label="口径">
-          <span>只读研究</span>
+          <span>只读计算</span>
           <strong>当前通用策略 · 人工执行</strong>
         </div>
       </header>
@@ -71,8 +70,8 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
       <GeneralRulePanel result={generalResult} query={generalQuery} budget={budget} asOf={asOf} />
 
       <details>
-        <summary className="deco-section-heading">Claude stage25旧规则历史台账</summary>
-        <p className="deco-strategy-note">活动后入场／净25%分批退出的旧规则回放。以下业绩与预算表不代表当前55%成本上限／50%至40%通用策略的业绩。</p>
+        <summary className="deco-section-heading">旧策略回测</summary>
+        <p className="deco-strategy-note">旧策略：活动后买入／扣费后赚25%分批卖出</p>
         <BudgetForm budget={budget} generalQuery={generalQuery} />
         {"error" in legacyResult ? (
           <ErrorPanel error={legacyResult.error} />
