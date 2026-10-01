@@ -1,4 +1,4 @@
-"""Read-only contract for the candidate timing rule and its calculations."""
+"""Read-only contract for the adopted general timing rule and calculations."""
 
 from typing import Literal
 
@@ -10,7 +10,9 @@ class StrategyContract(BaseModel):
 
 
 class GeneralStrategyPolicy(StrategyContract):
-    candidate: Literal[True]
+    candidate: Literal[False]
+    designation: Literal["CURRENT_GENERAL_STRATEGY"]
+    adoption_basis: Literal["USER_SELECTED"]
     observation_lead_days: int
     quote_check_lead_days: int
     observation_gate: str

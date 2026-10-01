@@ -27,7 +27,7 @@ export function generalExitStatusLabel(status: GeneralStrategyResponse["exit"]["
   return Object.hasOwn(EXIT_STATUS_LABELS, status) ? EXIT_STATUS_LABELS[status] : "待核验";
 }
 
-/** Reject a legacy or incomplete response instead of presenting it as the current rule. */
+/** Accept the previous deployment during rollout, while requiring explicit adoption for the current designation. */
 export function isGeneralStrategyResponse(value: unknown): value is GeneralStrategyResponse {
   if (!isRecord(value) || value.research_only !== true || value.automated_trading !== false) {
     return false;
@@ -40,7 +40,8 @@ export function isGeneralStrategyResponse(value: unknown): value is GeneralStrat
     return false;
   }
   return (
-    policy.candidate === true &&
+    ((policy.candidate === true && policy.designation === undefined && policy.adoption_basis === undefined) ||
+      (policy.candidate === false && policy.designation === "CURRENT_GENERAL_STRATEGY" && policy.adoption_basis === "USER_SELECTED")) &&
     policy.force_liquidation === false &&
     policy.default_fee_is_assumption === true &&
     typeof policy.cost_input_basis === "string" &&

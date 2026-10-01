@@ -79,7 +79,7 @@ test("the post-event entry page and endpoint are gone, with nothing left pointin
   assert.doesNotMatch(header, /活动后入场/);
 });
 
-test("the strategy page publishes the candidate separately from legacy performance", async () => {
+test("the strategy page publishes the current general strategy separately from legacy performance", async () => {
   const [page, panel, header, caddy] = await Promise.all([
     readFile(new URL("./strategy/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("./strategy/general-rule-panel.tsx", import.meta.url), "utf8"),
@@ -95,7 +95,15 @@ test("the strategy page publishes the candidate separately from legacy performan
   assert.match(page, /<details>/);
   assert.match(page, /Claude stage25旧规则历史台账/);
   assert.match(page, /不代表当前55%成本上限/);
-  assert.match(panel, /当前候选规则暂不可用/);
+  assert.match(page, /GENERAL STRATEGY · CURRENT/);
+  assert.match(page, /当前通用策略 · 人工执行/);
+  assert.doesNotMatch(page, /CANDIDATE|当前候选|候选规则/);
+  assert.match(panel, /当前通用策略暂不可用/);
+  assert.match(panel, /id="general-rule-heading">当前通用策略/);
+  assert.doesNotMatch(panel, /当前候选|候选参数/);
+  assert.match(panel, /非默认研究候选 · B×60%/);
+  assert.match(panel, /尚未证明通用最优/);
+  assert.match(panel, /不保证达到止盈目标/);
   // The current rule is displayed in its own panel, including the unforced review.
   for (const step of ["观察", "买入", "卖出", "复核"]) {
     assert.match(panel, new RegExp(`title="${step}"`));

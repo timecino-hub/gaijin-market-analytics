@@ -13,11 +13,34 @@ function response() {
   };
 }
 
-test("current candidate accepts incomplete calculator inputs as an empty plan", () => {
+test("previous deployment remains compatible during adoption rollout", () => {
   assert.equal(isGeneralStrategyResponse(response()), true);
 });
 
-test("legacy payload and absent safety semantics cannot become the current candidate", () => {
+test("adopted general strategy accepts incomplete calculator inputs as an empty plan", () => {
+  assert.equal(isGeneralStrategyResponse({
+    ...response(),
+    version: "2026-10-01.2",
+    policy: { ...response().policy, candidate: false, designation: "CURRENT_GENERAL_STRATEGY", adoption_basis: "USER_SELECTED" }
+  }), true);
+});
+
+test("adoption requires a consistent current designation and user selection", () => {
+  const previous = response();
+  const adopted = { ...previous.policy, candidate: false, designation: "CURRENT_GENERAL_STRATEGY", adoption_basis: "USER_SELECTED" };
+  for (const policy of [
+    { ...previous.policy, candidate: false },
+    { ...adopted, designation: undefined },
+    { ...adopted, designation: "UNPROVEN_CURRENT_RULE" },
+    { ...adopted, adoption_basis: undefined },
+    { ...adopted, adoption_basis: "STATISTICALLY_OPTIMAL" },
+    { ...adopted, candidate: true }
+  ]) {
+    assert.equal(isGeneralStrategyResponse({ ...previous, policy }), false);
+  }
+});
+
+test("legacy payload and absent safety semantics cannot become the current general strategy", () => {
   assert.equal(isGeneralStrategyResponse({ version: "1.0.0", horizons: [], exit_frontier: [] }), false);
   assert.equal(isGeneralStrategyResponse({ ...response(), automated_trading: true }), false);
   assert.equal(isGeneralStrategyResponse({ ...response(), exit: { ...response().exit, force_liquidation: true } }), false);

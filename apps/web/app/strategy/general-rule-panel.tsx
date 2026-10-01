@@ -21,7 +21,7 @@ export function GeneralRulePanel({
         <section className="deco-state deco-state-error" aria-live="polite">
           <span aria-hidden="true">!</span>
           <div>
-            <h2>当前候选规则暂不可用</h2>
+            <h2>当前通用策略暂不可用</h2>
             <p>{result.error.message}</p>
           </div>
         </section>
@@ -64,7 +64,7 @@ function RuleSteps({ data }: { data: GeneralStrategyResponse }) {
   return (
     <section className="deco-strategy-steps-block" aria-labelledby="general-rule-heading">
       <div className="deco-section-heading">
-        <h2 id="general-rule-heading">当前候选规则</h2>
+        <h2 id="general-rule-heading">当前通用策略</h2>
         <span>默认成本上限 {formatDecimalPercent(policy.buy_cost_cap)} · {data.version} · 只读</span>
       </div>
       <ol className="deco-strategy-steps">
@@ -75,7 +75,7 @@ function RuleSteps({ data }: { data: GeneralStrategyResponse }) {
       </ol>
       <ul className="deco-strategy-footnotes">
         <li>手续费默认15%为研究假设，实际以市场显示的净收入为准</li>
-        <li>价格触达不等于成交；候选参数尚未证明通用最优</li>
+        <li>价格触达不等于成交；尚未证明通用最优，也不保证达到止盈目标</li>
         <li>仅计算计划，不读取账户或提交订单</li>
       </ul>
     </section>
@@ -94,7 +94,7 @@ function CalculatedPlan({ data }: { data: GeneralStrategyResponse }) {
         <Fact label="次日报价核验（UTC）" value={data.entry.quote_check_on ?? "—"} />
         <Fact label="观察价门槛 · B×75%" value={currency(data.entry.observation_threshold)} />
         <Fact label="默认总成本上限 · B×55%" value={currency(data.entry.buy_cost_ceiling)} />
-        <Fact label="另一个候选 · B×60%" value={currency(data.entry.alternative_buy_cost_ceiling)} />
+        <Fact label="非默认研究候选 · B×60%" value={currency(data.entry.alternative_buy_cost_ceiling)} />
         <Fact label="活动前基准 B" value={currency(data.entry.baseline)} />
       </div>
       <div className="deco-section-heading">

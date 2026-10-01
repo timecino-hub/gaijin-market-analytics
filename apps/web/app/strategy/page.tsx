@@ -58,13 +58,13 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
       <MarketHeader active="strategy" />
       <header className="deco-page-title deco-opportunity-title">
         <div>
-          <p className="deco-kicker">GENERAL STRATEGY · CANDIDATE</p>
+          <p className="deco-kicker">GENERAL STRATEGY · CURRENT</p>
           <h1>通用策略</h1>
           <p>结束前3日观察 · 次日成本上限55% · 先净50%，第150天再降至净40%</p>
         </div>
         <div className="deco-opportunity-policy" aria-label="口径">
           <span>只读研究</span>
-          <strong>当前候选 · 人工执行</strong>
+          <strong>当前通用策略 · 人工执行</strong>
         </div>
       </header>
 
@@ -72,7 +72,7 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
 
       <details>
         <summary className="deco-section-heading">Claude stage25旧规则历史台账</summary>
-        <p className="deco-strategy-note">活动后入场／净25%分批退出的旧规则回放。以下业绩与预算表不代表当前55%成本上限／50%至40%候选规则的业绩。</p>
+        <p className="deco-strategy-note">活动后入场／净25%分批退出的旧规则回放。以下业绩与预算表不代表当前55%成本上限／50%至40%通用策略的业绩。</p>
         <BudgetForm budget={budget} generalQuery={generalQuery} />
         {"error" in legacyResult ? (
           <ErrorPanel error={legacyResult.error} />
@@ -331,7 +331,7 @@ function ExitSection({ data }: { data: StrategyEvidenceResponse }) {
             items={[
               "净 +25% 的挂单价 = 成本 × 1.25 ÷ 0.85，即涨 47.1%",
               "旧模型「成交」= 当日成交均价达到挂单价，非真实订单成交记录",
-              "旧模型未成交仓位到期按市价卖出，当前候选不沿用这一强制退出规则"
+              "旧模型未成交仓位到期按市价卖出，当前通用策略不沿用这一强制退出规则"
             ]}
           />
         </>
@@ -624,7 +624,7 @@ async function loadGeneralRule(
   try {
     const data = await getGeneralStrategy(query);
     if (!isGeneralStrategyResponse(data)) {
-      return { error: { status: 0, code: "incompatible_general_strategy", message: "当前候选规则服务版本不兼容，请更新服务后重试。" } };
+      return { error: { status: 0, code: "incompatible_general_strategy", message: "当前通用策略服务版本不兼容，请更新服务后重试。" } };
     }
     return { data };
   } catch (error) {

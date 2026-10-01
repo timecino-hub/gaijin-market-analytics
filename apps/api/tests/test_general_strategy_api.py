@@ -1,4 +1,4 @@
-"""The candidate strategy is a read-only, clocked decimal calculation."""
+"""The current general strategy is a read-only, clocked decimal calculation."""
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -51,6 +51,11 @@ def test_rule_is_available_without_prices_or_database(strategy_client: TestClien
     assert body["fee_rate"] == "0.15"
     assert body["as_of"] == "2026-10-01T00:00:00Z"
     assert body["version"]
+    assert body["version"] == "2026-10-01.2"
+    assert body["policy"]["candidate"] is False
+    assert body["policy"]["designation"] == "CURRENT_GENERAL_STRATEGY"
+    assert body["policy"]["adoption_basis"] == "USER_SELECTED"
+    assert body["research"]["optimality_proven"] is False
     assert body["exit"]["status"] == "NOT_EVALUATED"
     assert body["examples"]
     _no_floats(body)

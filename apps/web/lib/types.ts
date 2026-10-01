@@ -747,7 +747,9 @@ export type GeneralStrategyResponse = {
     review_after_days: number;
     minimum_baseline_days: number;
     baseline_method: string;
-    candidate: true;
+    candidate: boolean;
+    designation?: "CURRENT_GENERAL_STRATEGY";
+    adoption_basis?: "USER_SELECTED";
     default_fee_is_assumption: true;
     force_liquidation: false;
     cost_input_basis: string;

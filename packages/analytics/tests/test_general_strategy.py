@@ -13,8 +13,11 @@ from gaijin_market_analytics.general_strategy import (
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
-def test_policy_is_user_selected_candidate_with_no_claimed_fills():
+def test_policy_is_user_adopted_current_strategy_with_no_claimed_fills():
     result = evaluate_general_strategy(GeneralStrategyInputs(), as_of=NOW)
+    assert result["policy"]["candidate"] is False
+    assert result["policy"]["designation"] == "CURRENT_GENERAL_STRATEGY"
+    assert result["policy"]["adoption_basis"] == "USER_SELECTED"
     assert result["policy"]["buy_cost_cap"] == "0.55"
     assert result["policy"]["lower_target_after_days"] == 150
     assert result["policy"]["review_after_days"] == 180

@@ -1,11 +1,11 @@
-"""Versioned user-selected candidate; pure planning, no orders or claimed fills."""
+"""Versioned user-adopted general strategy; pure planning, no claimed fills."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_CEILING, Decimal, localcontext
 
-GENERAL_STRATEGY_VERSION = "2026-10-01.1"
+GENERAL_STRATEGY_VERSION = "2026-10-01.2"
 _QUANTUM = Decimal("0.01")
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -135,7 +135,8 @@ def evaluate_general_strategy(inputs: GeneralStrategyInputs, *, as_of: datetime)
         "version": GENERAL_STRATEGY_VERSION, "as_of": _stamp(now), "research_only": True,
         "automated_trading": False, "fee_rate": format(inputs.fee_rate, "f"),
         "policy": {
-            "candidate": True, "observation_lead_days": 3, "quote_check_lead_days": 2,
+            "candidate": False, "designation": "CURRENT_GENERAL_STRATEGY", "adoption_basis": "USER_SELECTED",
+            "observation_lead_days": 3, "quote_check_lead_days": 2,
             "observation_gate": "0.75", "buy_cost_cap": "0.55", "alternative_cost_cap": "0.60",
             "preferred_net_target": "0.50", "minimum_net_target": "0.40",
             "lower_target_after_days": 150, "review_after_days": 180,

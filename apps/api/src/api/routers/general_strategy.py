@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/v1/general-strategy", tags=["general-strategy"])
 @router.get(
     "",
     response_model=GeneralStrategyResponse,
-    summary="Read the candidate timing rule and calculate manual price thresholds",
+    summary="Read the current general strategy and calculate manual price thresholds",
     description="Uses supplied values and UTC time only. Does not read or write a database or place orders.",
 )
 def get_general_strategy(
