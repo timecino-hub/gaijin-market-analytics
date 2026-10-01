@@ -8,10 +8,34 @@ export function VehiclePotentialFilterForm({
 }) {
   return (
     <form
-      className="deco-opportunity-filter deco-compact-filter"
+      className="deco-opportunity-filter deco-potential-filter"
       action="/opportunities"
       method="get"
     >
+      <label>
+        搜索载具
+        <input name="q" defaultValue={form.q} maxLength={80} placeholder="载具名称或编号" type="search" />
+      </label>
+
+      <label>
+        比较顺序
+        <select name="sort" defaultValue={form.sort}>
+          <option value="percentile">历史价格分位：低到高</option>
+          <option value="median_room">到历史中位价净空间：高到低</option>
+          <option value="recent_volume">近30天成交量中位数：高到低</option>
+          <option value="freshness">成交日期：新到旧</option>
+        </select>
+      </label>
+
+      <label>
+        到历史中位价净空间
+        <select name="room" defaultValue={form.room}>
+          <option value="all">全部</option>
+          <option value="50">至少50%，所需卖价在上限内</option>
+          <option value="40">至少40%，所需卖价在上限内</option>
+        </select>
+      </label>
+
       <label>
         显示范围
         <select name="ranked_only" defaultValue={String(form.rankedOnly)}>
@@ -29,7 +53,7 @@ export function VehiclePotentialFilterForm({
       </label>
 
       <label>
-        as_of（可选）
+        查询时点（可选）
         <input
           name="as_of"
           defaultValue={form.asOf}
@@ -37,12 +61,12 @@ export function VehiclePotentialFilterForm({
           inputMode="text"
         />
         <span className="deco-field-hint">
-          ISO-8601 带时区；留空为当前 UTC
+          带时区时间；留空为当前 UTC
         </span>
       </label>
 
       <div className="deco-opportunity-actions">
-        <button type="submit">重新定位</button>
+        <button type="submit">应用筛选</button>
         <Link href="/opportunities">重置条件</Link>
       </div>
     </form>

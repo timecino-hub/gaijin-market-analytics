@@ -520,3 +520,66 @@ body:has(.art-shell) {
 .deco-budget-form label { color: var(--art-muted); font-size: 0.7rem; text-transform: uppercase; }
 .deco-budget-form input { background: var(--art-paper); border: 1px solid var(--art-line); color: inherit; font: inherit; padding: 7px 10px; width: 130px; }
 .deco-budget-form button { background: var(--art-ink); border: 0; color: var(--art-paper); cursor: pointer; font: inherit; font-size: 0.76rem; padding: 8px 18px; }
+
+/* Vehicle comparisons: compact summary, with labelled historical details. */
+.deco-potential-page .deco-potential-filter { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.deco-potential-page .deco-potential-filter label,
+.deco-potential-page .deco-potential-filter input,
+.deco-potential-page .deco-potential-filter select { min-width: 0; }
+.deco-potential-page .deco-opportunity-actions { align-self: end; }
+.deco-potential-page .deco-opportunity-summary { padding: 26px 0 20px; }
+.deco-potential-page .deco-section-heading { flex-wrap: wrap; gap: 10px; }
+.deco-potential-page .deco-section-heading > span { max-width: 100%; overflow-wrap: anywhere; }
+.deco-potential-action { font-size: 0.84rem; line-height: 1.65; margin: 18px 0 12px; }
+.deco-potential-action a { border-bottom: 1px solid var(--art-copper); margin-inline: 4px; }
+.deco-potential-basis { color: var(--art-muted); display: flex; flex-wrap: wrap; font-size: 0.68rem; gap: 6px 14px; list-style: none; margin: 12px 0 0; padding: 0; }
+.deco-potential-basis li { border-left: 2px solid var(--art-line); line-height: 1.6; padding-left: 7px; }
+.deco-potential-page .deco-opportunity-list-heading { margin-top: 28px; }
+.deco-potential-comparison-list { align-items: start; }
+.deco-potential-page .deco-potential-card { min-width: 0; padding: 18px 0 0; }
+.deco-potential-page .deco-potential-card .opportunity-card-heading { gap: 12px; grid-template-columns: 46px minmax(0, 1fr) 90px; padding: 0; }
+.deco-potential-page .deco-potential-card .rank-block,
+.deco-potential-page .deco-potential-card .score-block { background: transparent; grid-column: auto; grid-row: auto; grid-template-columns: minmax(0, 1fr); justify-content: stretch; min-width: 0; padding: 0; width: auto; }
+.deco-potential-page .deco-potential-card .rank-block { text-align: left; }
+.deco-potential-page .deco-potential-card .score-block { text-align: right; }
+.deco-potential-page .deco-potential-card .opportunity-title h3 { font-size: 22px; overflow-wrap: anywhere; }
+.deco-potential-page .deco-potential-card .opportunity-title-line { align-items: start; flex-wrap: wrap; gap: 6px 10px; }
+.deco-potential-page .deco-potential-card .rank-block strong,
+.deco-potential-page .deco-potential-card .score-block strong { font-size: 23px; }
+.deco-potential-page .deco-potential-card .opportunity-title p { overflow-wrap: anywhere; }
+.deco-potential-page .deco-potential-card .opportunity-financial-grid { gap: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 16px; padding: 0; }
+.deco-potential-page .deco-potential-card .opportunity-metric { background: transparent; border: 0; border-right: 1px solid var(--art-line); padding: 12px 9px; }
+.deco-potential-page .deco-potential-card .opportunity-metric:nth-child(3n) { border-right: 0; }
+.deco-potential-page .deco-potential-card .opportunity-metric:nth-child(-n+3) { border-bottom: 1px solid var(--art-line); }
+.deco-potential-page .deco-potential-card .opportunity-metric strong { font-size: 0.84rem; }
+.deco-potential-page .deco-potential-card .opportunity-metric small { color: var(--art-muted); display: block; font-size: 0.62rem; font-weight: 400; line-height: 1.5; margin-top: 4px; }
+.deco-potential-card-date { align-items: baseline; color: var(--art-muted); display: flex; flex-wrap: wrap; font-size: 0.67rem; gap: 5px 10px; padding: 12px 0; }
+.deco-potential-status { color: var(--art-muted); display: block; font-size: 0.72rem; padding-bottom: 12px; }
+.deco-potential-details { border-top: 1px solid var(--art-line); }
+.deco-potential-details > summary { cursor: pointer; font-size: 0.71rem; line-height: 1.6; padding: 13px 0; }
+.deco-potential-details > summary:focus-visible,
+.deco-potential-page a:focus-visible { outline: 2px solid var(--art-copper); outline-offset: 3px; }
+.deco-potential-history { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 6px 0 16px; }
+.deco-potential-history > div { min-width: 0; }
+.deco-potential-history dt { color: var(--art-muted); font-size: 0.64rem; line-height: 1.6; }
+.deco-potential-history dd { font-size: 0.76rem; line-height: 1.6; margin: 4px 0 0; overflow-wrap: anywhere; }
+.deco-potential-event-record { border-top: 1px solid var(--art-line); margin-top: 16px; padding-top: 14px; }
+.deco-potential-event-record h4 { font-size: 0.77rem; margin: 0 0 14px; overflow-wrap: anywhere; }
+@media (min-width: 1100px) {
+  .deco-potential-comparison-list { column-gap: 28px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .deco-potential-page .deco-potential-filter { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .deco-potential-page .deco-potential-filter { grid-template-columns: 1fr; }
+  .deco-potential-page .deco-opportunity-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deco-potential-page .deco-potential-card .opportunity-card-heading { grid-template-columns: 40px minmax(0, 1fr) 78px; }
+  .deco-potential-page .deco-potential-card .opportunity-title h3 { font-size: 19px; }
+  .deco-potential-page .deco-potential-card .score-block { grid-column: auto; }
+  .deco-potential-page .deco-potential-card .opportunity-financial-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .deco-potential-page .deco-potential-card .opportunity-metric:nth-child(3n) { border-right: 1px solid var(--art-line); }
+  .deco-potential-page .deco-potential-card .opportunity-metric:nth-child(2n) { border-right: 0; }
+  .deco-potential-page .deco-potential-card .opportunity-metric:nth-child(-n+4) { border-bottom: 1px solid var(--art-line); }
+  .deco-potential-history { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

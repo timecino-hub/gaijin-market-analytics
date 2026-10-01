@@ -72,7 +72,7 @@ function RuleSteps({ data }: { data: GeneralStrategyResponse }) {
         <RuleStep index="04" title="复核" rule={`买入满${policy.review_after_days}天还没达到目标，重新选择退出时机。`} />
       </ol>
       <ul className="deco-strategy-footnotes">
-        <li>默认手续费：15%（假设）</li>
+        <li>默认手续费：15%</li>
         <li>成交状态：未确认</li>
         <li>{formatDecimalPercent(policy.alternative_cost_cap)}：研究备选</li>
         <li>参考价：活动前同等天数的日均价中位数，至少{policy.minimum_baseline_days}天</li>

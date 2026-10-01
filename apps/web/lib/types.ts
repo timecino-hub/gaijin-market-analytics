@@ -572,11 +572,26 @@ export type VehicleEventRecord = {
   closes_at: string;
   pre_event_baseline: string | null;
   entry_price: string | null;
+  entry_price_day?: string | null;
   drawdown_ratio: string | null;
   holding_days: number;
   exit_price: string | null;
   net_roi: string | null;
   outcome_closed: boolean;
+  outcome_status?: "OBSERVED" | "PENDING_HORIZON" | "MISSING_EXIT_PRICE" | "NO_ENTRY_PRICE";
+};
+
+export type VehicleTargetReference = {
+  cost_basis: "LATEST_COMPLETED_DAY_AVERAGE_PROXY";
+  reference_cost: string;
+  fee_rate: string;
+  preferred_offer: string;
+  minimum_offer: string;
+  median_net_roi: string;
+  median_supports_preferred: boolean;
+  median_supports_minimum: boolean;
+  preferred_within_market_cap: boolean;
+  minimum_within_market_cap: boolean;
 };
 
 export type VehiclePotentialItem = {
@@ -601,6 +616,8 @@ export type VehiclePotentialItem = {
   ratio_to_median: string | null;
   median_daily_volume: number | null;
   recent_daily_volume: number | null;
+  recent_trading_day_count?: number | null;
+  target_reference?: VehicleTargetReference | null;
 
   events: VehicleEventRecord[];
   completed_event_count: number;

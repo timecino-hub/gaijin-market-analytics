@@ -11,6 +11,7 @@ from api.schemas.vehicle_potential import (
     VehicleEventRecordResponse,
     VehiclePotentialListResponse,
     VehiclePotentialResponse,
+    VehicleTargetReferenceResponse,
 )
 from api.services.vehicle_potential import (
     VehiclePotentialItem,
@@ -101,17 +102,27 @@ def _item(value: VehiclePotentialItem) -> VehiclePotentialResponse:
         ratio_to_median=reading.ratio_to_median,
         median_daily_volume=reading.median_daily_volume,
         recent_daily_volume=reading.recent_daily_volume,
+        recent_trading_day_count=reading.recent_trading_day_count,
+        target_reference=(
+            VehicleTargetReferenceResponse.model_validate(
+                reading.target_reference, from_attributes=True
+            )
+            if reading.target_reference is not None
+            else None
+        ),
         events=[
             VehicleEventRecordResponse(
                 event_key=record.event_key,
                 closes_at=record.closes_at,
                 pre_event_baseline=record.pre_event_baseline,
                 entry_price=record.entry_price,
+                entry_price_day=record.entry_price_day,
                 drawdown_ratio=record.drawdown_ratio,
                 holding_days=record.holding_days,
                 exit_price=record.exit_price,
                 net_roi=record.net_roi,
                 outcome_closed=record.outcome_closed,
+                outcome_status=record.outcome_status,
             )
             for record in reading.events
         ],

@@ -1,4 +1,5 @@
-import type { VehiclePotentialItem } from "./types";
+import type { VehicleEventRecord, VehiclePotentialItem, VehicleTargetReference } from "./types";
+import type { PotentialSort, VehiclePotentialListState } from "./vehicle-potential-state";
 
 const MISSING_VALUE = "—";
 
@@ -90,17 +91,17 @@ export function eventEvidenceLabel(item: VehiclePotentialItem): string {
     return "无已结束的活动";
   }
   if (item.closed_outcome_count === 0) {
-    return `${item.completed_event_count} 次已结束 · 持有期均未走完`;
+    return `${item.completed_event_count} 次活动 · 无完整收益记录`;
   }
   const positive = item.positive_outcome_count ?? 0;
-  const base = `${item.closed_outcome_count} 次已结算 · ${positive} 次为正`;
-  return isThinEvidence(item) ? `${base} · 样本过少，不成规律` : base;
+  const base = `${item.closed_outcome_count} 次观察期完整 · ${positive} 次净空间为正`;
+  return isThinEvidence(item) ? `${base} · 样本不足3次` : base;
 }
 
 export function catalogNoteFor(item: VehiclePotentialItem): string | null {
   return item.catalog_match_status === "MATCHED"
     ? null
-    : "未绑定活动目录，无活动记录；价格定位不受影响";
+    : "活动目录未绑定";
 }
 
 export function volumeLabel(median: number | null, recent: number | null): string {
@@ -112,4 +113,110 @@ export function volumeLabel(median: number | null, recent: number | null): strin
 
 function safeFallback(value: string): string {
   return value.replace(/[<>{}"'`]/g, "").replaceAll("_", " ").trim() || "未知说明";
+}
+
+const SORT_LABELS: Record<PotentialSort, string> = {
+  percentile: "历史价格分位：低到高",
+  median_room: "到历史中位价净空间：高到低",
+  recent_volume: "近30天日成交量中位数：高到低",
+  freshness: "成交日期：新到旧"
+};
+
+export function potentialSortLabel(sort: PotentialSort): string {
+  return SORT_LABELS[sort];
+}
+
+/** Validate the basis before using an optional new field from an older API. */
+export function targetReferenceFor(item: VehiclePotentialItem): VehicleTargetReference | null {
+  const target = item.target_reference;
+  if (item.state !== "RANKED" || !target || target.cost_basis !== "LATEST_COMPLETED_DAY_AVERAGE_PROXY") {
+    return null;
+  }
+  return [target.reference_cost, target.fee_rate, target.preferred_offer,
+    target.minimum_offer, target.median_net_roi].every((value) => parseDecimal(value) !== null)
+    ? target : null;
+}
+
+export function selectVehiclePotentialItems(
+  items: readonly VehiclePotentialItem[],
+  form: VehiclePotentialListState["form"]
+): VehiclePotentialItem[] {
+  const query = form.q.toLocaleLowerCase("en-US");
+  const selected = items.filter((item) => {
+    if (query && ![item.item_name, item.external_key, item.category ?? "", item.matched_catalog_name ?? ""]
+      .some((value) => value.toLocaleLowerCase("en-US").includes(query))) {
+      return false;
+    }
+    if (form.rankedOnly && item.state !== "RANKED") return false;
+    if (form.room === "all") return true;
+    const target = targetReferenceFor(item);
+    return form.room === "50"
+      ? target?.median_supports_preferred === true && target.preferred_within_market_cap === true
+      : target?.median_supports_minimum === true && target.minimum_within_market_cap === true;
+  });
+  return selected.sort((left, right) => {
+    const stateOrder = Number(left.state !== "RANKED") - Number(right.state !== "RANKED");
+    if (stateOrder) return stateOrder;
+    let order = 0;
+    if (form.sort === "percentile") {
+      order = compareOptionalDecimals(left.price_percentile, right.price_percentile, false);
+    } else if (form.sort === "median_room") {
+      order = compareOptionalDecimals(targetReferenceFor(left)?.median_net_roi ?? null,
+        targetReferenceFor(right)?.median_net_roi ?? null, true);
+    } else {
+      const leftValue = form.sort === "recent_volume" ? left.recent_daily_volume : left.price_age_days;
+      const rightValue = form.sort === "recent_volume" ? right.recent_daily_volume : right.price_age_days;
+      order = compareOptionalCounts(leftValue, rightValue, form.sort === "recent_volume");
+    }
+    return order || left.item_id - right.item_id;
+  });
+}
+
+/** Exact comparison; monetary and ratio strings never pass through Number. */
+export function compareDecimalStrings(left: string, right: string): number | null {
+  const first = parseDecimal(left);
+  const second = parseDecimal(right);
+  if (!first || !second) return null;
+  const scale = Math.max(first.scale, second.scale);
+  const leftValue = first.integer * BigInt(10) ** BigInt(scale - first.scale);
+  const rightValue = second.integer * BigInt(10) ** BigInt(scale - second.scale);
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+}
+
+function parseDecimal(value: unknown): { integer: bigint; scale: number } | null {
+  if (typeof value !== "string" || value.length > 1024) return null;
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) return null;
+  const fraction = match[3] ?? "";
+  const integer = BigInt(`${match[2]}${fraction}`) * BigInt(match[1] ? -1 : 1);
+  return { integer, scale: fraction.length };
+}
+
+function compareOptionalDecimals(left: string | null, right: string | null, descending: boolean): number {
+  const first = parseDecimal(left);
+  const second = parseDecimal(right);
+  if (!first || !second) return !first && !second ? 0 : !first ? 1 : -1;
+  const comparison = compareDecimalStrings(left!, right!)!;
+  return descending ? -comparison : comparison;
+}
+
+function compareOptionalCounts(left: number | null, right: number | null, descending: boolean): number {
+  const first = left !== null && Number.isSafeInteger(left) && left >= 0 ? left : null;
+  const second = right !== null && Number.isSafeInteger(right) && right >= 0 ? right : null;
+  if (first === null || second === null) return first === second ? 0 : first === null ? 1 : -1;
+  return descending ? second - first : first - second;
+}
+
+export function eventOutcomeLabel(record: VehicleEventRecord): string {
+  switch (record.outcome_status) {
+    case "OBSERVED": return "观察期完整";
+    case "PENDING_HORIZON": return "观察期未满";
+    case "MISSING_EXIT_PRICE": return "到期成交价缺失";
+    case "NO_ENTRY_PRICE": return "活动后买价参考缺失";
+    default: return record.outcome_closed ? "观察期完整" : "结果未完整";
+  }
+}
+
+export function hasObservedEventOutcome(record: VehicleEventRecord): boolean {
+  return record.outcome_status === undefined ? record.outcome_closed : record.outcome_status === "OBSERVED";
 }

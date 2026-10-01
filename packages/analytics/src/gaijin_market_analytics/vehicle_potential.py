@@ -22,27 +22,33 @@ series distinguishes those. The module reports the position and says so.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
-from typing import Iterable, Literal
+from decimal import ROUND_FLOOR, Decimal, localcontext
+from typing import Literal
 
+from .general_strategy import take_profit_offer
 from .historical_trades import (
     HistoricalTradeBucketEvidence,
     aggregate_trade_evidence_by_utc_day,
     select_historical_trade_evidence,
 )
+from .market_rules import GAIJIN_MARKET_RULES_V1
 from .supply_cycles import SupplyPoolEvent
 
-VEHICLE_POTENTIAL_VERSION = "1.0.0"
+VEHICLE_POTENTIAL_VERSION = "1.1.0"
 
-_ZERO = Decimal("0")
-_ONE = Decimal("1")
+_ZERO = Decimal(0)
+_ONE = Decimal(1)
 
 VehiclePotentialState = Literal[
     "RANKED",
     "INSUFFICIENT_HISTORY",
     "NO_CURRENT_PRICE",
+]
+VehicleOutcomeStatus = Literal[
+    "OBSERVED", "PENDING_HORIZON", "MISSING_EXIT_PRICE", "NO_ENTRY_PRICE"
 ]
 
 
@@ -59,8 +65,8 @@ class VehiclePotentialConfig:
     # Below this there is no distribution worth taking a percentile of, and the
     # module refuses rather than publishing a percentile of a dozen days.
     minimum_history_days: int = 120
-    # A price older than this is stale: the vehicle has effectively stopped
-    # trading and its "current" price is not current.
+    # A price older than this is stale; missing observations do not establish
+    # whether trading stopped.
     maximum_price_age_days: int = 14
     recent_volume_days: int = 30
     holding_days: int = 180
@@ -94,21 +100,39 @@ class VehiclePotentialConfig:
 class VehicleEventRecord:
     """One completed supply event this vehicle went through.
 
-    ``outcome_closed`` is the honest part: an event whose holding horizon has
-    not finished by ``as_of`` has no return yet, and reporting one would be
-    reading the future. Those events still appear — they are part of the
-    vehicle's record — with a null return.
+    The entry is the first recorded complete day after close, exposed with its
+    actual date. This legacy fixed-hold comparison requires the exact complete
+    day 180 observation; an unfinished horizon or missing endpoint has no
+    return. These are observed prices, never actual purchases or liquidations.
     """
 
     event_key: str
     closes_at: datetime
     pre_event_baseline: Decimal | None
     entry_price: Decimal | None
+    entry_price_day: datetime | None
     drawdown_ratio: Decimal | None
     holding_days: int
     exit_price: Decimal | None
     net_roi: Decimal | None
     outcome_closed: bool
+    outcome_status: VehicleOutcomeStatus
+
+
+@dataclass(frozen=True, slots=True)
+class VehicleTargetReference:
+    """Required offers using an observed average as a cost reference only."""
+
+    cost_basis: Literal["LATEST_COMPLETED_DAY_AVERAGE_PROXY"]
+    reference_cost: Decimal
+    fee_rate: Decimal
+    preferred_offer: Decimal
+    minimum_offer: Decimal
+    median_net_roi: Decimal
+    median_supports_preferred: bool
+    median_supports_minimum: bool
+    preferred_within_market_cap: bool
+    minimum_within_market_cap: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +157,8 @@ class VehiclePotential:
     ratio_to_median: Decimal | None
     median_daily_volume: int | None
     recent_daily_volume: int | None
+    recent_trading_day_count: int | None
+    target_reference: VehicleTargetReference | None
 
     # --- what its own events did: evidence, never the ranking ------------
     events: tuple[VehicleEventRecord, ...]
@@ -196,6 +222,8 @@ def evaluate_vehicle_potential(
             ratio_to_median=None,
             median_daily_volume=None,
             recent_daily_volume=None,
+            recent_trading_day_count=None,
+            target_reference=None,
             explanation_codes=tuple(dict.fromkeys([*codes, code])),
             **event_side,
         )
@@ -221,6 +249,7 @@ def evaluate_vehicle_potential(
     at_or_below = sum(1 for price in prices if price <= current)
     percentile = Decimal(at_or_below) / Decimal(len(prices))
     median = _median(prices)
+    assert median is not None
 
     volumes = tuple(point.reported_trade_volume for point in days)
     recent = tuple(
@@ -255,8 +284,39 @@ def evaluate_vehicle_potential(
         ratio_to_median=(current / median if median and median > _ZERO else None),
         median_daily_volume=_median_int(volumes),
         recent_daily_volume=_median_int(recent) if recent else None,
+        recent_trading_day_count=len(recent),
+        target_reference=_target_reference(current, median, fee_rate=cfg.fee_rate),
         explanation_codes=tuple(dict.fromkeys(codes)),
         **event_side,
+    )
+
+
+def _target_reference(
+    cost: Decimal, median: Decimal, *, fee_rate: Decimal
+) -> VehicleTargetReference:
+    preferred = take_profit_offer(cost, Decimal("0.50"), fee_rate)
+    minimum = take_profit_offer(cost, Decimal("0.40"), fee_rate)
+    with localcontext() as context:
+        context.prec = 64
+        receipt = (median * (_ONE - fee_rate)).quantize(
+            GAIJIN_MARKET_RULES_V1.currency_quantum, rounding=ROUND_FLOOR
+        )
+        median_net_roi = receipt / cost - _ONE
+    return VehicleTargetReference(
+        cost_basis="LATEST_COMPLETED_DAY_AVERAGE_PROXY",
+        reference_cost=cost,
+        fee_rate=fee_rate,
+        preferred_offer=preferred,
+        minimum_offer=minimum,
+        median_net_roi=median_net_roi,
+        median_supports_preferred=preferred <= median,
+        median_supports_minimum=minimum <= median,
+        preferred_within_market_cap=(
+            preferred <= GAIJIN_MARKET_RULES_V1.maximum_listing_price
+        ),
+        minimum_within_market_cap=(
+            minimum <= GAIJIN_MARKET_RULES_V1.maximum_listing_price
+        ),
     )
 
 
@@ -298,15 +358,20 @@ def _event_record(
 
         exit_price: Decimal | None = None
         closed = False
+        outcome_status: VehicleOutcomeStatus = "NO_ENTRY_PRICE"
         if entry_day is not None:
             target = entry_day + timedelta(days=config.holding_days)
+            outcome_status = "PENDING_HORIZON"
             if target + timedelta(days=1) <= as_of:
-                settled = [
-                    point for point in post if point.day_start_utc <= target
-                ]
-                if settled:
-                    exit_price = settled[-1].vwap_price
+                endpoint = next(
+                    (point for point in post if point.day_start_utc == target),
+                    None,
+                )
+                outcome_status = "MISSING_EXIT_PRICE"
+                if endpoint is not None:
+                    exit_price = endpoint.vwap_price
                     closed = True
+                    outcome_status = "OBSERVED"
 
         net_roi: Decimal | None = None
         if exit_price is not None and entry is not None and entry > _ZERO:
@@ -318,6 +383,7 @@ def _event_record(
                 closes_at=event.closes_at,
                 pre_event_baseline=baseline,
                 entry_price=entry,
+                entry_price_day=entry_day,
                 drawdown_ratio=(
                     entry / baseline
                     if entry is not None and baseline and baseline > _ZERO
@@ -327,6 +393,7 @@ def _event_record(
                 exit_price=exit_price,
                 net_roi=net_roi,
                 outcome_closed=closed,
+                outcome_status=outcome_status,
             )
         )
 
@@ -356,9 +423,7 @@ def _pre_event_baseline(
     config: VehiclePotentialConfig,
 ) -> Decimal | None:
     duration = event.closes_at - event.opens_at
-    days = _window(
-        series, window_start=event.opens_at - duration, as_of=event.opens_at
-    )
+    days = _window(series, window_start=event.opens_at - duration, as_of=event.opens_at)
     if len(days) < config.minimum_pre_event_days:
         return None
     return _median(tuple(point.vwap_price for point in days))
@@ -410,7 +475,7 @@ def _median(values: tuple[Decimal, ...]) -> Decimal | None:
     middle = len(ordered) // 2
     if len(ordered) % 2:
         return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / Decimal("2")
+    return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
 
 
 def _median_int(values: tuple[int, ...]) -> int | None:

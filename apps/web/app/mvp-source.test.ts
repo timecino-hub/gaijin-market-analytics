@@ -23,7 +23,7 @@ test("public homepage is a read-only, evidence-backed catalog", async () => {
   assert.doesNotMatch(source, /Math\.random/);
 });
 
-test("vehicle potential ranks on the price position only, and says why", async () => {
+test("vehicle potential compares observed prices without claiming future returns", async () => {
   const [page, header, caddy] = await Promise.all([
     readFile(new URL("./opportunities/page.tsx", import.meta.url), "utf8"),
     readFile(headerUrl, "utf8"),
@@ -32,16 +32,18 @@ test("vehicle potential ranks on the price position only, and says why", async (
   assert.match(page, /export const dynamic = "force-dynamic"/);
   assert.match(page, /<MarketHeader active="opportunities"/);
   assert.match(page, /getVehiclePotential/);
-  // The ranking basis, and the reason the other half is not it.
-  assert.match(page, /排序只用价格分位/);
-  assert.match(page, /不参与排序/);
-  assert.match(page, /汇总数字都带样本量/);
-  // The trap a percentile invites.
-  assert.match(page, /低分位不等于会涨/);
-  assert.match(page, /也可能还在跌/);
-  assert.match(page, /位置描述，不是预测/);
-  // Unreadable vehicles must not lead the list by scoring zero.
-  assert.match(page, /历史不足或现价过旧的排在最后/);
+  assert.match(page, /selectVehiclePotentialItems/);
+  assert.match(page, /历史比较 · 非收益预测/);
+  assert.match(page, /活动记录不参与排序/);
+  assert.match(page, /成本参考：最新完整成交日均价/);
+  assert.match(page, /未计买入价差/);
+  assert.match(page, /净赚50%所需卖价/);
+  assert.match(page, /净赚40%所需卖价/);
+  assert.match(page, /近30天日成交量中位数/);
+  assert.match(page, /<details className="deco-potential-details"/);
+  assert.match(page, /活动后首个记录日均价/);
+  assert.match(page, /record\.entry_price_day/);
+  assert.doesNotMatch(page, /已结算|次日成交均价|日均成交量/);
   // Every event aggregate is shown with the count behind it.
   assert.match(page, /n=\$\{count\}/);
   assert.doesNotMatch(page, /Math\.random/);
@@ -109,7 +111,7 @@ test("the strategy page publishes the current general strategy separately from l
   }
   assert.match(panel, /180天重新评估/);
   assert.match(panel, /成交状态：未确认/);
-  assert.match(panel, /默认手续费：15%（假设）/);
+  assert.match(panel, /<li>默认手续费：15%<\/li>/);
   assert.match(panel, /活动前参考价（GJN）/);
   assert.match(panel, /当天结束后/);
   assert.match(panel, /买入总价不超过活动前参考价/);
