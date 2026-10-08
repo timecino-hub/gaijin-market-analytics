@@ -29,6 +29,7 @@ import type {
 } from "../../lib/types";
 import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
+import { VehicleImage, VehicleImageSource } from "../vehicle-image";
 import { VehiclePotentialFilterForm } from "./vehicle-potential-filter-form";
 
 export const dynamic = "force-dynamic";
@@ -137,13 +138,18 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
           <strong>{ranked ? `#${rank}` : "—"}</strong>
         </div>
         <div className="opportunity-title">
-          <div className="opportunity-title-line">
-            <h3><Link href={`/items/${item.item_id}`}>{item.item_name}</Link></h3>
-            <span className={`status-badge ${ranked ? "eligible" : ""}`}>
-              {vehicleStateLabel(item.state)}
-            </span>
+          <div className="deco-potential-identity">
+            <Link className="deco-potential-image-link" href={`/items/${item.item_id}`}><VehicleImage externalKey={item.external_key} name={item.item_name} /></Link>
+            <div>
+              <div className="opportunity-title-line">
+                <h3><Link href={`/items/${item.item_id}`}>{item.item_name}</Link></h3>
+                <span className={`status-badge ${ranked ? "eligible" : ""}`}>
+                  {vehicleStateLabel(item.state)}
+                </span>
+              </div>
+              <p>{item.external_key}{item.category ? ` · ${item.category}` : ""}</p>
+            </div>
           </div>
-          <p>{item.external_key}{item.category ? ` · ${item.category}` : ""}</p>
         </div>
         <div className="score-block">
           <span>历史价格分位</span>
@@ -210,6 +216,7 @@ function VehicleCard({ item, rank }: { item: VehiclePotentialItem; rank: number 
           <li>{eventEvidenceLabel(item)}</li>
           {catalogNote ? <li>{catalogNote}</li> : null}
         </ul>
+        <VehicleImageSource externalKey={item.external_key} />
         {item.events.map((record) => <EventRow key={record.event_key} record={record} />)}
       </details>
     </article>

@@ -632,3 +632,29 @@ body:has(.art-shell) {
   .deco-history-y-labels { font-size: 0.62rem; }
   .deco-history-x-labels { font-size: 0.65rem; margin-left: 72px; }
 }
+
+/* Local official vehicle pictures keep their original proportions. */
+.deco-vehicle-image { align-items: center; aspect-ratio: 2 / 1; display: inline-grid; justify-items: center; min-width: 0; overflow: hidden; }
+.deco-vehicle-image img { display: block; height: auto; object-fit: contain; width: 100%; }
+.deco-vehicle-image-thumbnail { flex: 0 0 72px; width: 72px; }
+.deco-vehicle-image-hero { max-width: 512px; width: 100%; }
+.deco-vehicle-image-fallback { align-items: center; background: var(--art-ink); color: var(--art-paper); display: flex; font-family: var(--font-art-display), sans-serif; font-size: 22px; font-weight: 900; height: 100%; justify-content: center; width: 100%; }
+.deco-vehicle-image-hero .deco-vehicle-image-fallback { font-size: 48px; }
+.deco-vehicle-stage { align-items: center; display: grid; justify-items: center; padding: 16px; }
+.deco-item-identity > div { min-width: 0; overflow-wrap: anywhere; }
+.deco-vehicle-image-source { color: var(--art-muted); display: inline-block; font-size: 0.68rem; justify-self: start; margin-block: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.deco-feature-copy .deco-vehicle-image-source,
+.deco-detail-title .deco-vehicle-image-source { color: #aeb7b4; }
+.deco-detail-title .deco-vehicle-image-source { margin-top: 0; }
+.deco-potential-identity { align-items: center; display: grid; gap: 14px; grid-template-columns: 96px minmax(0, 1fr); }
+.deco-potential-image-link { display: block; }
+.deco-potential-image-link .deco-vehicle-image { width: 96px; }
+.deco-vehicle-image-source:focus-visible,
+.deco-potential-image-link:focus-visible { outline: 2px solid var(--art-copper); outline-offset: 3px; }
+
+@media (max-width: 600px) {
+  .deco-item-identity { gap: 10px; }
+  .deco-vehicle-image-thumbnail { flex-basis: 80px; width: 80px; }
+  .deco-potential-identity { gap: 8px; grid-template-columns: minmax(0, 1fr); }
+  .deco-vehicle-stage { min-height: 160px; }
+}

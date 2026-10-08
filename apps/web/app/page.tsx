@@ -5,6 +5,7 @@ import { historicalDay } from "../lib/historical-price-chart";
 import type { ItemSummary } from "../lib/types";
 import { LocalDateTime } from "./local-date-time";
 import { MarketHeader } from "./market-header";
+import { VehicleImage, VehicleImageSource } from "./vehicle-image";
 
 export const dynamic = "force-dynamic";
 
@@ -82,12 +83,13 @@ function FeaturedItem({ item }: { item: ItemSummary }) {
   const book = item.current_order_book;
   return (
     <section className="deco-feature deco-feature-item" aria-labelledby="featured-title">
-      <div className="deco-stage" aria-hidden="true"><span className="deco-block block-one" /><span className="deco-block block-two" /><strong>{item.name.slice(0, 2).toUpperCase()}</strong></div>
+      <div className="deco-stage deco-vehicle-stage"><VehicleImage externalKey={item.external_key} name={item.name} variant="hero" /></div>
       <div className="deco-feature-copy">
         <p className="deco-kicker">LATEST CATALOG ENTRY</p><h2 id="featured-title">{item.name}</h2><p>{item.external_key}</p>
         <div className="deco-feature-prices"><Price label="当前买价" value={book?.best_buy.canonical_display_text} /><Price label="当前卖价" value={book?.best_sell.canonical_display_text} /></div>
         {item.history_summary ? <div className="deco-feature-history"><span>历史日均价</span><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC · {item.history_summary.daily_count} 个记录日</small></div> : null}
         <Link className="deco-primary-link" href={`/items/${item.id}`}>查看价格记录 <span>→</span></Link>
+        <VehicleImageSource externalKey={item.external_key} />
       </div>
     </section>
   );
@@ -97,7 +99,7 @@ function CatalogRow({ item }: { item: ItemSummary }) {
   const book = item.current_order_book;
   return (
     <Link className="deco-catalog-row" href={`/items/${item.id}`}>
-      <div><strong>{item.name}</strong><small>{item.category} · {item.external_key}</small></div>
+      <div className="deco-item-identity"><VehicleImage externalKey={item.external_key} name={item.name} /><div><strong>{item.name}</strong><small>{item.category} · {item.external_key}</small></div></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>

@@ -4,6 +4,7 @@ import { loadItemDetail } from "../../../lib/item-detail-data";
 import type { ApiError, CurrentOrderBook, CurrentOrderBookLevel, ItemHistoricalTrades } from "../../../lib/types";
 import { LocalDateTime } from "../../local-date-time";
 import { MarketHeader } from "../../market-header";
+import { VehicleImage, VehicleImageSource } from "../../vehicle-image";
 
 export const dynamic = "force-dynamic";
 
@@ -20,11 +21,12 @@ export default async function ItemDetailPage({ params }: ItemDetailPageProps) {
       <MarketHeader active="catalog" />
       <div className="deco-breadcrumb"><Link href="/items">载具目录</Link><span>/</span><span>{item.name}</span></div>
       <section className="deco-detail-masthead">
-        <div className="deco-detail-geometry" aria-hidden="true"><i /><i /><strong>{item.name.slice(0, 2).toUpperCase()}</strong></div>
+        <div className="deco-detail-geometry deco-vehicle-stage"><VehicleImage externalKey={item.external_key} name={item.name} variant="hero" /></div>
         <div className="deco-detail-title">
           <p className="deco-kicker">{item.category || "UNCATEGORIZED"}</p>
           <h1>{item.name}</h1>
           <p>{item.external_key}</p>
+          <VehicleImageSource externalKey={item.external_key} />
           <span className={`deco-freshness ${orderBook?.freshness === "stale" ? "stale" : ""}`}>
             {orderBook ? (orderBook.freshness === "fresh" ? "当前订单簿" : "订单簿已过期") : "暂无订单簿"}
           </span>
