@@ -20,10 +20,10 @@ export function MarketHeader({
         <Link className={active === "catalog" ? "active" : undefined} href="/items">
           载具目录
         </Link>
-        <Link className={active === "opportunities" ? "active" : undefined} href="/opportunities">
+        <Link prefetch={false} className={active === "opportunities" ? "active" : undefined} href="/opportunities">
           载具潜力
         </Link>
-        <Link className={active === "strategy" ? "active" : undefined} href="/strategy">
+        <Link prefetch={false} className={active === "strategy" ? "active" : undefined} href="/strategy">
           通用策略
         </Link>
       </nav>

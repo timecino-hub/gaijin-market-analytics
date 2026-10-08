@@ -8,6 +8,7 @@ import type {
   ItemAnalysisQuery,
   ItemAnalysisResponse,
   ItemDetail,
+  ItemHistoricalTrades,
   ItemListQuery,
   OpportunityRankingQuery,
   OpportunityRankingResponse,
@@ -23,6 +24,7 @@ import type {
   LocalRecognitionReviewCreate,
   LocalRecognitionReviewList,
   MarketSnapshot,
+  MarketDataStatus,
   PaginatedItemsResponse,
   SnapshotQuery
 } from "./types";
@@ -50,7 +52,7 @@ export async function getOpportunities(
 export async function getStrategyEvidence(
   query: StrategyEvidenceQuery
 ): Promise<StrategyEvidenceResponse> {
-  return fetchJson<StrategyEvidenceResponse>("/api/v1/strategy-evidence", query);
+  return fetchJson<StrategyEvidenceResponse>("/api/v1/strategy-evidence", query, undefined, 30_000);
 }
 
 export async function getGeneralStrategy(
@@ -62,11 +64,22 @@ export async function getGeneralStrategy(
 export async function getVehiclePotential(
   query: VehiclePotentialQuery
 ): Promise<VehiclePotentialResponse> {
-  return fetchJson<VehiclePotentialResponse>("/api/v1/vehicle-potential", query);
+  return fetchJson<VehiclePotentialResponse>("/api/v1/vehicle-potential", query, undefined, 30_000);
 }
 
 export async function getItem(itemId: string): Promise<ItemDetail> {
   return fetchJson<ItemDetail>(`/api/v1/items/${encodeURIComponent(itemId)}`);
+}
+
+export async function getMarketDataStatus(): Promise<MarketDataStatus> {
+  return fetchJson<MarketDataStatus>("/api/v1/data-status");
+}
+
+export async function getItemHistoricalTrades(itemId: string): Promise<ItemHistoricalTrades> {
+  return fetchJson<ItemHistoricalTrades>(
+    `/api/v1/items/${encodeURIComponent(itemId)}/historical-trades`,
+    { granularity: "1d", limit: "5000" }
+  );
 }
 
 export async function getCurrentOrderBook(itemId: string): Promise<CurrentOrderBook> {
@@ -280,6 +293,14 @@ export function toDisplayError(error: unknown): ApiError {
     return error.error;
   }
 
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return {
+      status: 0,
+      code: "api_timeout",
+      message: "数据读取超时，请稍后重试。"
+    };
+  }
+
   if (error instanceof TypeError) {
     return {
       status: 0,
@@ -298,11 +319,13 @@ export function toDisplayError(error: unknown): ApiError {
 async function fetchJson<T>(
   path: string,
   query?: Record<string, string | undefined>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMilliseconds = 15_000
 ): Promise<T> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMilliseconds);
   const response = await fetch(buildApiUrl(path, query), {
     cache: "no-store",
-    signal,
+    signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     headers: {
       Accept: "application/json"
     }

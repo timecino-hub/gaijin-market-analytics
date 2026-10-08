@@ -92,9 +92,12 @@ test("the strategy page publishes the current general strategy separately from l
   assert.match(page, /<MarketHeader active="strategy"/);
   assert.match(page, /getStrategyEvidence/);
   assert.match(page, /getGeneralStrategy/);
-  assert.match(page, /Promise\.all/);
+  assert.match(page, /<Suspense[^>]*fallback=/);
+  assert.match(page, /<LegacyEvidence/);
+  assert.doesNotMatch(page, /\[generalResult, legacyResult\]\s*=\s*await/);
   assert.match(page, /<GeneralRulePanel/);
-  assert.match(page, /<details>/);
+  assert.match(page, /<details\s+open=\{showLegacy\}>/);
+  assert.match(page, /showLegacy \? <Suspense/);
   assert.match(page, /旧策略回测/);
   assert.match(page, /旧策略：活动后买入／扣费后赚25%分批卖出/);
   assert.doesNotMatch(page, /Claude|stage25/);
@@ -179,7 +182,9 @@ test("item detail renders canonical prices and evidence provenance", async () =>
   assert.match(source, /side="BUY"/);
   assert.match(source, /side="SELL"/);
   assert.match(source, /未知 · 不作声明/);
-  assert.match(source, /当前不展示伪造曲线或推算数据/);
+  assert.match(source, /<HistorySection/);
+  assert.match(source, /历史成交价格/);
+  assert.doesNotMatch(source, /市场历史尚未开放/);
   assert.doesNotMatch(source, /price_raw\s*\/\s*(?:100|10000)/);
 });
 

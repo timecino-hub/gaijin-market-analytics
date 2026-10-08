@@ -61,7 +61,7 @@ export function VehiclePotentialFilterForm({
           inputMode="text"
         />
         <span className="deco-field-hint">
-          带时区时间；留空为当前 UTC
+          带时区时间；留空使用最新记录时点
         </span>
       </label>
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { getCurrentOrderBook, getItem, toDisplayError } from "../../../lib/api-client";
-import type { ApiError, CurrentOrderBook, CurrentOrderBookLevel, ItemDetail } from "../../../lib/types";
+import { historicalPriceChart } from "../../../lib/historical-price-chart";
+import { loadItemDetail } from "../../../lib/item-detail-data";
+import type { ApiError, CurrentOrderBook, CurrentOrderBookLevel, ItemHistoricalTrades } from "../../../lib/types";
 import { LocalDateTime } from "../../local-date-time";
 import { MarketHeader } from "../../market-header";
 
@@ -10,9 +11,9 @@ type ItemDetailPageProps = { params: Promise<{ itemId: string }> };
 
 export default async function ItemDetailPage({ params }: ItemDetailPageProps) {
   const { itemId } = await params;
-  const result = await loadItem(itemId);
+  const result = await loadItemDetail(itemId);
   if ("error" in result) return <ItemError error={result.error} />;
-  const { item, orderBook } = result;
+  const { item, orderBook, orderBookError, history, historyError } = result;
 
   return (
     <main className="art-shell">
@@ -28,12 +29,11 @@ export default async function ItemDetailPage({ params }: ItemDetailPageProps) {
             {orderBook ? (orderBook.freshness === "fresh" ? "当前订单簿" : "订单簿已过期") : "暂无订单簿"}
           </span>
         </div>
-        {orderBook ? <DetailPrices orderBook={orderBook} /> : <div className="deco-detail-no-price"><strong>数据不足</strong><span>尚无已批准的 current-book 观测</span></div>}
+        {orderBook ? <DetailPrices orderBook={orderBook} /> : <div className="deco-detail-no-price"><strong>{orderBookError ? "订单簿读取失败" : "暂无已确认订单簿"}</strong></div>}
       </section>
 
-      {!orderBook ? (
-        <section className="deco-empty-large"><span aria-hidden="true">00</span><div><strong>暂无已确认订单簿</strong><p>该载具存在于目录中，但当前没有通过价格合同校验的订单簿。</p></div></section>
-      ) : (
+      {orderBookError ? <section className="deco-error" aria-live="polite"><strong>订单簿读取失败</strong><p>{orderBookError.message}</p></section> : null}
+      {orderBook ? (
         <>
           <section className="deco-orderbook" aria-labelledby="orderbook-title">
             <div className="deco-section-heading">
@@ -56,9 +56,37 @@ export default async function ItemDetailPage({ params }: ItemDetailPageProps) {
             </dl>
           </section>
         </>
-      )}
-      <section className="deco-deferred"><div><p className="deco-kicker">HISTORY</p><h2>市场历史尚未开放</h2></div><p>当前不展示伪造曲线或推算数据；历史观测满足发布条件后再接入。</p></section>
+      ) : null}
+      <HistorySection itemName={item.name} history={history} error={historyError} />
     </main>
+  );
+}
+
+function HistorySection({ itemName, history, error }: { itemName: string; history: ItemHistoricalTrades | null; error: ApiError | null }) {
+  const chart = historicalPriceChart(history?.buckets ?? []);
+  const latest = chart?.points.at(-1);
+  return (
+    <section className="deco-trade-history" aria-labelledby="history-title">
+      <div className="deco-section-heading"><h2 id="history-title">历史成交价格</h2><span>成交日均价 · UTC</span></div>
+      {error ? <div className="deco-error" aria-live="polite"><strong>历史记录读取失败</strong><p>{error.message}</p></div> : chart && latest ? (
+        <>
+          <div className="deco-history-summary"><div><span>最新记录日均价</span><strong>{latest.price} GJN</strong></div><div><span>最新记录日（UTC）</span><strong>{latest.day}</strong></div><div><span>已接入记录日</span><strong>{chart.points.length} 天</strong></div></div>
+          <figure className="deco-history-figure">
+            <figcaption>{itemName} · 历史日均价</figcaption>
+            <div className="deco-history-plot">
+              <div className="deco-history-y-labels" aria-hidden="true"><span>{chart.maximum} GJN</span><span>{chart.minimum} GJN</span></div>
+              <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={`${itemName}历史日均价，${chart.points[0].day}至${latest.day}，${chart.points.length}个记录日，最低${chart.minimum} GJN，最高${chart.maximum} GJN`}>
+                <title>{itemName}历史成交日均价</title>
+                {chart.segments.map((segment) => segment.length === 1 ? <circle key={segment[0].day} cx={segment[0].x} cy={segment[0].y} r="3" /> : <polyline key={segment[0].day} points={segment.map((point) => `${point.x},${point.y}`).join(" ")} />)}
+                <circle cx={latest.x} cy={latest.y} r="4" />
+              </svg>
+            </div>
+            <div className="deco-history-x-labels"><time dateTime={chart.points[0].day}>{chart.points[0].day}</time><time dateTime={latest.day}>{latest.day}</time></div>
+          </figure>
+          <details className="deco-history-records"><summary>最近30个记录日</summary><div><table><thead><tr><th scope="col">记录日（UTC）</th><th scope="col">历史日均价（GJN）</th><th scope="col">报告成交量（单位未核实）</th></tr></thead><tbody>{chart.points.slice(-30).reverse().map((point) => <tr key={point.day}><th scope="row"><time dateTime={point.day}>{point.day}</time></th><td>{point.price}</td><td>{point.volume}</td></tr>)}</tbody></table></div></details>
+        </>
+      ) : <div className="deco-empty-inline"><strong>暂无日均价记录</strong></div>}
+    </section>
   );
 }
 
@@ -93,12 +121,4 @@ function Info({ term, value }: { term: string; value: string }) { return <div><d
 
 function ItemError({ error }: { error: ApiError }) {
   return <main className="art-shell"><MarketHeader active="catalog" /><section className="deco-state deco-state-error"><span aria-hidden="true">!</span><div><h1>{error.code === "item_not_found" ? "未找到该载具" : "载具加载失败"}</h1><p>{error.message}</p><Link href="/items">返回载具目录 →</Link></div></section></main>;
-}
-
-async function loadItem(itemId: string): Promise<{ item: ItemDetail; orderBook: CurrentOrderBook | null } | { error: ApiError }> {
-  try {
-    const item = await getItem(itemId);
-    try { return { item, orderBook: await getCurrentOrderBook(itemId) }; }
-    catch (error) { const display = toDisplayError(error); if (display.code === "order_book_not_found") return { item, orderBook: null }; throw error; }
-  } catch (error) { return { error: toDisplayError(error) }; }
 }

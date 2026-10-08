@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_serializer
 
-
 SortField = Literal["name", "created_at", "updated_at"]
 SortOrder = Literal["asc", "desc"]
 
@@ -22,6 +21,18 @@ class SnapshotSummary(BaseModel):
         return str(value) if value is not None else None
 
 
+class HistorySummaryResponse(BaseModel):
+    basis: Literal["SOURCE_DAILY_TRADE_AVERAGE"] = "SOURCE_DAILY_TRADE_AVERAGE"
+    daily_count: int
+    first_day: datetime
+    latest_day: datetime
+    latest_daily_average: Decimal
+
+    @field_serializer("latest_daily_average")
+    def serialize_price(self, value: Decimal) -> str:
+        return format(value, "f")
+
+
 class ItemSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -34,6 +45,7 @@ class ItemSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_snapshot: SnapshotSummary | None
+    history_summary: HistorySummaryResponse | None = None
 
 
 class CatalogPriceResponse(BaseModel):

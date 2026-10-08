@@ -7,6 +7,10 @@ import {
   createLocalExtensionPairingCode,
   getLocalExtensionStatus,
   getItemAnalysis,
+  getItemHistoricalTrades,
+  getMarketDataStatus,
+  getStrategyEvidence,
+  getVehiclePotential,
   getOpportunities,
   getLocalRecognitionReview,
   importLocalRecognitionReview,
@@ -18,6 +22,41 @@ import {
 } from "./api-client.ts";
 
 process.env.API_BASE_URL = "http://localhost:8000";
+
+test("heavy historical comparisons retain a bounded 30 second deadline", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const deadlines: number[] = [];
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    deadlines.push(milliseconds);
+    return new AbortController().signal;
+  });
+  globalThis.fetch = async () => Response.json({});
+  try {
+    await getVehiclePotential({});
+    await getStrategyEvidence({});
+    assert.deepEqual(deadlines, [30_000, 30_000]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("historical daily reads and data status use explicit read-only contracts", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), init });
+    return Response.json({});
+  };
+  try {
+    await getItemHistoricalTrades("7/a");
+    await getMarketDataStatus();
+    assert.equal(captured[0].url, "http://localhost:8000/api/v1/items/7%2Fa/historical-trades?granularity=1d&limit=5000");
+    assert.equal(captured[1].url, "http://localhost:8000/api/v1/data-status");
+    for (const request of captured) {
+      assert.equal(request.init?.cache, "no-store");
+      assert.equal(request.init?.method ?? "GET", "GET");
+      assert.equal(request.init?.body, undefined);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test("buildApiUrl omits empty parameters and encodes query values", () => {
   const url = buildApiUrl("/api/v1/items", {
@@ -115,7 +154,7 @@ test("getItemAnalysis omits missing as_of instead of sending an empty value", as
   }
 });
 
-test("getItemAnalysis forwards AbortSignal for stale request cancellation", async () => {
+test("getItemAnalysis preserves caller cancellation when adding a read deadline", async () => {
   const originalFetch = globalThis.fetch;
   const controller = new AbortController();
   let capturedSignal: AbortSignal | null | undefined;
@@ -128,7 +167,59 @@ test("getItemAnalysis forwards AbortSignal for stale request cancellation", asyn
   try {
     await getItemAnalysis("1", { horizon: "30" }, controller.signal);
 
-    assert.equal(capturedSignal, controller.signal);
+    assert.ok(capturedSignal);
+    assert.equal(capturedSignal.aborted, false);
+    controller.abort();
+    assert.equal(capturedSignal.aborted, true);
+    assert.equal(capturedSignal.reason, controller.signal.reason);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("read requests time out after 15 seconds and expose a safe retry message", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const deadline = new AbortController();
+  const timeout = new DOMException("Synthetic read deadline", "TimeoutError");
+  const timeoutMock = t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    assert.equal(milliseconds, 15_000);
+    return deadline.signal;
+  });
+  globalThis.fetch = async (_url, init) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  };
+  try {
+    const pending = getItemAnalysis("1", { horizon: "30" });
+    deadline.abort(timeout);
+    await assert.rejects(pending, (error) => error === timeout);
+    assert.equal(timeoutMock.mock.callCount(), 1);
+    assert.deepEqual(toDisplayError(timeout), {
+      status: 0,
+      code: "api_timeout",
+      message: "数据读取超时，请稍后重试。"
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a caller-aborted read keeps its original reason", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  controller.abort();
+  globalThis.fetch = async (_url, init) => {
+    init?.signal?.throwIfAborted();
+    return Response.json(analysisResponse({ horizon: 30 }));
+  };
+  try {
+    await assert.rejects(
+      getItemAnalysis("1", { horizon: "30" }, controller.signal),
+      (error) => error === controller.signal.reason
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

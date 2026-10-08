@@ -13,10 +13,8 @@ vehicle without a price.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime
 
-from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
 from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_CATALOG
 from gaijin_market_analytics.vehicle_potential import (
     VehiclePotential,
@@ -27,13 +25,8 @@ from gaijin_market_analytics.vehicle_potential import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import HistoricalTradeBucket, Item
-
-# The reading needs the configured history window plus enough room before the
-# oldest catalogued event to establish its pre-event baseline. Events are years
-# apart and the query is cheap, so this takes a generous span rather than one
-# computed per vehicle.
-_HISTORY_LOOKBACK = timedelta(days=3650)
+from api.db.models import Item
+from api.services.historical_evidence import load_historical_evidence
 
 
 class VehiclePotentialServiceError(ValueError):
@@ -86,6 +79,9 @@ async def list_vehicle_potential(
             "vehicle_potential_item_not_found", "The requested item was not found."
         )
 
+    buckets_by_item = await load_historical_evidence(
+        session, item_ids=tuple(item.id for item in items), as_of=as_of
+    )
     results: list[VehiclePotentialItem] = []
     for item in items:
         facts = DEFAULT_SUPPLY_POOL_CATALOG.bind_item(
@@ -97,12 +93,11 @@ async def list_vehicle_potential(
             events = tuple(
                 value for value in facts.events if value.event_key in member_keys
             )
-        buckets = await _load_buckets(session, item_id=item.id, as_of=as_of)
         reading = evaluate_vehicle_potential(
             item_id=item.id,
             as_of=as_of,
             events=events,
-            historical_buckets=buckets,
+            historical_buckets=buckets_by_item.get(item.id, ()),
             config=cfg,
         )
         results.append(
@@ -128,33 +123,3 @@ async def list_vehicle_potential(
     }
     results.sort(key=lambda value: order[value.item_id])
     return results
-
-
-async def _load_buckets(
-    session: AsyncSession, *, item_id: int, as_of: datetime
-) -> tuple[HistoricalTradeBucketEvidence, ...]:
-    statement = (
-        select(HistoricalTradeBucket)
-        .where(
-            HistoricalTradeBucket.item_id == item_id,
-            HistoricalTradeBucket.bucket_start_utc >= as_of - _HISTORY_LOOKBACK,
-            HistoricalTradeBucket.bucket_start_utc <= as_of,
-        )
-        .order_by(HistoricalTradeBucket.bucket_start_utc.asc())
-    )
-    rows = list((await session.scalars(statement)).all())
-    return tuple(
-        HistoricalTradeBucketEvidence(
-            item_id=row.item_id,
-            granularity=row.granularity,  # type: ignore[arg-type]
-            bucket_start_utc=_utc(row.bucket_start_utc),
-            bucket_duration=timedelta(seconds=row.bucket_duration_seconds),
-            vwap_price=Decimal(row.reported_vwap_price),
-            reported_trade_volume=row.reported_trade_volume,
-        )
-        for row in rows
-    )
-
-
-def _utc(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

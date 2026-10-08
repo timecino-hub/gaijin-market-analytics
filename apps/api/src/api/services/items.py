@@ -1,18 +1,24 @@
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from collections.abc import Mapping
 from typing import Literal, cast
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import Item, ManualOrderBookImport, MarketSnapshot, OrderBookObservation
+from api.db.models import (
+    Item,
+    ManualOrderBookImport,
+    MarketSnapshot,
+    OrderBookObservation,
+)
 from api.schemas.items import SortField, SortOrder
 from api.services.current_order_book import (
     CurrentOrderBookContractError,
     interpret_current_order_book_capture,
 )
+from api.services.history_summary import HistorySummary, load_history_summaries
 
 
 class ItemNotFoundError(LookupError):
@@ -38,6 +44,7 @@ class ItemWithLatestSnapshot:
     item: Item
     latest_snapshot: SnapshotData | None
     current_order_book: "CatalogOrderBookData"
+    history_summary: HistorySummary | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -124,7 +131,9 @@ class ItemQueryService:
         statement = (
             select(Item, latest, latest_order_book)
             .outerjoin(latest, latest.c.item_id == Item.id)
-            .outerjoin(latest_order_book, latest_order_book.c.order_book_item_id == Item.id)
+            .outerjoin(
+                latest_order_book, latest_order_book.c.order_book_item_id == Item.id
+            )
             .where(*filters)
             .order_by(*_item_order_by(sort, order), Item.id.asc())
             .offset((page - 1) * page_size)
@@ -132,14 +141,21 @@ class ItemQueryService:
         )
         result = await self._session.execute(statement)
         observed_now = datetime.now(UTC)
+        rows = result.all()
+        histories = await load_history_summaries(
+            self._session, item_ids=[row[0].id for row in rows], as_of=observed_now
+        )
         items = []
-        for row in result.all():
+        for row in rows:
             mapping = row._mapping
             items.append(
                 ItemWithLatestSnapshot(
                     item=row[0],
                     latest_snapshot=_snapshot_from_row(mapping),
-                    current_order_book=_catalog_order_book_from_row(mapping, now=observed_now),
+                    current_order_book=_catalog_order_book_from_row(
+                        mapping, now=observed_now
+                    ),
+                    history_summary=histories.get(row[0].id),
                 )
             )
         return ItemListData(items=items, total=total or 0)
@@ -176,10 +192,14 @@ class ItemQueryService:
             raise ItemNotFoundError(f"Item {item_id} was not found.")
 
         mapping = row._mapping
+        histories = await load_history_summaries(
+            self._session, item_ids=[item_id], as_of=datetime.now(UTC)
+        )
         return ItemDetailData(
             item=row[0],
             latest_snapshot=_snapshot_from_row(mapping),
             current_order_book=CatalogOrderBookData(status="no_capture"),
+            history_summary=histories.get(item_id),
             snapshot_count=mapping["snapshot_count"],
             first_snapshot_at=mapping["first_snapshot_at"],
             last_snapshot_at=mapping["last_snapshot_at"],
@@ -205,9 +225,13 @@ class ItemQueryService:
             filters.append(MarketSnapshot.observed_at <= to_at)
 
         sort_direction = (
-            MarketSnapshot.observed_at.asc if order == "asc" else MarketSnapshot.observed_at.desc
+            MarketSnapshot.observed_at.asc
+            if order == "asc"
+            else MarketSnapshot.observed_at.desc
         )
-        id_direction = MarketSnapshot.id.asc if order == "asc" else MarketSnapshot.id.desc
+        id_direction = (
+            MarketSnapshot.id.asc if order == "asc" else MarketSnapshot.id.desc
+        )
         statement = (
             select(MarketSnapshot)
             .where(*filters)
@@ -242,7 +266,9 @@ class ItemQueryService:
             else MarketSnapshot.observed_at.desc
         )
         id_direction = (
-            OrderBookObservation.id.asc if order == "asc" else OrderBookObservation.id.desc
+            OrderBookObservation.id.asc
+            if order == "asc"
+            else OrderBookObservation.id.desc
         )
         statement = (
             select(OrderBookObservation, MarketSnapshot)
@@ -340,7 +366,9 @@ def _latest_manual_order_book_subquery():
         select(
             ManualOrderBookImport.item_id.label("order_book_item_id"),
             ManualOrderBookImport.captured_at.label("latest_order_book_captured_at"),
-            ManualOrderBookImport.capture_payload.label("latest_order_book_capture_payload"),
+            ManualOrderBookImport.capture_payload.label(
+                "latest_order_book_capture_payload"
+            ),
             func.row_number()
             .over(
                 partition_by=ManualOrderBookImport.item_id,
@@ -362,7 +390,9 @@ def _catalog_order_book_from_row(
 ) -> CatalogOrderBookData:
     captured_at = mapping["latest_order_book_captured_at"]
     capture_payload = mapping["latest_order_book_capture_payload"]
-    if not isinstance(captured_at, datetime) or not isinstance(capture_payload, Mapping):
+    if not isinstance(captured_at, datetime) or not isinstance(
+        capture_payload, Mapping
+    ):
         return CatalogOrderBookData(status="no_capture")
 
     try:

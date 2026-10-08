@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { getItems, toDisplayError } from "../lib/api-client";
+import { formatDecimal } from "../lib/formatters";
+import { historicalDay } from "../lib/historical-price-chart";
 import type { ItemSummary } from "../lib/types";
 import { LocalDateTime } from "./local-date-time";
 import { MarketHeader } from "./market-header";
@@ -59,8 +61,8 @@ export default async function Home() {
           <Link href="/items">完整目录 <span>→</span></Link>
         </div>
         {result.ok && result.items.length > 0 ? (
-          <div className="deco-catalog-list">
-            <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>当前买价</span><span>当前卖价</span><span>数据状态</span><span /></div>
+          <div className="deco-catalog-list deco-history-catalog">
+            <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>当前买价</span><span>当前卖价</span><span>历史日均价</span><span>订单簿状态</span><span /></div>
             {result.items.map((item) => <CatalogRow item={item} key={item.id} />)}
           </div>
         ) : (
@@ -84,7 +86,8 @@ function FeaturedItem({ item }: { item: ItemSummary }) {
       <div className="deco-feature-copy">
         <p className="deco-kicker">LATEST CATALOG ENTRY</p><h2 id="featured-title">{item.name}</h2><p>{item.external_key}</p>
         <div className="deco-feature-prices"><Price label="当前买价" value={book?.best_buy.canonical_display_text} /><Price label="当前卖价" value={book?.best_sell.canonical_display_text} /></div>
-        <Link className="deco-primary-link" href={`/items/${item.id}`}>查看订单簿 <span>→</span></Link>
+        {item.history_summary ? <div className="deco-feature-history"><span>历史日均价</span><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC · {item.history_summary.daily_count} 个记录日</small></div> : null}
+        <Link className="deco-primary-link" href={`/items/${item.id}`}>查看价格记录 <span>→</span></Link>
       </div>
     </section>
   );
@@ -97,13 +100,14 @@ function CatalogRow({ item }: { item: ItemSummary }) {
       <div><strong>{item.name}</strong><small>{item.category} · {item.external_key}</small></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>
       <span>{book ? <>{book.freshness === "fresh" ? "当前" : "已过期"} · <LocalDateTime value={book.captured_at} /></> : statusLabel(item)}</span><b>→</b>
     </Link>
   );
 }
 
 function Price({ label, value }: { label: string; value?: string }) {
-  return <div><span>{label}</span><strong>{value ?? "数据不足"}</strong>{value ? <small>GJN</small> : null}</div>;
+  return <div><span>{label}</span><strong>{value ?? "暂无订单簿"}</strong>{value ? <small>GJN</small> : null}</div>;
 }
 
 function Status({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {

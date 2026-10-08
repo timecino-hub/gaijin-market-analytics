@@ -10,6 +10,7 @@ from api.clock import get_utc_clock
 from api.db.session import get_session
 from api.main import app
 from api.routers import vehicle_potential as potential_router
+from api.services.reading_cache import ReadingRevision, get_reading_revision
 from api.services.vehicle_potential import VehiclePotentialItem
 from fastapi.testclient import TestClient
 from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
@@ -350,6 +351,9 @@ def potential_contract_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestC
     monkeypatch.setattr(potential_router, "list_vehicle_potential", fake_list)
     app.dependency_overrides[get_session] = fake_session
     app.dependency_overrides[get_utc_clock] = lambda: lambda: CONTRACT_NOW
+    app.dependency_overrides[get_reading_revision] = lambda: ReadingRevision(
+        session_marker, 1, CONTRACT_NOW, len(items), CONTRACT_NOW
+    )
     try:
         with TestClient(app) as test_client:
             yield test_client

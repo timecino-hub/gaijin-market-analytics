@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { formatDecimalPercent } from "../../lib/analysis-display";
 import { getGeneralStrategy, getStrategyEvidence, toDisplayError } from "../../lib/api-client";
 import { formatDecimal } from "../../lib/formatters";
@@ -48,10 +48,8 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
   const { budget, query } = budgetFromParams(params);
   const asOf = legacyAsOfFromParams(params);
   const generalQuery = generalStrategyFromParams(params);
-  const [generalResult, legacyResult] = await Promise.all([
-    loadGeneralRule(generalQuery),
-    loadEvidence({ ...query, as_of: asOf })
-  ]);
+  const showLegacy = params.legacy === "1";
+  const generalResult = await loadGeneralRule(generalQuery);
 
   return (
     <main className="art-shell deco-strategy-page">
@@ -69,17 +67,28 @@ export default async function StrategyPage({ searchParams }: StrategyPageProps) 
 
       <GeneralRulePanel result={generalResult} query={generalQuery} budget={budget} asOf={asOf} />
 
-      <details>
+      <details open={showLegacy}>
         <summary className="deco-section-heading">旧策略回测</summary>
         <p className="deco-strategy-note">旧策略：活动后买入／扣费后赚25%分批卖出</p>
         <BudgetForm budget={budget} generalQuery={generalQuery} />
-        {"error" in legacyResult ? (
-          <ErrorPanel error={legacyResult.error} />
-        ) : (
-          <LegacyStrategyResults data={legacyResult.data} />
+        {showLegacy ? <Suspense fallback={<p role="status">正在读取旧规则历史台账</p>}>
+          <LegacyEvidence query={{ ...query, as_of: asOf }} />
+        </Suspense> : (
+          <Link prefetch={false} href={{ pathname: "/strategy", query: { ...generalQuery, budget, legacy: "1", ...(asOf ? { as_of: asOf } : {}) } }}>
+            读取旧策略回测 →
+          </Link>
         )}
       </details>
     </main>
+  );
+}
+
+async function LegacyEvidence({ query }: { query: Parameters<typeof getStrategyEvidence>[0] }) {
+  const result = await loadEvidence(query);
+  return "error" in result ? (
+    <ErrorPanel error={result.error} />
+  ) : (
+    <LegacyStrategyResults data={result.data} />
   );
 }
 
@@ -446,6 +455,7 @@ function BudgetRow({ rung, current }: { rung: BudgetRung; current: boolean }) {
 function BudgetForm({ budget, generalQuery }: { budget: string; generalQuery: GeneralStrategyQuery }) {
   return (
     <form className="deco-budget-form" action="/strategy" method="get">
+      <input name="legacy" type="hidden" value="1" />
       {Object.entries(generalQuery).map(([name, value]) => <input key={name} name={name} type="hidden" value={value} />)}
       <label htmlFor="budget">旧台账预算（GJN）</label>
       <input

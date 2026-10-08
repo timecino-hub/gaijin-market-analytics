@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from gaijin_market_analytics.vehicle_potential import VehiclePotentialConfig
@@ -13,6 +13,12 @@ from api.schemas.vehicle_potential import (
     VehiclePotentialResponse,
     VehicleTargetReferenceResponse,
 )
+from api.services.reading_cache import (
+    BoundedReadingCache,
+    ReadingRevision,
+    configuration_key,
+    get_reading_revision,
+)
 from api.services.vehicle_potential import (
     VehiclePotentialItem,
     VehiclePotentialServiceError,
@@ -20,19 +26,24 @@ from api.services.vehicle_potential import (
 )
 
 router = APIRouter(prefix="/api/v1/vehicle-potential", tags=["vehicle-potential"])
+_cache: BoundedReadingCache[VehiclePotentialListResponse | VehiclePotentialResponse] = (
+    BoundedReadingCache()
+)
 
 
 @router.get("", response_model=VehiclePotentialListResponse)
 async def list_potential(
     session: Annotated[AsyncSession, Depends(get_session)],
     clock: Annotated[UtcClock, Depends(get_utc_clock)],
+    revision: Annotated[ReadingRevision, Depends(get_reading_revision)],
     as_of: str | None = None,
     ranked_only: bool = Query(default=False),
     include_inactive: bool = Query(default=False),
 ) -> VehiclePotentialListResponse:
     moment = _parse_as_of(as_of, clock)
     config = VehiclePotentialConfig()
-    try:
+
+    async def compute() -> VehiclePotentialListResponse:
         items = await list_vehicle_potential(
             session=session,
             as_of=moment,
@@ -40,19 +51,35 @@ async def list_potential(
             include_inactive=include_inactive,
             config=config,
         )
+        rows = [_item(value) for value in items]
+        return VehiclePotentialListResponse(
+            as_of=moment,
+            item_count=len(rows),
+            ranked_count=sum(1 for value in rows if value.state == "RANKED"),
+            history_days=config.history_days,
+            items=rows,
+        )
+
+    try:
+        return cast(
+            VehiclePotentialListResponse,
+            await _cache.get_or_compute(
+                (
+                    "list",
+                    revision,
+                    moment,
+                    configuration_key(config),
+                    ranked_only,
+                    include_inactive,
+                ),
+                compute,
+            ),
+        )
     except VehiclePotentialServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": error.code, "message": error.message},
         ) from error
-    rows = [_item(value) for value in items]
-    return VehiclePotentialListResponse(
-        as_of=moment,
-        item_count=len(rows),
-        ranked_count=sum(1 for value in rows if value.state == "RANKED"),
-        history_days=config.history_days,
-        items=rows,
-    )
 
 
 @router.get("/{item_id}", response_model=VehiclePotentialResponse)
@@ -60,12 +87,28 @@ async def get_potential(
     item_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
     clock: Annotated[UtcClock, Depends(get_utc_clock)],
+    revision: Annotated[ReadingRevision, Depends(get_reading_revision)],
     as_of: str | None = None,
 ) -> VehiclePotentialResponse:
     moment = _parse_as_of(as_of, clock)
-    try:
+    config = VehiclePotentialConfig()
+
+    async def compute() -> VehiclePotentialResponse:
         items = await list_vehicle_potential(
-            session=session, as_of=moment, item_id=item_id, include_inactive=True
+            session=session,
+            as_of=moment,
+            item_id=item_id,
+            include_inactive=True,
+            config=config,
+        )
+        return _item(items[0])
+
+    try:
+        return cast(
+            VehiclePotentialResponse,
+            await _cache.get_or_compute(
+                ("item", revision, moment, configuration_key(config), item_id), compute
+            ),
         )
     except VehiclePotentialServiceError as error:
         code = (
@@ -76,7 +119,6 @@ async def get_potential(
         raise HTTPException(
             status_code=code, detail={"code": error.code, "message": error.message}
         ) from error
-    return _item(items[0])
 
 
 def _item(value: VehiclePotentialItem) -> VehiclePotentialResponse:

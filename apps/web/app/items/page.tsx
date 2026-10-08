@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getItems, toDisplayError } from "../../lib/api-client";
+import { formatDecimal } from "../../lib/formatters";
+import { historicalDay } from "../../lib/historical-price-chart";
 import type { ApiError, ItemListQuery, ItemSummary, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
 import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
@@ -44,8 +46,8 @@ function Catalog({ data, query }: { data: PaginatedItemsResponse; query: ItemLis
       {data.items.length === 0 ? (
         <div className="deco-empty-large"><span aria-hidden="true">00</span><div><strong>当前条件没有载具</strong><p>保留筛选条件继续调整，或重置后查看全部审核条目。</p><Link href="/items">重置筛选 →</Link></div></div>
       ) : (
-        <div className="deco-catalog-list">
-          <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>当前买价</span><span>当前卖价</span><span>观测状态</span><span /></div>
+        <div className="deco-catalog-list deco-history-catalog">
+          <div className="deco-list-head" aria-hidden="true"><span>载具</span><span>当前买价</span><span>当前卖价</span><span>历史日均价</span><span>订单簿状态</span><span /></div>
           {data.items.map((item) => <CatalogRow item={item} key={item.id} />)}
         </div>
       )}
@@ -60,7 +62,8 @@ function CatalogRow({ item }: { item: ItemSummary }) {
       <div className="deco-item-identity"><span className="deco-item-mark" aria-hidden="true">{item.name.slice(0, 1).toUpperCase()}</span><div><strong>{item.name}</strong><small>{item.category}{item.rarity ? ` · ${item.rarity}` : ""}<br />{item.external_key}</small></div></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
-      <span className={`deco-data-state ${book?.freshness === "stale" ? "stale" : ""}`}><b>{book ? (book.freshness === "fresh" ? "当前" : "已过期") : statusLabel(item)}</b><small>{book ? <LocalDateTime value={book.captured_at} /> : "无观测时间"}</small></span>
+      <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>
+      <span className={`deco-data-state ${book?.freshness === "stale" ? "stale" : ""}`}><b>{book ? (book.freshness === "fresh" ? "当前" : "已过期") : statusLabel(item)}</b>{book ? <small><LocalDateTime value={book.captured_at} /></small> : null}</span>
       <b className="deco-row-action">查看 →</b>
     </Link>
   );
@@ -76,7 +79,7 @@ function PageLink({ children, disabled, page, query }: { children: ReactNode; di
 }
 
 function statusLabel(item: ItemSummary): string {
-  return item.current_order_book_status === "contract_error" ? "合同错误" : "数据不足";
+  return item.current_order_book_status === "contract_error" ? "价格合同不适用" : "暂无订单簿";
 }
 
 function toItemListQuery(params: Record<string, string | string[] | undefined>): ItemListQuery {

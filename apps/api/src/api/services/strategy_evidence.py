@@ -15,10 +15,8 @@ and is published as a dated finding on the page.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime
 
-from gaijin_market_analytics.historical_trades import HistoricalTradeBucketEvidence
 from gaijin_market_analytics.strategy_evidence import (
     EventOutcome,
     StrategyEvidence,
@@ -30,12 +28,8 @@ from gaijin_market_analytics.supply_pool_catalog_v1 import DEFAULT_SUPPLY_POOL_C
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models import HistoricalTradeBucket, Item
-
-# Events in this catalog reach back to 2018 and each one needs its own
-# pre-event window before it, so the ledger reads the whole series rather than
-# a rolling window.
-_HISTORY_LOOKBACK = timedelta(days=3650)
+from api.db.models import Item
+from api.services.historical_evidence import load_historical_evidence
 
 
 class StrategyEvidenceServiceError(ValueError):
@@ -82,6 +76,7 @@ async def build_strategy_evidence(
     outcomes: list[EventOutcome] = []
     names: dict[int, str] = {}
     unmatched = 0
+    selected = []
     for item in items:
         names[item.id] = item.name
         facts = DEFAULT_SUPPLY_POOL_CATALOG.bind_item(
@@ -96,53 +91,26 @@ async def build_strategy_evidence(
         )
         if not events:
             continue
-        buckets = await _load_buckets(session, item_id=item.id, as_of=as_of)
+        selected.append((item.id, events))
+
+    buckets_by_item = await load_historical_evidence(
+        session, item_ids=tuple(item_id for item_id, _ in selected), as_of=as_of
+    )
+    for item_id, events in selected:
         outcomes.extend(
             evaluate_event_outcomes(
-                item_id=item.id,
+                item_id=item_id,
                 as_of=as_of,
                 events=events,
-                historical_buckets=buckets,
+                historical_buckets=buckets_by_item.get(item_id, ()),
                 config=cfg,
             )
         )
 
     ledger = tuple(outcomes)
     return StrategyEvidenceLedger(
-        evidence=summarise_strategy_evidence(
-            as_of=as_of, outcomes=ledger, config=cfg
-        ),
+        evidence=summarise_strategy_evidence(as_of=as_of, outcomes=ledger, config=cfg),
         outcomes=ledger,
         item_names=names,
         unmatched_item_count=unmatched,
     )
-
-
-async def _load_buckets(
-    session: AsyncSession, *, item_id: int, as_of: datetime
-) -> tuple[HistoricalTradeBucketEvidence, ...]:
-    statement = (
-        select(HistoricalTradeBucket)
-        .where(
-            HistoricalTradeBucket.item_id == item_id,
-            HistoricalTradeBucket.bucket_start_utc >= as_of - _HISTORY_LOOKBACK,
-            HistoricalTradeBucket.bucket_start_utc <= as_of,
-        )
-        .order_by(HistoricalTradeBucket.bucket_start_utc.asc())
-    )
-    rows = list((await session.scalars(statement)).all())
-    return tuple(
-        HistoricalTradeBucketEvidence(
-            item_id=row.item_id,
-            granularity=row.granularity,  # type: ignore[arg-type]
-            bucket_start_utc=_utc(row.bucket_start_utc),
-            bucket_duration=timedelta(seconds=row.bucket_duration_seconds),
-            vwap_price=Decimal(row.reported_vwap_price),
-            reported_trade_volume=row.reported_trade_volume,
-        )
-        for row in rows
-    )
-
-
-def _utc(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

@@ -1,8 +1,8 @@
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings, parse_cors_allowed_origins
 from api.db.session import get_session
 from api.routers.analysis import router as analysis_router
+from api.routers.data_status import router as data_status_router
 from api.routers.general_strategy import router as general_strategy_router
 from api.routers.imports import router as imports_router
 from api.routers.items import router as items_router
@@ -35,6 +36,7 @@ app.include_router(strategy_evidence_router)
 app.include_router(vehicle_potential_router)
 app.include_router(local_recognition_router)
 app.include_router(general_strategy_router)
+app.include_router(data_status_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -53,7 +55,9 @@ async def validation_exception_handler(
             if code in message:
                 return JSONResponse(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    content={"detail": {"code": code, "message": _validation_message(code)}},
+                    content={
+                        "detail": {"code": code, "message": _validation_message(code)}
+                    },
                 )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -67,7 +71,9 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
+async def ready(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, str]:
     try:
         await session.execute(text("SELECT 1"))
     except Exception as exc:
@@ -83,7 +89,12 @@ def main() -> None:
     import uvicorn
 
     run_settings = get_settings()
-    uvicorn.run("api.main:app", host=run_settings.api_host, port=run_settings.api_port, reload=True)
+    uvicorn.run(
+        "api.main:app",
+        host=run_settings.api_host,
+        port=run_settings.api_port,
+        reload=True,
+    )
 
 
 def _validation_message(code: str) -> str:

@@ -1,4 +1,5 @@
 bvvd-analysis.duckdns.org {
+  encode zstd gzip
   header {
     X-Content-Type-Options "nosniff"
     X-Frame-Options "DENY"
@@ -24,6 +25,18 @@ bvvd-analysis.duckdns.org {
       path_regexp public_item ^/api/v1/items/[0-9]+(?:/order-book)?$
     }
     reverse_proxy @item_detail api:8000
+
+    @item_history {
+      method GET HEAD
+      path_regexp public_history ^/api/v1/items/[0-9]+/historical-trades$
+    }
+    reverse_proxy @item_history api:8000
+
+    @data_status {
+      method GET HEAD
+      path /api/v1/data-status
+    }
+    reverse_proxy @data_status api:8000
 
     @opportunities {
       method GET HEAD

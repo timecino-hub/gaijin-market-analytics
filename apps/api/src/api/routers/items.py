@@ -11,21 +11,28 @@ from api.schemas.historical_trades import (
     HistoricalTradeBucketResponse,
 )
 from api.schemas.items import (
-    ItemDetailResponse,
-    ItemListResponse,
-    MarketItemSummary,
     CatalogOrderBookResponse,
     CatalogPriceResponse,
-    ItemSummary,
     CurrentOrderBookContractResponse,
     CurrentOrderBookLevelResponse,
     CurrentOrderBookProvenanceResponse,
     CurrentOrderBookResponse,
+    HistorySummaryResponse,
+    ItemDetailResponse,
+    ItemListResponse,
+    ItemSummary,
+    MarketItemSummary,
     OrderBookObservationResponse,
     SnapshotResponse,
     SnapshotSummary,
     SortField,
     SortOrder,
+)
+from api.services.current_order_book import (
+    STALE_AFTER_SECONDS,
+    CurrentOrderBookContractError,
+    CurrentOrderBookNotFoundError,
+    get_current_order_book,
 )
 from api.services.historical_trades import (
     HistoricalTradeImportError,
@@ -38,12 +45,6 @@ from api.services.items import (
     ItemWithLatestSnapshot,
     OrderBookObservationData,
     SnapshotData,
-)
-from api.services.current_order_book import (
-    STALE_AFTER_SECONDS,
-    CurrentOrderBookContractError,
-    CurrentOrderBookNotFoundError,
-    get_current_order_book,
 )
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
@@ -231,7 +232,9 @@ async def get_item_current_order_book(
             raw_response_sha256_claim=capture["raw_response_sha256_claim"],
             raw_response_hash_verifiable=capture["raw_response_hash_verifiable"],
             read_model_schema_version=model["schema_version"],
-            read_model_implementation_version=evidence["read_model_implementation_version"],
+            read_model_implementation_version=evidence[
+                "read_model_implementation_version"
+            ],
         ),
         buy_levels=buy_levels,
         sell_levels=sell_levels,
@@ -428,6 +431,13 @@ def _base_item_summary(row: ItemWithLatestSnapshot) -> ItemSummary:
         created_at=item.created_at,
         updated_at=item.updated_at,
         latest_snapshot=_snapshot_summary(row.latest_snapshot),
+        history_summary=(
+            HistorySummaryResponse.model_validate(
+                row.history_summary, from_attributes=True
+            )
+            if row.history_summary is not None
+            else None
+        ),
     )
 
 
@@ -491,4 +501,6 @@ def _order_book_observation_response(
 
 
 def _business_error(status_code: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+    return HTTPException(
+        status_code=status_code, detail={"code": code, "message": message}
+    )

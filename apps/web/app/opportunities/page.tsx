@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatDecimalPercent } from "../../lib/analysis-display";
-import { getVehiclePotential, toDisplayError } from "../../lib/api-client";
+import { getMarketDataStatus, getVehiclePotential, toDisplayError } from "../../lib/api-client";
+import { potentialReferenceQuery } from "../../lib/potential-reference";
 import { formatDecimal } from "../../lib/formatters";
 import {
   catalogNoteFor,
@@ -21,6 +22,7 @@ import {
 } from "../../lib/vehicle-potential-state";
 import type {
   ApiError,
+  MarketDataStatus,
   VehicleEventRecord,
   VehiclePotentialItem,
   VehiclePotentialResponse
@@ -58,15 +60,15 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
       {"error" in result ? (
         <ErrorPanel error={result.error} />
       ) : (
-        <PotentialResults data={result.data} form={state.form} />
+        <PotentialResults data={result.data} form={state.form} status={result.status} />
       )}
     </main>
   );
 }
 
 function PotentialResults({
-  data, form
-}: { data: VehiclePotentialResponse; form: VehiclePotentialListState["form"] }) {
+  data, form, status
+}: { data: VehiclePotentialResponse; form: VehiclePotentialListState["form"]; status: MarketDataStatus | null }) {
   const items = selectVehiclePotentialItems(data.items, form);
   const version = data.items[0]?.version ?? "—";
   const fee = data.items.map(targetReferenceFor).find((target) => target !== null)?.fee_rate;
@@ -79,7 +81,9 @@ function PotentialResults({
           <span>{potentialSortLabel(form.sort)}</span>
         </div>
         <div className="deco-opportunity-facts">
-          <Info label="查询时点" value={<LocalDateTime value={data.as_of} />} />
+          <Info label="比较时点" value={<LocalDateTime value={data.as_of} />} />
+          <Info label="历史数据最新记录日" value={status?.latest_complete_day?.slice(0, 10) ?? "—"} />
+          <Info label="数据状态" value={status ? (status.stale ? "数据已过期 · 历史比较" : "近期历史记录") : "状态未读取"} />
           <Info label="历史窗口" value={`${data.history_days} 天`} />
           <Info label="显示载具" value={`${items.length} / ${data.item_count}`} />
           <Info label="计算版本" value={version} />
@@ -283,9 +287,10 @@ function ErrorPanel({ error }: { error: ApiError }) {
 
 async function loadPotential(
   query: ReturnType<typeof vehiclePotentialStateFromParams>["query"]
-): Promise<{ data: VehiclePotentialResponse } | { error: ApiError }> {
+): Promise<{ data: VehiclePotentialResponse; status: MarketDataStatus | null } | { error: ApiError }> {
   try {
-    return { data: await getVehiclePotential(query) };
+    const status = await getMarketDataStatus().catch(() => null);
+    return { data: await getVehiclePotential(potentialReferenceQuery(query, status)), status };
   } catch (error) {
     return { error: toDisplayError(error) };
   }

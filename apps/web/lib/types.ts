@@ -31,6 +31,50 @@ export type ItemSummary = {
   latest_snapshot: SnapshotSummary | null;
   current_order_book_status?: "available" | "no_capture" | "contract_error";
   current_order_book?: CatalogOrderBookSummary | null;
+  history_summary?: ItemHistorySummary | null;
+};
+
+export type ItemHistorySummary = {
+  basis: "SOURCE_DAILY_TRADE_AVERAGE";
+  daily_count: number;
+  first_day: string;
+  latest_day: string;
+  latest_daily_average: string;
+};
+
+export type MarketDataStatus = {
+  item_count: number;
+  historical_bucket_count: number;
+  daily_record_count: number;
+  latest_complete_day: string | null;
+  latest_capture_at: string | null;
+  reference_as_of: string | null;
+  price_age_days: number | null;
+  stale: boolean;
+};
+
+export type HistoricalTradeBucket = {
+  id: number;
+  item_id: number;
+  granularity: "1h" | "1d";
+  bucket_start_utc: string;
+  bucket_duration_seconds: number;
+  vwap_price_raw: number;
+  price_scale: 10000;
+  reported_vwap_price: string;
+  reported_trade_volume: number;
+  price_semantics: "bucket_volume_weighted_average_trade_price";
+  volume_semantics: "reported_trade_volume_unknown_unit";
+  source_schema_version: string;
+  first_seen_at: string;
+  last_seen_at: string;
+};
+
+export type ItemHistoricalTrades = {
+  item_id: number;
+  granularity: "1h" | "1d";
+  buckets: HistoricalTradeBucket[];
+  total: number;
 };
 
 export type CatalogOrderBookSummary = {

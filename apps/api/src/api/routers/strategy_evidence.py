@@ -24,6 +24,12 @@ from api.schemas.strategy_evidence import (
     ReturnSummaryResponse,
     StrategyEvidenceResponse,
 )
+from api.services.reading_cache import (
+    BoundedReadingCache,
+    ReadingRevision,
+    configuration_key,
+    get_reading_revision,
+)
 from api.services.strategy_evidence import (
     StrategyEvidenceLedger,
     StrategyEvidenceServiceError,
@@ -31,27 +37,35 @@ from api.services.strategy_evidence import (
 )
 
 router = APIRouter(prefix="/api/v1/strategy-evidence", tags=["strategy-evidence"])
+_cache: BoundedReadingCache[StrategyEvidenceResponse] = BoundedReadingCache()
 
 
 @router.get("", response_model=StrategyEvidenceResponse)
 async def get_strategy_evidence(
     session: Annotated[AsyncSession, Depends(get_session)],
     clock: Annotated[UtcClock, Depends(get_utc_clock)],
+    revision: Annotated[ReadingRevision, Depends(get_reading_revision)],
     as_of: str | None = None,
     budget: str | None = None,
 ) -> StrategyEvidenceResponse:
     moment = _parse_as_of(as_of, clock)
     config = _config_for(budget)
-    try:
+
+    async def compute() -> StrategyEvidenceResponse:
         ledger = await build_strategy_evidence(
             session=session, as_of=moment, config=config
+        )
+        return _response(ledger)
+
+    try:
+        return await _cache.get_or_compute(
+            (revision, moment, configuration_key(config)), compute
         )
     except StrategyEvidenceServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": error.code, "message": error.message},
         ) from error
-    return _response(ledger)
 
 
 def _response(ledger: StrategyEvidenceLedger) -> StrategyEvidenceResponse:
