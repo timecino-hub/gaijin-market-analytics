@@ -1,0 +1,49 @@
+{
+  "fixture": "Only local synthetic empty/error/delay states; normal responses replay captured public read-only API responses. No fixture data committed.",
+  "states": [
+    "home empty",
+    "home error",
+    "strategy error",
+    "home loading",
+    "strategy loading"
+  ],
+  "legacy": "No ledger request on default page or opening disclosure; request only after legacy=1",
+  "focus": {
+    "id": "general-observation_price",
+    "outline": "solid"
+  },
+  "requests": [
+    {
+      "mode": "empty",
+      "url": "/api/v1/items?page=1&page_size=6&sort=updated_at&order=desc"
+    },
+    {
+      "mode": "error",
+      "url": "/api/v1/items?page=1&page_size=6&sort=updated_at&order=desc"
+    },
+    {
+      "mode": "error",
+      "url": "/api/v1/general-strategy"
+    },
+    {
+      "mode": "loading",
+      "url": "/api/v1/items?page=1&page_size=6&sort=updated_at&order=desc"
+    },
+    {
+      "mode": "loading",
+      "url": "/api/v1/general-strategy"
+    },
+    {
+      "mode": "normal",
+      "url": "/api/v1/general-strategy"
+    },
+    {
+      "mode": "normal",
+      "url": "/api/v1/general-strategy"
+    },
+    {
+      "mode": "normal",
+      "url": "/api/v1/strategy-evidence?budget=100"
+    }
+  ]
+}

@@ -192,3 +192,93 @@ body:has(.art-shell) {
 @media (prefers-reduced-motion: reduce) {
   .art-shell *, .art-shell *::before, .art-shell *::after { animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* Home and current strategy use the same paper surfaces as vehicle potential. */
+.deco-home-page .deco-search > div { gap: 8px; }
+.deco-home-page .deco-search button { border-radius: 4px; }
+.deco-home-page .deco-feature { background: var(--art-paper); border: 1px solid var(--art-line); color: var(--art-ink); grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.deco-home-page .deco-vehicle-stage { background: #e7e5db; padding: 32px; }
+.deco-home-page .deco-stage::after { height: 3px; }
+.deco-home-page .deco-feature-copy { gap: 0; padding: 32px 36px; }
+.deco-home-page .deco-feature-copy .deco-kicker { color: var(--art-copper-dark); }
+.deco-home-page .deco-feature-copy > p:not(.deco-kicker),
+.deco-home-page .deco-feature-copy .deco-vehicle-image-source,
+.deco-home-page .deco-feature-history :is(span, small),
+.deco-home-page .deco-feature-prices :is(span, small) { color: var(--art-muted); }
+.deco-home-page .deco-feature-history { border-top: 1px solid var(--art-line); gap: 6px; margin: 12px 0 0; padding-top: 20px; }
+.deco-home-page .deco-feature-history strong { font-size: 32px; font-weight: 650; line-height: 1.3; }
+.deco-home-page .deco-feature-prices { border-color: var(--art-line); margin: 20px 0; }
+.deco-home-page .deco-feature-prices > div + div { border-color: var(--art-line); }
+.deco-home-page .deco-feature-prices strong { font-size: 20px; }
+.deco-home-page .deco-book-date { grid-column: 1 / -1; border-top: 1px solid var(--art-line); padding-block: 10px; }
+.deco-home-page .deco-book-empty { color: var(--art-muted); border-block: 1px solid var(--art-line); font-size: 13px; margin: 20px 0; padding-block: 12px; }
+.deco-home-page .deco-status { margin-top: 20px; border-top: 1px solid var(--art-line); }
+.deco-home-page .deco-status > div:first-child { padding-left: 0; }
+.deco-home-page .deco-list-section { padding-block: 40px; }
+.deco-home-page .deco-catalog-list { background: var(--art-paper); border: 1px solid var(--art-line); border-radius: 8px; overflow: hidden; }
+.deco-home-page .deco-catalog-row:last-child { border-bottom: 0; }
+.deco-home-page .deco-catalog-row:hover { background: #eae5d9; }
+.deco-home-page .deco-catalog-row:focus-visible { outline-offset: -4px; }
+.deco-home-page .deco-catalog-row .deco-history-price strong { font-size: 18px; }
+.deco-home-page .deco-deferred { gap: 24px; }
+.deco-home-page .deco-home-links { display: flex; flex-wrap: wrap; gap: 12px 32px; justify-content: flex-end; }
+.deco-home-page .deco-home-links a { align-items: center; display: inline-flex; gap: 20px; margin: 0; min-height: 44px; font-size: 14px; }
+.deco-strategy-page > .deco-strategy-steps-block { border: 0; padding-bottom: 0; }
+.deco-strategy-page > .deco-strategy-steps-block .deco-strategy-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.deco-strategy-page > .deco-strategy-steps-block .deco-strategy-step { grid-template-columns: 36px minmax(0, 1fr); gap: 16px; border-radius: 8px; padding: 24px; }
+.deco-strategy-page .deco-strategy-step > span { font: 600 26px/1.3 "Segoe UI", sans-serif; }
+.deco-general-calculator { margin-top: 44px; }
+.art-shell .deco-general-form { align-items: stretch; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 28px; }
+.deco-calculator-group { border: 0; margin: 0; padding: 0; min-width: 0; }
+.deco-calculator-group legend { font-size: 18px; font-weight: 650; margin-bottom: 18px; padding: 0; }
+.deco-calculator-fields { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.deco-calculator-submit { align-items: end; border-top: 1px solid var(--art-line); display: flex; flex-wrap: wrap; gap: 18px 24px; grid-column: 1 / -1; padding-top: 20px; }
+.deco-calculator-submit > label { flex: 0 1 220px; }
+.deco-calculator-submit .deco-opportunity-actions { margin-left: auto; }
+.deco-general-results { display: grid; gap: 20px; margin-top: 28px; }
+.deco-plan-card { background: var(--art-paper); border: 1px solid var(--art-line); border-radius: 8px; overflow: hidden; }
+.deco-plan-card > .deco-section-heading { align-items: baseline; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 20px 24px; }
+.deco-plan-card h3 { font-size: 20px; margin: 0; }
+.art-shell .deco-plan-card .deco-opportunity-facts { margin: 0; }
+.art-shell .deco-plan-card .deco-info-tile { border-bottom: 1px solid var(--art-line); padding: 18px 24px; }
+.art-shell .deco-plan-card .deco-info-tile strong { font-size: 19px; line-height: 1.5; }
+.deco-strategy-page > details { border-top: 1px solid var(--art-line); margin-top: 40px; padding-top: 12px; }
+.deco-strategy-page > details > summary { cursor: pointer; display: list-item; font-size: 16px; min-height: 48px; padding-block: 12px; }
+.deco-strategy-page > details:not([open]) > summary { margin-bottom: 0; }
+@media (max-width: 1100px) {
+  .deco-home-page .deco-history-catalog .deco-list-head { display: none; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 32px; gap: 12px 20px; padding: 20px; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > :is(:nth-child(2), :nth-child(3)) { display: none; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > :nth-child(5) { grid-column: 1 / -1; grid-row: 2; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > b:last-child { grid-column: 3; grid-row: 1; }
+  .deco-home-page .deco-history-catalog .deco-history-price { grid-column: 2; grid-row: 1; }
+  .deco-calculator-fields { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 620px) {
+  .deco-home-page .deco-feature { grid-template-columns: minmax(0, 1fr); }
+  .deco-home-page .deco-vehicle-stage { min-height: 160px; padding: 16px 32px; }
+  .deco-home-page .deco-vehicle-stage .deco-vehicle-image { max-width: 320px; }
+  .deco-home-page .deco-feature-copy { padding: 24px; }
+  .deco-home-page .deco-search > div { grid-template-columns: minmax(0, 1fr) auto; }
+  .deco-home-page .deco-search button { padding-inline: 12px; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row { grid-template-columns: minmax(0, 1fr) 24px; padding: 16px; }
+  .deco-home-page .deco-history-catalog .deco-history-price { grid-column: 1; grid-row: 2; padding-left: 98px; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > :nth-child(5) { grid-row: 3; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > b:last-child { grid-column: 2; }
+  .deco-home-page .deco-home-links { justify-content: flex-start; }
+  .deco-strategy-page > .deco-strategy-steps-block .deco-strategy-steps { grid-template-columns: minmax(0, 1fr); }
+  .deco-strategy-page > .deco-strategy-steps-block .deco-strategy-step { padding: 20px; gap: 12px; grid-template-columns: 28px minmax(0, 1fr); }
+  .deco-general-calculator { margin-top: 32px; }
+  .art-shell .deco-general-form { grid-template-columns: minmax(0, 1fr); padding: 20px; }
+  .deco-calculator-group + .deco-calculator-group { border-top: 1px solid var(--art-line); padding-top: 20px; }
+  .deco-calculator-group + .deco-calculator-group legend { padding-top: 20px; }
+  .deco-calculator-submit { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .deco-calculator-submit .deco-opportunity-actions { margin: 0; }
+  .deco-calculator-submit button { width: 100%; }
+  .deco-plan-card > .deco-section-heading { padding: 18px; }
+  .art-shell .deco-plan-card .deco-info-tile { padding: 16px; }
+  .art-shell .deco-plan-card .deco-info-tile strong { font-size: 17px; }
+}
+.art-shell .deco-plan-card .deco-plan-key { background: #f1e9dc; }
+.art-shell .deco-plan-card .deco-plan-key strong { color: var(--art-copper-dark); font-size: 23px; }
+.deco-home-page .deco-feature-error { grid-template-columns: 64px minmax(0, 1fr); }

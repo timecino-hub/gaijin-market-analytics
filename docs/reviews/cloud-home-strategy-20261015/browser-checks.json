@@ -1,0 +1,68 @@
+[
+  {
+    "name": "home",
+    "label": "desktop",
+    "width": 1440,
+    "scroll": 1440,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "strategy",
+    "label": "desktop",
+    "width": 1440,
+    "scroll": 1440,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "home",
+    "label": "tablet",
+    "width": 820,
+    "scroll": 820,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "strategy",
+    "label": "tablet",
+    "width": 820,
+    "scroll": 820,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "home",
+    "label": "mobile",
+    "width": 390,
+    "scroll": 390,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "strategy",
+    "label": "mobile",
+    "width": 390,
+    "scroll": 390,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "home",
+    "label": "narrow",
+    "width": 320,
+    "scroll": 320,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "name": "strategy",
+    "label": "narrow",
+    "width": 320,
+    "scroll": 320,
+    "title": "Gaijin Market Analytics · 只读预览"
+  },
+  {
+    "calculator": "All 9 GET values preserved; 75/55 thresholds and 88.24/82.36 sell values verified against live read-only API",
+    "focus": {
+      "tag": "BUTTON",
+      "text": "搜索目录",
+      "outline": "solid"
+    },
+    "search": "M8 submitted with keyboard",
+    "errors": []
+  }
+]
