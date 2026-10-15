@@ -102,10 +102,10 @@ function CatalogRow({ item }: { item: ItemSummary }) {
   const name = vehicleDisplayName(item.external_key, item.name);
   const category = vehicleCategoryLabel(item.category);
   return (
-    <Link className="deco-catalog-row" href={`/items/${item.id}`}>
+    <Link className="deco-catalog-row" data-has-order-book={Boolean(book)} href={`/items/${item.id}`}>
       <div className="deco-item-identity"><VehicleImage externalKey={item.external_key} name={name} /><div><strong>{name}</strong>{category ? <small>{category}</small> : null}</div></div>
-      <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
-      <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-number"><small className="deco-home-quote-label">当前买价</small>{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-number"><small className="deco-home-quote-label">当前卖价</small>{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>
       <span>{book ? <>{book.freshness === "fresh" ? "当前" : "已过期"} · <LocalDateTime value={book.captured_at} /></> : statusLabel(item)}</span><b>→</b>
     </Link>

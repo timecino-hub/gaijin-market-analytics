@@ -1,5 +1,7 @@
 # Homepage and general strategy visual review — 2026-10-15
 
+**Follow-up:** [Independent review, two fixes and updated evidence](review/README.md). The screenshots below document the initial PR revision.
+
 Implemented from `feat/general-rule-20261001` at `d9451cad64b2fc3aaf7b3058de4293f81a94bc96` on `feat/cloud-home-strategy-20261015`. The reference production implementation remains `7c44489280db072da9b7ac2cdebeed9d0180e7de`. **Not deployed.** No production deployment credentials or existing cloud release mechanism were available in this task.
 
 ## Changes

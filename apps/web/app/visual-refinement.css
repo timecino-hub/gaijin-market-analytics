@@ -217,6 +217,7 @@ body:has(.art-shell) {
 .deco-home-page .deco-list-section { padding-block: 40px; }
 .deco-home-page .deco-catalog-list { background: var(--art-paper); border: 1px solid var(--art-line); border-radius: 8px; overflow: hidden; }
 .deco-home-page .deco-catalog-row:last-child { border-bottom: 0; }
+.deco-home-quote-label { display: none; }
 .deco-home-page .deco-catalog-row:hover { background: #eae5d9; }
 .deco-home-page .deco-catalog-row:focus-visible { outline-offset: -4px; }
 .deco-home-page .deco-catalog-row .deco-history-price strong { font-size: 18px; }
@@ -254,6 +255,14 @@ body:has(.art-shell) {
   .deco-home-page .deco-history-catalog .deco-history-price { grid-column: 2; grid-row: 1; }
   .deco-calculator-fields { grid-template-columns: minmax(0, 1fr); }
 }
+/* Keep populated quotes readable at tablet sizes; phones retain their existing compact view. */
+@media (min-width: 769px) and (max-width: 1100px) {
+  .deco-home-page .deco-history-catalog .deco-catalog-row[data-has-order-book="true"] > .deco-number { display: grid; gap: 4px; grid-row: 2; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > .deco-number:nth-child(2) { grid-column: 1; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row > .deco-number:nth-child(3) { grid-column: 2; }
+  .deco-home-page .deco-history-catalog .deco-catalog-row[data-has-order-book="true"] > :nth-child(5) { grid-row: 3; }
+  .deco-home-quote-label { display: block; color: var(--art-muted); font-family: inherit; font-weight: 500; }
+}
 @media (max-width: 620px) {
   .deco-home-page .deco-feature { grid-template-columns: minmax(0, 1fr); }
   .deco-home-page .deco-vehicle-stage { min-height: 160px; padding: 16px 32px; }
@@ -273,7 +282,7 @@ body:has(.art-shell) {
   .deco-calculator-group + .deco-calculator-group { border-top: 1px solid var(--art-line); padding-top: 20px; }
   .deco-calculator-group + .deco-calculator-group legend { padding-top: 20px; }
   .deco-calculator-submit { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .deco-calculator-submit .deco-opportunity-actions { margin: 0; }
+  .deco-calculator-submit .deco-opportunity-actions { margin: 0; grid-template-columns: minmax(0, 1fr); }
   .deco-calculator-submit button { width: 100%; }
   .deco-plan-card > .deco-section-heading { padding: 18px; }
   .art-shell .deco-plan-card .deco-info-tile { padding: 16px; }
