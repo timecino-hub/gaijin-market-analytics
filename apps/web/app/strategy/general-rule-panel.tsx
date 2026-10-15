@@ -48,7 +48,7 @@ export function GeneralRulePanel({
             实际买入时间（含时区）
             <input id="general-bought-at" name="bought_at" type="text" defaultValue={query.bought_at ?? ""} placeholder="2026-10-01T12:00:00Z" />
           </label>
-          <DecimalField name="fee_rate" label="手续费率（默认0.15，假设）" value={query.fee_rate} />
+          <DecimalField name="fee_rate" label="手续费率（默认0.15）" value={query.fee_rate} />
           <div className="deco-opportunity-actions"><button type="submit">计算买卖价格</button></div>
         </form>
         {"data" in result ? <CalculatedPlan data={result.data} /> : null}

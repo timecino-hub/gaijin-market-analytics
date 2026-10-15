@@ -4,6 +4,7 @@ import { getItems, toDisplayError } from "../../lib/api-client";
 import { formatDecimal } from "../../lib/formatters";
 import { historicalDay } from "../../lib/historical-price-chart";
 import type { ApiError, ItemListQuery, ItemSummary, PaginatedItemsResponse, SortField, SortOrder } from "../../lib/types";
+import { vehicleCategoryLabel, vehicleDisplayName } from "../../lib/vehicle-images";
 import { LocalDateTime } from "../local-date-time";
 import { MarketHeader } from "../market-header";
 import { VehicleImage } from "../vehicle-image";
@@ -58,9 +59,11 @@ function Catalog({ data, query }: { data: PaginatedItemsResponse; query: ItemLis
 
 function CatalogRow({ item }: { item: ItemSummary }) {
   const book = item.current_order_book;
+  const name = vehicleDisplayName(item.external_key, item.name);
+  const labels = [vehicleCategoryLabel(item.category), item.rarity].filter(Boolean).join(" · ");
   return (
     <Link className="deco-catalog-row" href={`/items/${item.id}`}>
-      <div className="deco-item-identity"><VehicleImage externalKey={item.external_key} name={item.name} /><div><strong>{item.name}</strong><small>{item.category}{item.rarity ? ` · ${item.rarity}` : ""}<br />{item.external_key}</small></div></div>
+      <div className="deco-item-identity"><VehicleImage externalKey={item.external_key} name={name} /><div><strong>{name}</strong>{labels ? <small>{labels}</small> : null}</div></div>
       <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>

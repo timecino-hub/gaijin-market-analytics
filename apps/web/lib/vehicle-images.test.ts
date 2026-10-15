@@ -3,7 +3,28 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { VEHICLE_IMAGES } from "./vehicle-image-catalog.ts";
-import { vehicleImageFor } from "./vehicle-images.ts";
+import { vehicleCategoryLabel, vehicleDisplayName, vehicleImageFor } from "./vehicle-images.ts";
+
+test("reviewed vehicle display names replace raw filenames using exact identities", () => {
+  assert.equal(vehicleDisplayName("id50228_spz_12_3_lgs_germany", "id50228_spz_12_3_lgs_germany"), "SPz 12-3 LGS");
+  assert.equal(vehicleDisplayName("id50145_e_b_r__1963_france", "raw filename"), "E.B.R. (1963)");
+  assert.equal(vehicleDisplayName("items_Merkava Mk.3D (USA)", "raw filename"), "Merkava Mk.3D (USA)");
+  assert.equal(vehicleDisplayName("M8", "M8"), "M8 LAC");
+  assert.equal(vehicleDisplayName("75mm Gun Motor Carriage M8", "M8"), "M8A1 GMC");
+});
+
+test("unmapped identities retain their supplied name without guessing a vehicle", () => {
+  assert.equal(vehicleDisplayName("unmapped-vehicle", "  Variant\u00a0 name\t (Japan)  "), "Variant name (Japan)");
+  assert.equal(vehicleDisplayName(" id50228_spz_12_3_lgs_germany", "Custom variant"), "Custom variant");
+  assert.equal(vehicleDisplayName("id50228_spz_12_3_lgs_germany-unknown", "Unknown model"), "Unknown model");
+});
+
+test("unknown category labels are omitted without relabelling known categories", () => {
+  for (const value of [null, undefined, "", "  ", "UNKNOWN", " UNKNOWN "]) {
+    assert.equal(vehicleCategoryLabel(value), null);
+  }
+  assert.equal(vehicleCategoryLabel("坦克"), "坦克");
+});
 
 test("vehicle pictures match only their exact catalog identity", () => {
   assert.equal(VEHICLE_IMAGES.length, 55);

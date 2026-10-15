@@ -9,3 +9,12 @@ const imagesByExternalKey = new Map<string, VehicleImageRecord>(
 export function vehicleImageFor(externalKey: string): VehicleImageRecord | null {
   return imagesByExternalKey.get(externalKey) ?? null;
 }
+
+export function vehicleDisplayName(externalKey: string, fallback: string): string {
+  return (vehicleImageFor(externalKey)?.display_name ?? fallback).replace(/\s+/gu, " ").trim();
+}
+
+export function vehicleCategoryLabel(category: string | null | undefined): string | null {
+  const label = category?.trim();
+  return !label || label === "UNKNOWN" ? null : label === "vehicle" ? "载具" : label;
+}

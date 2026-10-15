@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import "./art-direction.css";
+import "./visual-refinement.css";
 
 const displayFont = localFont({
   display: "swap",

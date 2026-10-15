@@ -6,7 +6,7 @@ export function ItemsFilterForm({ query }: { query: ItemListQuery }) {
     <form className="deco-filter" action="/items" method="get" aria-label="载具筛选">
       <label className="deco-filter-search">
         <span>搜索载具</span>
-        <input name="search" type="search" defaultValue={query.search ?? ""} placeholder="名称或 external key" />
+        <input name="search" type="search" defaultValue={query.search ?? ""} placeholder="载具名称或编号" />
       </label>
       <label><span>分类</span><input name="category" defaultValue={query.category ?? ""} placeholder="全部分类" /></label>
       <label><span>稀有度</span><input name="rarity" defaultValue={query.rarity ?? ""} placeholder="全部稀有度" /></label>

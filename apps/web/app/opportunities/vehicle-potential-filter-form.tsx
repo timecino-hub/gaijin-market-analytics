@@ -36,6 +36,9 @@ export function VehiclePotentialFilterForm({
         </select>
       </label>
 
+      <details className="deco-potential-advanced" open={form.rankedOnly || form.includeInactive || Boolean(form.asOf)}>
+        <summary>更多筛选</summary>
+        <div className="deco-potential-advanced-fields">
       <label>
         显示范围
         <select name="ranked_only" defaultValue={String(form.rankedOnly)}>
@@ -64,6 +67,9 @@ export function VehiclePotentialFilterForm({
           带时区时间；留空使用最新记录时点
         </span>
       </label>
+
+        </div>
+      </details>
 
       <div className="deco-opportunity-actions">
         <button type="submit">应用筛选</button>

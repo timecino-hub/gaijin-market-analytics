@@ -19,6 +19,7 @@ from api.services.current_order_book import (
     interpret_current_order_book_capture,
 )
 from api.services.history_summary import HistorySummary, load_history_summaries
+from api.services.vehicle_display_names import display_name_expression
 
 
 class ItemNotFoundError(LookupError):
@@ -318,7 +319,13 @@ def _item_filters(
     filters: list[object] = []
     if search:
         pattern = f"%{search}%"
-        filters.append(or_(Item.name.ilike(pattern), Item.external_key.ilike(pattern)))
+        filters.append(
+            or_(
+                Item.name.ilike(pattern),
+                Item.external_key.ilike(pattern),
+                display_name_expression().ilike(pattern),
+            )
+        )
     if category:
         filters.append(Item.category == category)
     if rarity:
@@ -330,7 +337,7 @@ def _item_filters(
 
 def _item_order_by(sort: SortField, order: SortOrder) -> list[object]:
     columns = {
-        "name": Item.name,
+        "name": display_name_expression(),
         "created_at": Item.created_at,
         "updated_at": Item.updated_at,
     }

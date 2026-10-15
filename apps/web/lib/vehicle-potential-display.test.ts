@@ -91,6 +91,19 @@ test("search matches names, identifiers, categories and bound catalog names with
   assert.deepEqual(select(items, { q: "not-present" }), []);
 });
 
+test("potential search uses clean model names while preserving exact raw identities and variants", () => {
+  const items = [item(42, { external_key: "id50228_spz_12_3_lgs_germany", item_name: "id50228_spz_12_3_lgs_germany" }),
+    item(5, { external_key: "M8", item_name: "M8" }),
+    item(35, { external_key: "75mm Gun Motor Carriage M8", item_name: "75mm Gun Motor Carriage M8" }),
+    item(56, { external_key: "unknown-id", item_name: "Unknown variant" })];
+  assert.deepEqual(select(items, { q: "SPz 12-3 LGS" }), [42]);
+  assert.deepEqual(select(items, { q: "id50228_spz_12_3_lgs_germany" }), [42]);
+  assert.deepEqual(select(items, { q: "M8 LAC" }), [5]);
+  assert.deepEqual(select(items, { q: "M8A1 GMC" }), [35]);
+  assert.deepEqual(select(items, { q: "Unknown variant" }), [56]);
+  assert.equal(items[0].item_name, "id50228_spz_12_3_lgs_germany");
+});
+
 test("50-percent filter requires historical median support and an offer within the market cap", () => {
   const items = [item(1), item(2, { target_reference: { ...reference, median_supports_preferred: false } }),
     item(3, { target_reference: { ...reference, preferred_within_market_cap: false } }),

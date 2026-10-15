@@ -46,6 +46,7 @@ from api.services.items import (
     OrderBookObservationData,
     SnapshotData,
 )
+from api.services.vehicle_display_names import vehicle_display_name
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
@@ -424,7 +425,7 @@ def _base_item_summary(row: ItemWithLatestSnapshot) -> ItemSummary:
     return ItemSummary(
         id=item.id,
         external_key=item.external_key,
-        name=item.name,
+        name=vehicle_display_name(item.external_key, item.name),
         category=item.category,
         rarity=item.rarity,
         is_active=item.is_active,

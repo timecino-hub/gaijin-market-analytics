@@ -1,0 +1,13 @@
+# Website presentation and vehicle names
+
+The October 15 release refines the existing ivory, dark ink and copper presentation across the overview, catalog, vehicle detail, potential and strategy pages. Potential cards remain in one column. Larger vehicle images, readable numeric values, lighter dividers and consistent spacing separate the identity, price comparison and historical records. Main navigation remains available on narrow screens, and the detail masthead wraps before its columns can clip.
+
+Potential search, comparison order and median-room filters remain visible. Additional filters use a native disclosure that opens automatically when a nondefault setting is active. All values remain in the same GET form. Loading, empty and error states use the same visual language. Focus indicators, active-page navigation and reduced-motion behavior are retained. No new fonts, packages or image downloads are required at runtime.
+
+The pending October 8 name correction is included. Exact official Wiki market-key matches already stored with the 55 verified images supply presentation names such as `SPz 12-3 LGS`, `M8 LAC` and `M8A1 GMC`. API catalog search and name sorting use the mapped name before pagination while retaining original-key search. Unknown keys fall back to the stored name. The frontend applies the same exact mapping to cards, detail headings, breadcrumbs, charts and image descriptions. Original item identifiers are available inside the detail disclosure. Stored item names, keys and research identity bindings are not rewritten.
+
+The API image starts its existing built virtual environment directly, avoiding runtime dependency synchronization. Dependencies and lockfiles are unchanged. No schema migration is added. Calculations, prices, fees, strategy parameters, historical cutoff and ranking remain unchanged. The remaining calculator fee label now reads `手续费率（默认0.15）`.
+
+Validation: 148 existing frontend tests and 21 focused API name/history tests passed; ESLint has zero errors and one pre-existing image warning; production build and TypeScript passed; affected Python files pass Ruff checks. Browser review covers desktop, 820px tablet, 390px mobile and 320px narrow layouts, plus empty, error and delayed loading fixtures. Synthetic states are confined to the ignored local fixture server.
+
+Deployment is restricted to the existing project on `198.44.177.13`. Preserve original source bytes and API/web images under `/var/backups/gaijin-market-web-mvp/aesthetics-20261015`; recreate only API and web. PostgreSQL, gateway configuration, market data and source images are outside the payload. The manifest, production verification, screenshots and final deployment record belong in the unified knowledge database.

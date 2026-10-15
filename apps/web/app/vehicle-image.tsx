@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { vehicleImageFor } from "../lib/vehicle-images";
+import { vehicleDisplayName, vehicleImageFor } from "../lib/vehicle-images";
 
 type VehicleImageProps = {
   externalKey: string;
@@ -9,13 +9,14 @@ type VehicleImageProps = {
 
 export function VehicleImage({ externalKey, name, variant = "thumbnail" }: VehicleImageProps) {
   const image = vehicleImageFor(externalKey);
+  const displayName = vehicleDisplayName(externalKey, name);
 
   return (
     <span className={`deco-vehicle-image deco-vehicle-image-${variant}`}>
       {image ? (
         <Image
           src={image.src}
-          alt={image.display_name}
+          alt={displayName}
           width={image.width}
           height={image.height}
           unoptimized
@@ -24,7 +25,7 @@ export function VehicleImage({ externalKey, name, variant = "thumbnail" }: Vehic
         />
       ) : (
         <span className="deco-vehicle-image-fallback" aria-hidden="true">
-          {name.slice(0, variant === "hero" ? 2 : 1).toUpperCase()}
+          {displayName.slice(0, variant === "hero" ? 2 : 1).toUpperCase()}
         </span>
       )}
     </span>

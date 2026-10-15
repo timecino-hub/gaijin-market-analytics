@@ -14,16 +14,16 @@ export function MarketHeader({
         <span>Gaijin Market Analytics</span>
       </Link>
       <nav aria-label="主导航">
-        <Link className={active === "home" ? "active" : undefined} href="/">
+        <Link aria-current={active === "home" ? "page" : undefined} className={active === "home" ? "active" : undefined} href="/">
           市场概览
         </Link>
-        <Link className={active === "catalog" ? "active" : undefined} href="/items">
+        <Link aria-current={active === "catalog" ? "page" : undefined} className={active === "catalog" ? "active" : undefined} href="/items">
           载具目录
         </Link>
-        <Link prefetch={false} className={active === "opportunities" ? "active" : undefined} href="/opportunities">
+        <Link prefetch={false} aria-current={active === "opportunities" ? "page" : undefined} className={active === "opportunities" ? "active" : undefined} href="/opportunities">
           载具潜力
         </Link>
-        <Link prefetch={false} className={active === "strategy" ? "active" : undefined} href="/strategy">
+        <Link prefetch={false} aria-current={active === "strategy" ? "page" : undefined} className={active === "strategy" ? "active" : undefined} href="/strategy">
           通用策略
         </Link>
       </nav>

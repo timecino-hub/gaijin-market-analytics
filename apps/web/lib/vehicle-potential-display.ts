@@ -1,5 +1,6 @@
 import type { VehicleEventRecord, VehiclePotentialItem, VehicleTargetReference } from "./types";
 import type { PotentialSort, VehiclePotentialListState } from "./vehicle-potential-state";
+import { vehicleDisplayName } from "./vehicle-images.ts";
 
 const MISSING_VALUE = "—";
 
@@ -147,7 +148,8 @@ export function selectVehiclePotentialItems(
 ): VehiclePotentialItem[] {
   const query = form.q.toLocaleLowerCase("en-US");
   const selected = items.filter((item) => {
-    if (query && ![item.item_name, item.external_key, item.category ?? "", item.matched_catalog_name ?? ""]
+    if (query && ![vehicleDisplayName(item.external_key, item.item_name), item.item_name,
+      item.external_key, item.category ?? "", item.matched_catalog_name ?? ""]
       .some((value) => value.toLocaleLowerCase("en-US").includes(query))) {
       return false;
     }
