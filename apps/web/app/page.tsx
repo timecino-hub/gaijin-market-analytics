@@ -15,14 +15,14 @@ export default async function Home() {
   const featured = result.ok ? result.items[0] : undefined;
 
   return (
-    <main className="art-shell">
+    <main className="art-shell deco-home-page">
       <MarketHeader active="home" />
       <section className="deco-intro" aria-labelledby="home-title">
         <div>
           <p className="deco-kicker">VEHICLE MARKET OUTLOOK</p>
           <h1 id="home-title">载具市场概览</h1>
         </div>
-        <form className="deco-search" action="/items">
+        <form className="deco-search" action="/items" role="search">
           <label htmlFor="home-search">搜索载具</label>
           <div>
             <input id="home-search" name="search" type="search" placeholder="载具名称或编号" />
@@ -43,7 +43,7 @@ export default async function Home() {
           </div>
           <div className="deco-feature-copy">
             <p className="deco-kicker">CONFIRMED DATA ONLY</p><h2>等待首批审核数据</h2>
-            <p>生产目录目前为空。只有通过受控采集流程确认的商品与订单簿会出现在这里。</p>
+            <p>暂无已审核的载具数据。</p>
             <Link className="deco-outline-link" href="/items">查看空目录 <span>→</span></Link>
           </div>
         </section>
@@ -73,7 +73,7 @@ export default async function Home() {
 
       <section className="deco-deferred" aria-labelledby="analytics-title">
         <div><p className="deco-kicker">ANALYTICS</p><h2 id="analytics-title">潜力分析已开放</h2></div>
-        <div><p>当前不生成示例评分或收益预测；真实市场观测达到评分门槛后才会进入排名。</p><Link href="/opportunities">查看分析口径 <span>→</span></Link></div>
+        <div className="deco-home-links"><Link href="/opportunities">查看载具潜力 <span>→</span></Link><Link href="/strategy">通用策略与计算器 <span>→</span></Link></div>
       </section>
     </main>
   );
@@ -88,8 +88,8 @@ function FeaturedItem({ item }: { item: ItemSummary }) {
       <div className="deco-stage deco-vehicle-stage"><VehicleImage externalKey={item.external_key} name={name} variant="hero" /></div>
       <div className="deco-feature-copy">
         <p className="deco-kicker">LATEST CATALOG ENTRY</p><h2 id="featured-title">{name}</h2>{category ? <p>{category}</p> : null}
-        <div className="deco-feature-prices"><Price label="当前买价" value={book?.best_buy.canonical_display_text} /><Price label="当前卖价" value={book?.best_sell.canonical_display_text} /></div>
         {item.history_summary ? <div className="deco-feature-history"><span>历史日均价</span><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC · {item.history_summary.daily_count} 个记录日</small></div> : null}
+        {book ? <div className="deco-feature-prices"><Price label="当前买价" value={book.best_buy.canonical_display_text} /><Price label="当前卖价" value={book.best_sell.canonical_display_text} /><small className="deco-book-date">{book.freshness === "fresh" ? "当前订单簿" : "订单簿已过期"} · <LocalDateTime value={book.captured_at} /></small></div> : <div className="deco-book-empty">{statusLabel(item)}</div>}
         <Link className="deco-primary-link" href={`/items/${item.id}`}>查看价格记录 <span>→</span></Link>
         <VehicleImageSource externalKey={item.external_key} />
       </div>
@@ -102,10 +102,10 @@ function CatalogRow({ item }: { item: ItemSummary }) {
   const name = vehicleDisplayName(item.external_key, item.name);
   const category = vehicleCategoryLabel(item.category);
   return (
-    <Link className="deco-catalog-row" href={`/items/${item.id}`}>
+    <Link className="deco-catalog-row" data-has-order-book={Boolean(book)} href={`/items/${item.id}`}>
       <div className="deco-item-identity"><VehicleImage externalKey={item.external_key} name={name} /><div><strong>{name}</strong>{category ? <small>{category}</small> : null}</div></div>
-      <span className="deco-number">{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
-      <span className="deco-number">{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-number"><small className="deco-home-quote-label">当前买价</small>{book ? `${book.best_buy.canonical_display_text} GJN` : "—"}</span>
+      <span className="deco-number"><small className="deco-home-quote-label">当前卖价</small>{book ? `${book.best_sell.canonical_display_text} GJN` : "—"}</span>
       <span className="deco-history-price">{item.history_summary ? <><small>历史日均价</small><strong>{formatDecimal(item.history_summary.latest_daily_average)} GJN</strong><small>{historicalDay(item.history_summary.latest_day)} UTC<br />{item.history_summary.daily_count} 个记录日</small></> : <small>暂无日均价记录</small>}</span>
       <span>{book ? <>{book.freshness === "fresh" ? "当前" : "已过期"} · <LocalDateTime value={book.captured_at} /></> : statusLabel(item)}</span><b>→</b>
     </Link>

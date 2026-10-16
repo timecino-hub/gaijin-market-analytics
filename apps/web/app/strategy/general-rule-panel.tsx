@@ -29,27 +29,39 @@ export function GeneralRulePanel({
         <RuleSteps data={result.data} />
       )}
 
-      <section aria-labelledby="general-calculator-heading">
+      <section className="deco-general-calculator" aria-labelledby="general-calculator-heading">
         <div className="deco-section-heading">
           <h2 id="general-calculator-heading">只读计算器</h2>
         </div>
-        <form className="deco-opportunity-filter" action="/strategy" method="get">
+        <form className="deco-opportunity-filter deco-general-form" action="/strategy" method="get">
           <input type="hidden" name="budget" value={budget} />
           {asOf ? <input type="hidden" name="as_of" value={asOf} /> : null}
-          <DecimalField name="baseline" label="活动前参考价（GJN）" value={query.baseline} />
-          <DecimalField name="observation_price" label="观察日平均成交价（GJN）" value={query.observation_price} />
-          <DecimalField name="quoted_cost" label="次日买入总价（GJN）" value={query.quoted_cost} />
-          <label htmlFor="general-event-closes-on">
-            活动结束日期（UTC）
-            <input id="general-event-closes-on" name="event_closes_on" type="date" defaultValue={query.event_closes_on ?? ""} />
-          </label>
-          <DecimalField name="entry_cost" label="实际买入花费（GJN）" value={query.entry_cost} />
-          <label htmlFor="general-bought-at">
-            实际买入时间（含时区）
-            <input id="general-bought-at" name="bought_at" type="text" defaultValue={query.bought_at ?? ""} placeholder="2026-10-01T12:00:00Z" />
-          </label>
-          <DecimalField name="fee_rate" label="手续费率（默认0.15）" value={query.fee_rate} />
-          <div className="deco-opportunity-actions"><button type="submit">计算买卖价格</button></div>
+          <fieldset className="deco-calculator-group">
+            <legend>买入检查</legend>
+            <div className="deco-calculator-fields">
+              <DecimalField name="baseline" label="活动前参考价（GJN）" value={query.baseline} />
+              <DecimalField name="observation_price" label="观察日平均成交价（GJN）" value={query.observation_price} />
+              <DecimalField name="quoted_cost" label="次日买入总价（GJN）" value={query.quoted_cost} />
+              <label htmlFor="general-event-closes-on">
+                活动结束日期（UTC）
+                <input id="general-event-closes-on" name="event_closes_on" type="date" defaultValue={query.event_closes_on ?? ""} />
+              </label>
+            </div>
+          </fieldset>
+          <fieldset className="deco-calculator-group">
+            <legend>卖出计划</legend>
+            <div className="deco-calculator-fields">
+              <DecimalField name="entry_cost" label="实际买入花费（GJN）" value={query.entry_cost} />
+              <label htmlFor="general-bought-at">
+                实际买入时间（含时区）
+                <input id="general-bought-at" name="bought_at" type="text" defaultValue={query.bought_at ?? ""} placeholder="2026-10-01T12:00:00Z" />
+              </label>
+            </div>
+          </fieldset>
+          <div className="deco-calculator-submit">
+            <DecimalField name="fee_rate" label="手续费率（默认0.15）" value={query.fee_rate} />
+            <div className="deco-opportunity-actions"><button type="submit">计算买卖价格</button></div>
+          </div>
         </form>
         {"data" in result ? <CalculatedPlan data={result.data} /> : null}
       </section>
@@ -83,40 +95,44 @@ function RuleSteps({ data }: { data: GeneralStrategyResponse }) {
 
 function CalculatedPlan({ data }: { data: GeneralStrategyResponse }) {
   return (
-    <>
-      <div className="deco-section-heading">
-        <h3>买入检查</h3>
-        <span>{generalEntryStatusLabel(data.entry.status)} · 评估时间：<LocalDateTime value={data.as_of} /></span>
-      </div>
-      <div className="deco-opportunity-facts">
-        <Fact label="观察日期（UTC）" value={data.entry.observation_on ?? "—"} />
-        <Fact label="检查买价日期（UTC）" value={data.entry.quote_check_on ?? "—"} />
-        <Fact label="观察价上限（参考价的75%）" value={currency(data.entry.observation_threshold)} />
-        <Fact label="买入总价上限（参考价的55%）" value={currency(data.entry.buy_cost_ceiling)} />
-        <Fact label="60%研究备选（非默认）" value={currency(data.entry.alternative_buy_cost_ceiling)} />
-        <Fact label="活动前参考价" value={currency(data.entry.baseline)} />
-      </div>
-      <div className="deco-section-heading">
-        <h3>卖出计划</h3>
-        <span>{generalExitStatusLabel(data.exit.status)}</span>
-      </div>
-      <div className="deco-opportunity-facts">
-        <Fact label="实际买入花费" value={currency(data.exit.entry_cost)} />
-        <Fact label="扣费后赚50%的卖价" value={currency(data.exit.preferred_offer)} />
-        <Fact label="扣费后赚40%的卖价" value={currency(data.exit.minimum_offer)} />
-        <Fact label="当前参考卖价" value={currency(data.exit.planned_offer)} />
-        <Fact label="实际买入" value={<LocalDateTime value={data.exit.bought_at} />} />
-        <Fact label="150天改挂40%" value={<LocalDateTime value={data.exit.lower_target_at} />} />
-        <Fact label="180天重新评估" value={<LocalDateTime value={data.exit.review_at} />} />
-        <Fact label="本次手续费率" value={formatDecimalPercent(data.fee_rate)} />
-      </div>
+    <div className="deco-general-results">
+      <section className="deco-plan-card" aria-labelledby="entry-plan-heading">
+        <div className="deco-section-heading">
+          <h3 id="entry-plan-heading">买入检查</h3>
+          <span>{generalEntryStatusLabel(data.entry.status)} · 评估时间：<LocalDateTime value={data.as_of} /></span>
+        </div>
+        <div className="deco-opportunity-facts">
+          <Fact label="观察日期（UTC）" value={data.entry.observation_on ?? "—"} />
+          <Fact label="检查买价日期（UTC）" value={data.entry.quote_check_on ?? "—"} />
+          <Fact emphasis label="观察价上限（参考价的75%）" value={currency(data.entry.observation_threshold)} />
+          <Fact emphasis label="买入总价上限（参考价的55%）" value={currency(data.entry.buy_cost_ceiling)} />
+          <Fact label="60%研究备选（非默认）" value={currency(data.entry.alternative_buy_cost_ceiling)} />
+          <Fact label="活动前参考价" value={currency(data.entry.baseline)} />
+        </div>
+      </section>
+      <section className="deco-plan-card" aria-labelledby="exit-plan-heading">
+        <div className="deco-section-heading">
+          <h3 id="exit-plan-heading">卖出计划</h3>
+          <span>{generalExitStatusLabel(data.exit.status)}</span>
+        </div>
+        <div className="deco-opportunity-facts">
+          <Fact label="实际买入花费" value={currency(data.exit.entry_cost)} />
+          <Fact emphasis label="扣费后赚50%的卖价" value={currency(data.exit.preferred_offer)} />
+          <Fact label="扣费后赚40%的卖价" value={currency(data.exit.minimum_offer)} />
+          <Fact emphasis label="当前参考卖价" value={currency(data.exit.planned_offer)} />
+          <Fact label="实际买入" value={<LocalDateTime value={data.exit.bought_at} />} />
+          <Fact label="150天改挂40%" value={<LocalDateTime value={data.exit.lower_target_at} />} />
+          <Fact label="180天重新评估" value={<LocalDateTime value={data.exit.review_at} />} />
+          <Fact label="本次手续费率" value={formatDecimalPercent(data.fee_rate)} />
+        </div>
+      </section>
       <ul className="deco-strategy-footnotes">
         <li>历史数据截至：<LocalDateTime value={data.research.data_as_of} /></li>
         <li>研究样本：{data.research.opportunity_count}次机会／{data.research.cycle_count}场活动</li>
         <li>挂价：向上取整至0.01 GJN</li>
         <li>净收入：向下取整至0.01 GJN</li>
       </ul>
-    </>
+    </div>
   );
 }
 
@@ -133,8 +149,8 @@ function RuleStep({ index, title, rule }: { index: string; title: string; rule: 
   return <li className="deco-strategy-step"><span aria-hidden="true">{index}</span><div><h3>{title}</h3><p>{rule}</p></div></li>;
 }
 
-function Fact({ label, value }: { label: string; value: ReactNode }) {
-  return <div className="deco-info-tile"><span>{label}</span><strong>{value}</strong></div>;
+function Fact({ label, value, emphasis = false }: { label: string; value: ReactNode; emphasis?: boolean }) {
+  return <div className={`deco-info-tile${emphasis ? " deco-plan-key" : ""}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function currency(value: string | null): string {

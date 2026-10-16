@@ -1,0 +1,65 @@
+[
+  {
+    "width": 1440,
+    "buyVisible": true,
+    "sellVisible": true,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 1100,
+    "buyVisible": true,
+    "sellVisible": true,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 820,
+    "buyVisible": true,
+    "sellVisible": true,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 769,
+    "buyVisible": true,
+    "sellVisible": true,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 768,
+    "buyVisible": false,
+    "sellVisible": false,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 390,
+    "buyVisible": false,
+    "sellVisible": false,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "width": 320,
+    "buyVisible": false,
+    "sellVisible": false,
+    "staleVisible": true,
+    "overflow": false
+  },
+  {
+    "mobileButton": {
+      "x": 37,
+      "y": 2027.265625,
+      "width": 316,
+      "height": 44
+    },
+    "actions": {
+      "x": 37,
+      "y": 2027.265625,
+      "width": 316,
+      "height": 44
+    }
+  }
+]
